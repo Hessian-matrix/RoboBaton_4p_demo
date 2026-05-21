@@ -1,0 +1,8 @@
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/imu_reader_demo.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/serial_port_demo.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/edit_cache.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/rebuild_cache.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/list_install_components.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/install.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/install/local.dir
+/root/x5/4cam/open_source_demo/build_x5/CMakeFiles/install/strip.dir
