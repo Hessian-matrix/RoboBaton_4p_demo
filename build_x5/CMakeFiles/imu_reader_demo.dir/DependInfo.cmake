@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/root/x5/4cam/open_source_demo/src/imu_reader_demo.cpp" "CMakeFiles/imu_reader_demo.dir/src/imu_reader_demo.cpp.o" "gcc" "CMakeFiles/imu_reader_demo.dir/src/imu_reader_demo.cpp.o.d"
+  "/root/x5/4cam/RoboBaton_4p_demo/src/imu_reader_demo.cpp" "CMakeFiles/imu_reader_demo.dir/src/imu_reader_demo.cpp.o" "gcc" "CMakeFiles/imu_reader_demo.dir/src/imu_reader_demo.cpp.o.d"
   )
 
 # Targets to which this target links.

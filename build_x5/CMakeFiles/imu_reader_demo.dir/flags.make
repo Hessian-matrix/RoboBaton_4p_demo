@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/aarch64-linux-gnu-g++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -isystem /root/x5/4cam/open_source_demo/include
+CXX_INCLUDES = -isystem /root/x5/4cam/RoboBaton_4p_demo/include
 
 CXX_FLAGS = -Wall -Wextra -Wpedantic -std=c++17
 

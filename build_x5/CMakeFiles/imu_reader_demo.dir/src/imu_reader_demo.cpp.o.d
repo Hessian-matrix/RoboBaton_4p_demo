@@ -1,7 +1,7 @@
 CMakeFiles/imu_reader_demo.dir/src/imu_reader_demo.cpp.o: \
- /root/x5/4cam/open_source_demo/src/imu_reader_demo.cpp \
+ /root/x5/4cam/RoboBaton_4p_demo/src/imu_reader_demo.cpp \
  /usr/aarch64-linux-gnu/include/stdc-predef.h \
- /root/x5/4cam/open_source_demo/include/icm42688_x5/icm42688_driver.h \
+ /root/x5/4cam/RoboBaton_4p_demo/include/icm42688_driver.h \
  /usr/aarch64-linux-gnu/include/c++/11/cstdint \
  /usr/aarch64-linux-gnu/include/c++/11/aarch64-linux-gnu/bits/c++config.h \
  /usr/aarch64-linux-gnu/include/c++/11/aarch64-linux-gnu/bits/os_defines.h \

@@ -232,7 +232,7 @@ class SerialPort {
       ThrowErrno("failed to get termios for " + port_);
     }
 
-    // 2026-05-20 修改原因：固定为 8N1 raw 且关闭流控，便于用户直接验证串口链路原始字节。
+    // 串口使用 8N1 raw 模式并关闭硬件流控，便于直接验证原始字节链路。
     cfmakeraw(&tty);
     tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);
     tty.c_cflag &= static_cast<tcflag_t>(~PARENB);

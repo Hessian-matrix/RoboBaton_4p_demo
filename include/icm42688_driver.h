@@ -51,7 +51,6 @@ struct DriverConfig {
 
 using SampleCallback = std::function<void(const ImuSample&)>;
 
-// 2026-05-20 修改原因：公开 demo 只暴露稳定的用户态 API，底层 SPI/FIFO 细节由二进制库封装。
 class ICM42688_X5_API Driver {
  public:
   explicit Driver(DriverConfig config);

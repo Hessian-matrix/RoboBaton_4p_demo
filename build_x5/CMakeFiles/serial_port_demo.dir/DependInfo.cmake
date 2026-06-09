@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/root/x5/4cam/open_source_demo/src/serial_port_demo.cpp" "CMakeFiles/serial_port_demo.dir/src/serial_port_demo.cpp.o" "gcc" "CMakeFiles/serial_port_demo.dir/src/serial_port_demo.cpp.o.d"
+  "/root/x5/4cam/RoboBaton_4p_demo/src/serial_port_demo.cpp" "CMakeFiles/serial_port_demo.dir/src/serial_port_demo.cpp.o" "gcc" "CMakeFiles/serial_port_demo.dir/src/serial_port_demo.cpp.o.d"
   )
 
 # Targets to which this target links.

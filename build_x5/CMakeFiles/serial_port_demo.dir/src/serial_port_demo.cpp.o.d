@@ -1,5 +1,5 @@
 CMakeFiles/serial_port_demo.dir/src/serial_port_demo.cpp.o: \
- /root/x5/4cam/open_source_demo/src/serial_port_demo.cpp \
+ /root/x5/4cam/RoboBaton_4p_demo/src/serial_port_demo.cpp \
  /usr/aarch64-linux-gnu/include/stdc-predef.h \
  /usr/aarch64-linux-gnu/include/errno.h \
  /usr/aarch64-linux-gnu/include/features.h \

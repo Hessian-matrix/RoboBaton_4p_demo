@@ -1,4 +1,4 @@
-#include "icm42688_x5/icm42688_driver.h"
+#include "icm42688_driver.h"
 
 #include <signal.h>
 
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
       }
       last_timestamp_ns = sample.host_timestamp_ns;
 
-      // 2026-05-20 修改原因：回调运行在驱动采集线程中，demo 里只做轻量打印，避免阻塞采集。
+      // 回调运行在驱动采集线程中，demo 只做轻量打印，避免阻塞采集。
       PrintSample(sample, dt_ms);
       emitted.store(current + 1);
     });
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     std::cout << "Starting ICM-42688 demo at " << options.sample_rate_hz << " Hz\n";
     driver.Start();
 
-    // 2026-05-20 修改原因：主线程只负责等待退出条件，数据读取由驱动内部线程完成。
+    // 主线程只负责等待退出条件，数据读取由驱动内部线程完成。
     while (!g_should_stop.load()) {
       if (options.count != 0 && emitted.load() >= options.count) {
         break;

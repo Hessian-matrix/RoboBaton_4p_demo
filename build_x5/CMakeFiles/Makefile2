@@ -54,10 +54,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /root/x5/4cam/open_source_demo
+CMAKE_SOURCE_DIR = /root/x5/4cam/RoboBaton_4p_demo
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /root/x5/4cam/open_source_demo/build_x5
+CMAKE_BINARY_DIR = /root/x5/4cam/RoboBaton_4p_demo/build_x5
 
 #=============================================================================
 # Directory level rules for the build root directory
@@ -65,6 +65,7 @@ CMAKE_BINARY_DIR = /root/x5/4cam/open_source_demo/build_x5
 # The main recursive "all" target.
 all: CMakeFiles/imu_reader_demo.dir/all
 all: CMakeFiles/serial_port_demo.dir/all
+all: CMakeFiles/cam_demo.dir/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
@@ -74,6 +75,7 @@ preinstall:
 # The main recursive "clean" target.
 clean: CMakeFiles/imu_reader_demo.dir/clean
 clean: CMakeFiles/serial_port_demo.dir/clean
+clean: CMakeFiles/cam_demo.dir/clean
 .PHONY : clean
 
 #=============================================================================
@@ -83,14 +85,14 @@ clean: CMakeFiles/serial_port_demo.dir/clean
 CMakeFiles/imu_reader_demo.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/imu_reader_demo.dir/build.make CMakeFiles/imu_reader_demo.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/imu_reader_demo.dir/build.make CMakeFiles/imu_reader_demo.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/root/x5/4cam/open_source_demo/build_x5/CMakeFiles --progress-num=1,2 "Built target imu_reader_demo"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles --progress-num=7,8 "Built target imu_reader_demo"
 .PHONY : CMakeFiles/imu_reader_demo.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/imu_reader_demo.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/imu_reader_demo.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 0
 .PHONY : CMakeFiles/imu_reader_demo.dir/rule
 
 # Convenience name for target.
@@ -109,14 +111,14 @@ CMakeFiles/imu_reader_demo.dir/clean:
 CMakeFiles/serial_port_demo.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/serial_port_demo.dir/build.make CMakeFiles/serial_port_demo.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/serial_port_demo.dir/build.make CMakeFiles/serial_port_demo.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/root/x5/4cam/open_source_demo/build_x5/CMakeFiles --progress-num=3,4 "Built target serial_port_demo"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles --progress-num=9,10 "Built target serial_port_demo"
 .PHONY : CMakeFiles/serial_port_demo.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/serial_port_demo.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/serial_port_demo.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 0
 .PHONY : CMakeFiles/serial_port_demo.dir/rule
 
 # Convenience name for target.
@@ -127,6 +129,32 @@ serial_port_demo: CMakeFiles/serial_port_demo.dir/rule
 CMakeFiles/serial_port_demo.dir/clean:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/serial_port_demo.dir/build.make CMakeFiles/serial_port_demo.dir/clean
 .PHONY : CMakeFiles/serial_port_demo.dir/clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/cam_demo.dir
+
+# All Build rule for target.
+CMakeFiles/cam_demo.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles --progress-num=1,2,3,4,5,6 "Built target cam_demo"
+.PHONY : CMakeFiles/cam_demo.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/cam_demo.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 6
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/cam_demo.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 0
+.PHONY : CMakeFiles/cam_demo.dir/rule
+
+# Convenience name for target.
+cam_demo: CMakeFiles/cam_demo.dir/rule
+.PHONY : cam_demo
+
+# clean rule for target.
+CMakeFiles/cam_demo.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/clean
+.PHONY : CMakeFiles/cam_demo.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

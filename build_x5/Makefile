@@ -57,10 +57,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /root/x5/4cam/open_source_demo
+CMAKE_SOURCE_DIR = /root/x5/4cam/RoboBaton_4p_demo
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /root/x5/4cam/open_source_demo/build_x5
+CMAKE_BINARY_DIR = /root/x5/4cam/RoboBaton_4p_demo/build_x5
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -132,9 +132,9 @@ install/strip/fast: preinstall/fast
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles /root/x5/4cam/open_source_demo/build_x5//CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles /root/x5/4cam/RoboBaton_4p_demo/build_x5//CMakeFiles/progress.marks
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/open_source_demo/build_x5/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /root/x5/4cam/RoboBaton_4p_demo/build_x5/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -186,6 +186,139 @@ serial_port_demo: cmake_check_build_system
 serial_port_demo/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/serial_port_demo.dir/build.make CMakeFiles/serial_port_demo.dir/build
 .PHONY : serial_port_demo/fast
+
+#=============================================================================
+# Target rules for targets named cam_demo
+
+# Build rule for target.
+cam_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 cam_demo
+.PHONY : cam_demo
+
+# fast build rule for target.
+cam_demo/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/build
+.PHONY : cam_demo/fast
+
+src/cam_demo.o: src/cam_demo.cpp.o
+.PHONY : src/cam_demo.o
+
+# target to build an object file
+src/cam_demo.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo.cpp.o
+.PHONY : src/cam_demo.cpp.o
+
+src/cam_demo.i: src/cam_demo.cpp.i
+.PHONY : src/cam_demo.i
+
+# target to preprocess a source file
+src/cam_demo.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo.cpp.i
+.PHONY : src/cam_demo.cpp.i
+
+src/cam_demo.s: src/cam_demo.cpp.s
+.PHONY : src/cam_demo.s
+
+# target to generate assembly for a file
+src/cam_demo.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo.cpp.s
+.PHONY : src/cam_demo.cpp.s
+
+src/cam_demo_common.o: src/cam_demo_common.cpp.o
+.PHONY : src/cam_demo_common.o
+
+# target to build an object file
+src/cam_demo_common.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_common.cpp.o
+.PHONY : src/cam_demo_common.cpp.o
+
+src/cam_demo_common.i: src/cam_demo_common.cpp.i
+.PHONY : src/cam_demo_common.i
+
+# target to preprocess a source file
+src/cam_demo_common.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_common.cpp.i
+.PHONY : src/cam_demo_common.cpp.i
+
+src/cam_demo_common.s: src/cam_demo_common.cpp.s
+.PHONY : src/cam_demo_common.s
+
+# target to generate assembly for a file
+src/cam_demo_common.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_common.cpp.s
+.PHONY : src/cam_demo_common.cpp.s
+
+src/cam_demo_config.o: src/cam_demo_config.cpp.o
+.PHONY : src/cam_demo_config.o
+
+# target to build an object file
+src/cam_demo_config.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_config.cpp.o
+.PHONY : src/cam_demo_config.cpp.o
+
+src/cam_demo_config.i: src/cam_demo_config.cpp.i
+.PHONY : src/cam_demo_config.i
+
+# target to preprocess a source file
+src/cam_demo_config.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_config.cpp.i
+.PHONY : src/cam_demo_config.cpp.i
+
+src/cam_demo_config.s: src/cam_demo_config.cpp.s
+.PHONY : src/cam_demo_config.s
+
+# target to generate assembly for a file
+src/cam_demo_config.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_config.cpp.s
+.PHONY : src/cam_demo_config.cpp.s
+
+src/cam_demo_pipeline.o: src/cam_demo_pipeline.cpp.o
+.PHONY : src/cam_demo_pipeline.o
+
+# target to build an object file
+src/cam_demo_pipeline.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_pipeline.cpp.o
+.PHONY : src/cam_demo_pipeline.cpp.o
+
+src/cam_demo_pipeline.i: src/cam_demo_pipeline.cpp.i
+.PHONY : src/cam_demo_pipeline.i
+
+# target to preprocess a source file
+src/cam_demo_pipeline.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_pipeline.cpp.i
+.PHONY : src/cam_demo_pipeline.cpp.i
+
+src/cam_demo_pipeline.s: src/cam_demo_pipeline.cpp.s
+.PHONY : src/cam_demo_pipeline.s
+
+# target to generate assembly for a file
+src/cam_demo_pipeline.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_pipeline.cpp.s
+.PHONY : src/cam_demo_pipeline.cpp.s
+
+src/cam_demo_rtsp.o: src/cam_demo_rtsp.cpp.o
+.PHONY : src/cam_demo_rtsp.o
+
+# target to build an object file
+src/cam_demo_rtsp.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_rtsp.cpp.o
+.PHONY : src/cam_demo_rtsp.cpp.o
+
+src/cam_demo_rtsp.i: src/cam_demo_rtsp.cpp.i
+.PHONY : src/cam_demo_rtsp.i
+
+# target to preprocess a source file
+src/cam_demo_rtsp.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_rtsp.cpp.i
+.PHONY : src/cam_demo_rtsp.cpp.i
+
+src/cam_demo_rtsp.s: src/cam_demo_rtsp.cpp.s
+.PHONY : src/cam_demo_rtsp.s
+
+# target to generate assembly for a file
+src/cam_demo_rtsp.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cam_demo.dir/build.make CMakeFiles/cam_demo.dir/src/cam_demo_rtsp.cpp.s
+.PHONY : src/cam_demo_rtsp.cpp.s
 
 src/imu_reader_demo.o: src/imu_reader_demo.cpp.o
 .PHONY : src/imu_reader_demo.o
@@ -247,8 +380,24 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... cam_demo"
 	@echo "... imu_reader_demo"
 	@echo "... serial_port_demo"
+	@echo "... src/cam_demo.o"
+	@echo "... src/cam_demo.i"
+	@echo "... src/cam_demo.s"
+	@echo "... src/cam_demo_common.o"
+	@echo "... src/cam_demo_common.i"
+	@echo "... src/cam_demo_common.s"
+	@echo "... src/cam_demo_config.o"
+	@echo "... src/cam_demo_config.i"
+	@echo "... src/cam_demo_config.s"
+	@echo "... src/cam_demo_pipeline.o"
+	@echo "... src/cam_demo_pipeline.i"
+	@echo "... src/cam_demo_pipeline.s"
+	@echo "... src/cam_demo_rtsp.o"
+	@echo "... src/cam_demo_rtsp.i"
+	@echo "... src/cam_demo_rtsp.s"
 	@echo "... src/imu_reader_demo.o"
 	@echo "... src/imu_reader_demo.i"
 	@echo "... src/imu_reader_demo.s"
