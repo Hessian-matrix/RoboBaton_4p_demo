@@ -1,8 +1,8 @@
-# X5 IMU, UART, And SC132 4-Camera Demo
+# X5 SC132 4-Camera, IMU, And UART Demo
 
 Chinese version: [README.md](README.md)
 
-This is the minimal user-facing demo package. It includes the IMU reader demo, UART communication demo, SC132 4-camera RTSP demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
+This is the minimal user-facing demo package. It includes the SC132 4-camera RTSP demo, IMU reader demo, UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
 
 ## 1. Directory Layout
 
@@ -155,67 +155,7 @@ cd /root/demo
 
 All three demos provide default configurations. For normal bring-up, run the top-level launcher directly. Use command-line options only when changing FPS, bitrate, serial port, sample count, or other runtime parameters.
 
-## 4. IMU Reader Demo
-
-Default run:
-
-```bash
-./imu_reader_demo
-```
-
-Common debug example:
-
-```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10
-```
-
-Output fields:
-
-- `ts_ns`: host monotonic clock timestamp in `ns`
-- `dt_ms`: timestamp delta between adjacent frames in `ms`
-- `temp_c`: temperature in `degC`
-- `accel_mps2`: 3-axis acceleration in `m/s^2`
-- `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
-- `gyro_rps`: 3-axis angular velocity in `rad/s`
-
-Notes:
-
-- The demo uses FIFO mode by default.
-- In FIFO mode, the driver expands sample timestamps by the configured ODR to provide stable `dt`.
-- The timestamp is not an external FSYNC timestamp.
-- The callback runs in the driver's acquisition thread. Avoid blocking or heavy work inside the callback in real applications.
-
-## 5. UART Communication Demo
-
-Default run:
-
-```bash
-./serial_port_demo
-```
-
-The default configuration uses `/dev/ttyS1`, `115200`, and `txrx` mode. Add options only when selecting a different port or mode, for example:
-
-```bash
-./serial_port_demo --port /dev/ttyS1 --mode tx --baud 115200 --text "hello-x5"
-./serial_port_demo --port /dev/ttyS7 --mode rx --baud 115200
-./serial_port_demo --port /dev/ttyS1 --mode txrx --baud 115200 --count 10 --text "ping"
-./serial_port_demo --port /dev/ttyS7 --mode echo --baud 115200
-```
-
-Common options:
-
-```text
---port <path>             Serial device, default /dev/ttyS1
---baud <rate>             Baud rate, default 115200
---mode <tx|rx|txrx|echo>  Mode, default txrx
---count <n>               TX/TXRX rounds or RX/ECHO packets, 0 means forever
---interval-ms <ms>        TX interval, default 1000
---timeout-ms <ms>         RX timeout, default 200
---text <str>              TX payload prefix, default uart-demo
---no-newline              Do not append newline to the TX payload
-```
-
-## 6. SC132 4-Camera RTSP Demo
+## 4. SC132 4-Camera RTSP Demo
 
 `cam_demo` demonstrates how to use:
 
@@ -298,6 +238,66 @@ Log fields:
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `Rtsp_SendImg*_planes()` call timing when `--diagnostics` is enabled
 - `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
+
+## 5. IMU Reader Demo
+
+Default run:
+
+```bash
+./imu_reader_demo
+```
+
+Common debug example:
+
+```bash
+./imu_reader_demo --sample-rate-hz 1000 --count 10
+```
+
+Output fields:
+
+- `ts_ns`: host monotonic clock timestamp in `ns`
+- `dt_ms`: timestamp delta between adjacent frames in `ms`
+- `temp_c`: temperature in `degC`
+- `accel_mps2`: 3-axis acceleration in `m/s^2`
+- `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
+- `gyro_rps`: 3-axis angular velocity in `rad/s`
+
+Notes:
+
+- The demo uses FIFO mode by default.
+- In FIFO mode, the driver expands sample timestamps by the configured ODR to provide stable `dt`.
+- The timestamp is not an external FSYNC timestamp.
+- The callback runs in the driver's acquisition thread. Avoid blocking or heavy work inside the callback in real applications.
+
+## 6. UART Communication Demo
+
+Default run:
+
+```bash
+./serial_port_demo
+```
+
+The default configuration uses `/dev/ttyS1`, `115200`, and `txrx` mode. Add options only when selecting a different port or mode, for example:
+
+```bash
+./serial_port_demo --port /dev/ttyS1 --mode tx --baud 115200 --text "hello-x5"
+./serial_port_demo --port /dev/ttyS7 --mode rx --baud 115200
+./serial_port_demo --port /dev/ttyS1 --mode txrx --baud 115200 --count 10 --text "ping"
+./serial_port_demo --port /dev/ttyS7 --mode echo --baud 115200
+```
+
+Common options:
+
+```text
+--port <path>             Serial device, default /dev/ttyS1
+--baud <rate>             Baud rate, default 115200
+--mode <tx|rx|txrx|echo>  Mode, default txrx
+--count <n>               TX/TXRX rounds or RX/ECHO packets, 0 means forever
+--interval-ms <ms>        TX interval, default 1000
+--timeout-ms <ms>         RX timeout, default 200
+--text <str>              TX payload prefix, default uart-demo
+--no-newline              Do not append newline to the TX payload
+```
 
 ## 7. Automated Regression Test And Criteria
 

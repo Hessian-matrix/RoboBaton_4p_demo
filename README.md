@@ -1,8 +1,8 @@
-# X5 IMU And UART Open Source Demo
+# X5 SC132 4-Camera, IMU And UART Open Source Demo
 
 English version: [README_EN.md](README_EN.md)
 
-这是给用户交付的最小开源 demo。它包含 IMU 读取示例、串口通信示例、SC132 四目相机 RTSP 示例、公开头文件和二进制驱动库，不包含底层驱动实现源码。
+这是给用户交付的最小开源 demo。它包含 SC132 四目相机 RTSP 示例、IMU 读取示例、串口通信示例、公开头文件和二进制驱动库，不包含底层驱动实现源码。
 
 ## 1. 目录结构
 
@@ -155,67 +155,7 @@ cd /root/demo
 
 三个 demo 都带有默认配置，普通功能验证时直接执行顶层脚本即可。需要修改帧率、码率、串口号或采样次数时，再通过命令行参数覆盖默认值。
 
-## 4. IMU 读取 Demo
-
-默认运行：
-
-```bash
-./imu_reader_demo
-```
-
-常用调试示例：
-
-```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10
-```
-
-输出字段：
-
-- `ts_ns`：host monotonic clock 时间戳，单位 `ns`
-- `dt_ms`：相邻两帧时间戳差，单位 `ms`
-- `temp_c`：温度，单位 `degC`
-- `accel_mps2`：三轴加速度，单位 `m/s^2`
-- `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
-- `gyro_rps`：三轴角速度，单位 `rad/s`
-
-说明：
-
-- demo 默认使用 FIFO 模式
-- FIFO 模式下，驱动按配置 ODR 展开连续时间戳，用于提供稳定 `dt`
-- 当前时间戳不是 FSYNC 外部同步时间戳
-- 回调函数运行在驱动采集线程中，实际项目里应避免在回调里做耗时操作
-
-## 5. 串口通信 Demo
-
-默认运行：
-
-```bash
-./serial_port_demo
-```
-
-默认配置使用 `/dev/ttyS1`、`115200`、`txrx` 模式。需要指定端口或模式时再增加参数，例如：
-
-```bash
-./serial_port_demo --port /dev/ttyS1 --mode tx --baud 115200 --text "hello-x5"
-./serial_port_demo --port /dev/ttyS7 --mode rx --baud 115200
-./serial_port_demo --port /dev/ttyS1 --mode txrx --baud 115200 --count 10 --text "ping"
-./serial_port_demo --port /dev/ttyS7 --mode echo --baud 115200
-```
-
-常用参数：
-
-```text
---port <path>             串口设备，默认 /dev/ttyS1
---baud <rate>             波特率，默认 115200
---mode <tx|rx|txrx|echo>  模式，默认 txrx
---count <n>               tx/txrx 表示发送次数，rx/echo 表示接收包数，0 表示持续运行
---interval-ms <ms>        发送间隔，默认 1000
---timeout-ms <ms>         接收超时，默认 200
---text <str>              发送文本前缀，默认 uart-demo
---no-newline              发送数据末尾不追加换行
-```
-
-## 6. SC132 四目相机 RTSP Demo
+## 4. SC132 四目相机 RTSP Demo
 
 `cam_demo` 演示如何同时使用：
 
@@ -299,6 +239,66 @@ rtsp://<x5-ip>:557/PRR
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
 - `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `Rtsp_SendImg*_planes()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
+
+## 5. IMU 读取 Demo
+
+默认运行：
+
+```bash
+./imu_reader_demo
+```
+
+常用调试示例：
+
+```bash
+./imu_reader_demo --sample-rate-hz 1000 --count 10
+```
+
+输出字段：
+
+- `ts_ns`：host monotonic clock 时间戳，单位 `ns`
+- `dt_ms`：相邻两帧时间戳差，单位 `ms`
+- `temp_c`：温度，单位 `degC`
+- `accel_mps2`：三轴加速度，单位 `m/s^2`
+- `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
+- `gyro_rps`：三轴角速度，单位 `rad/s`
+
+说明：
+
+- demo 默认使用 FIFO 模式
+- FIFO 模式下，驱动按配置 ODR 展开连续时间戳，用于提供稳定 `dt`
+- 当前时间戳不是 FSYNC 外部同步时间戳
+- 回调函数运行在驱动采集线程中，实际项目里应避免在回调里做耗时操作
+
+## 6. 串口通信 Demo
+
+默认运行：
+
+```bash
+./serial_port_demo
+```
+
+默认配置使用 `/dev/ttyS1`、`115200`、`txrx` 模式。需要指定端口或模式时再增加参数，例如：
+
+```bash
+./serial_port_demo --port /dev/ttyS1 --mode tx --baud 115200 --text "hello-x5"
+./serial_port_demo --port /dev/ttyS7 --mode rx --baud 115200
+./serial_port_demo --port /dev/ttyS1 --mode txrx --baud 115200 --count 10 --text "ping"
+./serial_port_demo --port /dev/ttyS7 --mode echo --baud 115200
+```
+
+常用参数：
+
+```text
+--port <path>             串口设备，默认 /dev/ttyS1
+--baud <rate>             波特率，默认 115200
+--mode <tx|rx|txrx|echo>  模式，默认 txrx
+--count <n>               tx/txrx 表示发送次数，rx/echo 表示接收包数，0 表示持续运行
+--interval-ms <ms>        发送间隔，默认 1000
+--timeout-ms <ms>         接收超时，默认 200
+--text <str>              发送文本前缀，默认 uart-demo
+--no-newline              发送数据末尾不追加换行
+```
 
 ## 7. 自动回归测试和评估标准
 
