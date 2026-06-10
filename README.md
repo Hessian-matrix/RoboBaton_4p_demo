@@ -1,6 +1,7 @@
 # X5 SC132 4-Camera, IMU And UART Open Source Demo
 
 English version: [README_EN.md](README_EN.md)
+![alt text](image/4P_Cam.png)
 
 这是给用户交付的最小开源 demo。它包含 SC132 四目相机 RTSP 示例、IMU 读取示例、串口通信示例、公开头文件和二进制驱动库，不包含底层驱动实现源码。
 
@@ -271,6 +272,9 @@ rtsp://<x5-ip>:557/PRR
 - 回调函数运行在驱动采集线程中，实际项目里应避免在回调里做耗时操作
 
 ## 6. 串口通信 Demo
+
+接口线序如下：
+![alt text](image/UART.png)
 
 默认运行：
 

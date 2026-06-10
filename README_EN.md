@@ -1,6 +1,7 @@
 # X5 SC132 4-Camera, IMU, And UART Demo
 
 Chinese version: [README.md](README.md)
+![alt text](image/4P_Cam.png)
 
 This is the minimal user-facing demo package. It includes the SC132 4-camera RTSP demo, IMU reader demo, UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
 
@@ -270,6 +271,9 @@ Notes:
 - The callback runs in the driver's acquisition thread. Avoid blocking or heavy work inside the callback in real applications.
 
 ## 6. UART Communication Demo
+
+interface wire sequence:
+![alt text](image/UART.png)
 
 Default run:
 
