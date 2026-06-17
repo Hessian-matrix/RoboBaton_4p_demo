@@ -17,10 +17,10 @@ constexpr const char* kSc132Single60FpsProfile =
 // 输出：帮助文本写入 stdout。
 void PrintUsage(const char* program) {
   std::cout << "Usage: " << program << " [options]\n"
-            << "  --channels <1-4>  Enabled camera count, default 4\n"
             << "  --width <pixels>  Frame width, default 1088\n"
             << "  --height <pixels> Frame height, default 1280\n"
             << "  --fps <30|60>     Camera and encoder fps, default 60\n"
+            << "  --rotate <0|90|180|270> Output rotation, default 90; 270 is limited to 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --url <path>      RTSP URL path, default /PRR\n"
             << "  --diagnostics     Print per-channel RTSP timing diagnostics\n"
@@ -75,8 +75,9 @@ long long ParseLongLong(const std::string& text, const char* name) {
 // 输出：无。
 // 异常：参数不合法时抛出 std::invalid_argument。
 void ValidateOptions(const Options& options) {
-  if (options.channels < 1 || options.channels > kMaxChannels) {
-    throw std::invalid_argument("--channels must be in range 1..4");
+  // 2026-06-16 修改原因：交付只暴露固定四目默认链路；--channels 保留为内部调试入口，拒绝未验证的 2/3 路部分启动。
+  if (options.channels != 1 && options.channels != kMaxChannels) {
+    throw std::invalid_argument("--channels is an internal debug option and only supports 1 or 4");
   }
   if (options.width <= 0 || options.height <= 0) {
     throw std::invalid_argument("--width and --height must be positive");
@@ -93,6 +94,10 @@ void ValidateOptions(const Options& options) {
   if (options.rotate_degrees != 0 && options.rotate_degrees != 90 &&
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
+  }
+  // 2026-06-16 修改原因：实测 rotate=270 的 Nano2D 后处理路径在四路 60fps 下吞吐不达标，启动阶段直接拒绝该非支持组合。
+  if (options.rotate_degrees == 270 && options.fps == 60) {
+    throw std::invalid_argument("--rotate 270 is not supported at 60fps; use --fps 30 or --rotate 90");
   }
   if (options.diagnostic_interval_ms < 100) {
     throw std::invalid_argument("--diag-interval-ms must be >= 100");
@@ -172,9 +177,9 @@ void ConfigureSc132TriggerMode(const Options& options) {
             << " (GPIO417 is used when mode=software_gpio)\n";
 }
 
-// 功能：自动补齐单路 60fps 所需的 sensor profile。
+// 功能：为内部单路 smoke 自动补齐 60fps sensor profile。
 // 输入：options.channels/options.fps。
-// 副作用：当用户未预设 SC132_SENSOR_PROFILE 且启动单路 60fps 时设置兼容 profile。
+// 副作用：当内部调试使用 --channels 1 且未预设 SC132_SENSOR_PROFILE 时设置兼容 profile。
 void ConfigureSc132SensorProfile(const Options& options) {
   const char* current_profile = std::getenv(kSc132SensorProfileEnv);
   if (current_profile != nullptr && current_profile[0] != '\0') {

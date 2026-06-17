@@ -36,7 +36,7 @@ void OnQueuedCameraFrame(const QueuedFrame& frame) {
 }
 
 // 功能：用户二次开发的四目同步帧组入口。
-// 输入：frame_set 已由 libsc132 按归一化 frame_id 和时间戳配组。
+// 输入：frame_set 已由 libsc132 配组，同一 group_id 下四路 frame_id 对外完全一致。
 // 输出：无。
 // 生命周期：frame_set 内的 frame 只在回调期间可靠；异步保存时需要自行 retain/release。
 void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set) {

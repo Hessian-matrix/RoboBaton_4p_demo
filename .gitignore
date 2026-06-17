@@ -1,6 +1,4 @@
 build_x5/*
-build_x5_4cam/*
-deploy_x5_4cam/*
 deploy_runtime/*
 build_x5_syncfix/*
 regression_logs/*

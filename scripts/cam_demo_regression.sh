@@ -58,7 +58,7 @@ Evaluation thresholds:
   --max-group-skew-ns <n>     Maximum group_skew_ns, default 1000000
   --max-rtsp-pts-skew-ms <n>  Maximum RTSP PTS skew across channels, default 1
   --max-frame-id-offset-jitter <n>
-                              Maximum jitter of per-group frame_id offsets, default 0
+                              Maximum jitter of per-group frame_id offsets, default 0; absolute offsets must be 0
   --min-group-id <n>          Minimum observed group_id; default derived from run time and FPS
 
 Other:
@@ -401,6 +401,7 @@ set +e
 frame_id_offset_report="$(
   frame_set_metric_lines \
     | awk -v max_jitter="${MAX_FRAME_ID_OFFSET_JITTER}" '
+      function abs(v) { return v < 0 ? -v : v }
       {
         n = split($0, parts, /frame_id=/)
         if (n < 5) {
@@ -427,15 +428,25 @@ frame_id_offset_report="$(
         count++
       }
       END {
+        if (count == 0) {
+          printf("frameset_count=0 frame_id_offset no valid frame-set samples\n")
+          exit 1
+        }
         jitter1 = max1 - min1
         jitter2 = max2 - min2
         jitter3 = max3 - min3
         max_observed = jitter1
         if (jitter2 > max_observed) max_observed = jitter2
         if (jitter3 > max_observed) max_observed = jitter3
-        printf("frameset_count=%d frame_id_offset cam1-cam0=[%d,%d] cam2-cam0=[%d,%d] cam3-cam0=[%d,%d] max_jitter=%d\n",
-               count, min1, max1, min2, max2, min3, max3, max_observed)
-        if (count == 0 || max_observed > max_jitter) {
+        max_abs_offset = abs(min1)
+        if (abs(max1) > max_abs_offset) max_abs_offset = abs(max1)
+        if (abs(min2) > max_abs_offset) max_abs_offset = abs(min2)
+        if (abs(max2) > max_abs_offset) max_abs_offset = abs(max2)
+        if (abs(min3) > max_abs_offset) max_abs_offset = abs(min3)
+        if (abs(max3) > max_abs_offset) max_abs_offset = abs(max3)
+        printf("frameset_count=%d frame_id_offset cam1-cam0=[%d,%d] cam2-cam0=[%d,%d] cam3-cam0=[%d,%d] max_jitter=%d max_abs_offset=%d\n",
+               count, min1, max1, min2, max2, min3, max3, max_observed, max_abs_offset)
+        if (max_observed > max_jitter || max_abs_offset != 0) {
           exit 1
         }
       }'
@@ -444,9 +455,9 @@ frame_id_offset_status=$?
 set -e
 echo "${frame_id_offset_report}"
 if (( frame_id_offset_status == 0 )); then
-  record_pass "frame_id offsets stable with jitter <= ${MAX_FRAME_ID_OFFSET_JITTER}"
+  record_pass "frame_id offsets are zero with jitter <= ${MAX_FRAME_ID_OFFSET_JITTER}"
 else
-  record_fail "frame_id offsets jitter exceeds ${MAX_FRAME_ID_OFFSET_JITTER}"
+  record_fail "frame_id offsets are not all zero or jitter exceeds ${MAX_FRAME_ID_OFFSET_JITTER}"
 fi
 
 rtsp_group_report="$(

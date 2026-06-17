@@ -24,7 +24,6 @@ open_source_demo/
 │   ├── build_cam_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
-│   ├── cam_demo_regression.sh
 │   └── package_runtime.sh
 └── src/
     ├── cam_demo.cpp
@@ -65,13 +64,6 @@ TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
 ```
 
-The scripts use `build_x5/` by default. Set `BUILD_DIR=/path/to/build_x5` if a different build directory is required.
-
-The toolchain file used during project validation was:
-
-```text
-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake
-```
 
 Generated binaries:
 
@@ -103,7 +95,7 @@ cd open_source_demo
 scripts/package_runtime.sh --build-dir build_x5 --output-dir deploy_runtime
 ```
 
-`package_runtime.sh` generates the top-level launchers, copies `bin/` and `lib/`, and runs `strip --strip-unneeded` on the runtime-package executables and `.so` files. If the strip tool cannot be auto-detected, pass `--strip-tool /path/to/aarch64-strip`.
+The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `deploy_runtime/` to the board. Do not copy only one executable or one `.so` file.
 
 Deploy it to X5:
 
@@ -163,11 +155,7 @@ All three demos provide default configurations. For normal bring-up, run the top
 - `libsc132.so`: starts the SC132 4-camera pipeline and provides synchronized NV12 DMA frames through a frame-set callback
 - `libprrtsp.so`: sends the four NV12 streams to the X5 encoder and publishes RTSP streams
 
-All three demo executables statically link `libstdc++` and `libgcc` to avoid `GLIBCXX_* not found` on boards with an older `/usr/lib/libstdc++.so.6`.
-
-The delivered `libsc132.so`, `libprrtsp.so`, and `libicm42688.so` are stripped and use export-symbol control so only public-header APIs remain visible.
-
-Important: keep `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
+The three demo executables are linked for the X5 runtime environment. Keep `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
 
 Default run:
 
@@ -183,28 +171,26 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. Normal usage does not require setting trigger-related environment variables.
+`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly; it starts the fixed four-camera, 60fps, 90-degree output path.
 
-`--channels 1 --fps 60` automatically selects the camera profile required for single-channel 60fps. If the user already set `SC132_SENSOR_PROFILE`, the demo does not override it.
-
-Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries from `/usr/lib` or `/lib64`, which is not the verified demo environment.
-
-If `. ./env.sh && ldd ./bin/cam_demo` shows `/usr/lib/libsc132.so`, the local `lib/` directory is not taking precedence. Make sure `env.sh`, `bin/`, and `lib/` come from the same runtime package.
+Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
 
 Common options:
 
 ```text
---channels <1-4>   Enabled camera count, default 4
 --width <pixels>   Frame width, default 1088
 --height <pixels>  Frame height, default 1280
 --fps <30|60>      Camera and encoder fps, default 60
+--rotate <0|90|180|270> Output rotation, default 90; 270 is limited to 30fps and is not supported at 60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 2000; four streams are about 8Mbps total
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print per-channel send timing and timestamp skew diagnostics
---max-skew-ns <ns> Timestamp skew diagnostic threshold, default 1000000; strict grouping currently uses normalized frame_id
+--max-skew-ns <ns> Timestamp skew diagnostic threshold, default 1000000; after synchronized grouping, all four exposed frame_id values match exactly
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
+
+Limit: default `./cam_demo` uses the fixed four-camera, 60fps, 90-degree output path. `--rotate 270` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
 
 Default RTSP URLs:
 
@@ -215,7 +201,7 @@ rtsp://<x5-ip>:556/PRR
 rtsp://<x5-ip>:557/PRR
 ```
 
-The default RTSP ports are fixed to `554/555/556/557`. Cameras 0/1/2/3 correspond to `ch1/ch2/ch3/ch4`; the delivered demo does not expose a port remapping option. `libprrtsp.so` also keeps the default unnumbered channel for single-stream examples. The four-camera demo does not use that default channel, so `ch1` can use port 554. Do not initialize the default channel and `ch1` to port 554 in the same process.
+The default RTSP ports are fixed to `554/555/556/557`. Cameras 0/1/2/3 correspond to the four output streams. The delivered demo does not expose a port remapping option.
 
 Frame flow:
 
@@ -233,7 +219,7 @@ Log fields:
 - `seq`: per-camera software sequence
 - `group_id`: synchronized frame-set sequence generated by `libsc132.so`
 - `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
-- `frame_id`: SC132/VIO output frame id; `libsc132.so` strictly groups frames by each camera's normalized frame index
+- `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
 - `camera_ts_ns`: camera frame timestamp in `ns`; sensor/VIO timestamp first, system output timestamp as fallback
 - `full_waits`: number of times the callback waited for a full queue; this should remain `0` in stable streaming
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
@@ -248,7 +234,7 @@ Default run:
 ./imu_reader_demo
 ```
 
-Common debug example:
+Example:
 
 ```bash
 ./imu_reader_demo --sample-rate-hz 1000 --count 10
@@ -303,88 +289,46 @@ Common options:
 --no-newline              Do not append newline to the TX payload
 ```
 
-## 7. Automated Regression Test And Criteria
+## 7. Quick Verification After Deployment
 
-`scripts/cam_demo_regression.sh` runs the 4-camera RTSP regression from the development host over SSH. It does not stop existing camera processes by default. If another `cam_demo` is already running, the script fails immediately to avoid interrupting a live visual check.
-
-Prerequisites:
-
-- `cam_demo` and its sibling `lib/` directory are already deployed on the X5 board
-- `/root/demo/env.sh` correctly sets `LD_LIBRARY_PATH` on the board
-- The development host can SSH into the X5 board
-- `nc` is recommended on the development host; if missing, the script falls back to bash `/dev/tcp`
-- Password-based SSH needs `sshpass`; SSH key auth works without a password argument
-
-Example:
+After deployment, first confirm all three demos can print their help text:
 
 ```bash
-cd RoboBaton_4p_demo
-X5_PASS=<password> scripts/cam_demo_regression.sh \
-  --host <x5-ip>
+cd /root/demo
+./cam_demo --help
+./imu_reader_demo --help
+./serial_port_demo --help
 ```
 
-In a dedicated test environment, allow the script to stop old camera processes explicitly:
+Camera demo check:
 
 ```bash
-X5_PASS=<password> scripts/cam_demo_regression.sh \
-  --host <x5-ip> \
-  --kill-existing
+cd /root/demo
+/etc/init.d/S90cam-service start 2>/dev/null || true
+pgrep -a cam-service
+./cam_demo
 ```
 
-Default test setup:
-
-- Runtime: `25 s`
-- Camera/encoder FPS: `60 fps`
-- Input size: `1088x1280`
-- RTSP ports: `554/555/556/557`
-
-Default PASS criteria:
-
-| Item | Criterion |
-|---|---|
-| Shared library loading | With `LD_LIBRARY_PATH` set, `ldd ./bin/cam_demo` must load local `lib/libsc132.so` and `lib/libprrtsp.so` |
-| RTSP ports | `554/555/556/557` must all accept TCP connections within the startup window |
-| Sensor detection | At least 4 `sc132gs-1280p` sensors detected |
-| Encoder init | `Encode idx: 0..3, init successful` appears for all four encoders |
-| Fatal errors | No segmentation fault, `undefined symbol`, `GLIBCXX`, `ret=-36`, `ret=-10`, or `create_and_run_vflow failed` |
-| FPS | Each channel's last FPS is at least `55`, with at least 3 samples per channel at or above `55` |
-| Frame-set progress | `group_id` exceeds the runtime/FPS-derived minimum |
-| Queue blocking | `full_waits` remains `0` |
-| Pipeline delay | `pipeline_delay_ms <= 80` |
-| RTSP send cost | `send_max_ms <= 120` |
-| Timestamp diagnostic | `group_skew_ns <= 1000000` |
-| Frame-id consistency | Per-frame-set `frame_id` offset jitter across four cameras must be `0` |
-
-Adjust thresholds:
-
-```bash
-scripts/cam_demo_regression.sh --host <x5-ip> \
-  --min-fps 55 \
-  --min-good-fps-samples 3 \
-  --max-pipeline-delay-ms 80 \
-  --max-send-max-ms 120 \
-  --max-group-skew-ns 1000000 \
-  --min-group-id 500
-```
-
-Interpretation:
-
-- `sample_reason=frame-index` is reported as a warning. It does not fail the run if FPS, `group_id`, queue, and delay checks pass.
-- `sample_reason=base-skew` usually appears only during startup cleanup before fixing the frame-id bases. It does not fail the run if streaming continues normally.
-- The regression script checks link health and RTSP port reachability. It does not replace visual/content inspection; use a player or frame-grab tool when image content needs to be checked.
-- If the script reports an existing `cam_demo`, confirm manually before stopping it. Do not use `--kill-existing` during active visual inspection.
-
-Logs are saved under:
+After the demo starts, open the four RTSP streams with a player or RTSP client:
 
 ```text
-RoboBaton_4p_demo/regression_logs/
+rtsp://<x5-ip>:554/PRR
+rtsp://<x5-ip>:555/PRR
+rtsp://<x5-ip>:556/PRR
+rtsp://<x5-ip>:557/PRR
 ```
 
-This directory is ignored by `.gitignore`.
+Basic pass criteria:
+
+- All four RTSP URLs connect and keep streaming.
+- All four images are visible, with no black screen, obvious mosaic, or obvious freeze.
+- The log reports per-camera `fps` close to the target frame rate.
+- The log keeps `full_waits` at `0`.
+- No obvious error, crash, or repeated camera restart appears.
 
 ## 8. Runtime Constraints
 
-The IMU driver library is fixed for the current X5 mainboard connection:
+The IMU demo uses the current X5 mainboard connection by default:
 
 - SPI device node: `/dev/spidev2.0`
 - SPI mode: `0`
@@ -471,28 +415,21 @@ Common causes:
 - X5 device tree or camera sensor profile does not match the hardware
 - X5 multimedia runtime libraries are missing or incompatible
 - `LD_LIBRARY_PATH` does not include the local `lib/`, or `ldd ./bin/cam_demo` does not load the local `lib/libsc132.so` / `lib/libprrtsp.so`
-- `libsc132.so` was replaced without rechecking the built-in SC132 sensor configuration ABI
 - The system `cam-service` is not running or is in a bad state; start it with `/etc/init.d/S90cam-service start`
 - Another camera application is still running and occupies camera/VIO resources
 - Default RTSP ports `554/555/556/557` are already occupied
 - The development host cannot reach the X5 RTSP ports over the network
 
-If `./cam_demo --channels 1 --fps 60` returns `ret=-36`, the current single-channel camera profile does not match. Unset the external `SC132_SENSOR_PROFILE` and retry, or set it explicitly:
-
-```bash
-export SC132_SENSOR_PROFILE=sc132gs_linear_1088x1280_raw10_60fps_1lane
-```
+This demo is designed for fixed four-camera operation and does not provide 2-camera or 3-camera partial-start modes.
 
 For timing diagnostics:
 
 ```bash
-./cam_demo --channels 4 --fps 60 --diagnostics
+./cam_demo --diagnostics
 ```
 
 Interpretation:
 
-- If `fps` is close to 60, `full_waits=0`, and `pipeline_delay_ms` is only a few milliseconds while one player view is visibly slower, the delay is more likely in the RTSP server/client buffer or display path.
-- If one channel's `rtsp_latest_skew_ms` keeps growing by multiple frames, or `send_max_ms` stays unusually high, continue checking that RTSP context or encoder call path.
-- If logs continuously print `[FRAME_SET] drops ... sample_reason=frame-index`, one frame-id stream is falling behind the current frame set. Check camera startup, trigger stability, and callback consumption first.
-- If logs print `sample_reason=base-skew` during startup, stale startup frames are being cleaned up. This is recovery cleanup as long as the later per-channel FPS stays near the target.
-- If `group_skew_ns` or `rtsp_latest_skew_ms` stays close to one frame period, continue checking external trigger stability, camera startup order, and board load.
+- If `fps` is close to 60 and `full_waits=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
+- If `send_max_ms` stays unusually high, continue checking that RTSP or encoder path.
+- If `group_skew_ns` stays close to one frame period, continue checking external trigger stability, camera startup order, and board load.
