@@ -171,17 +171,17 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly; it starts the fixed four-camera, 60fps, 90-degree output path.
+`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly; it starts the fixed four-camera, 60fps, upright `1280x1088` output path.
 
 Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
 
 Common options:
 
 ```text
---width <pixels>   Frame width, default 1088
---height <pixels>  Frame height, default 1280
+--width <pixels>   Frame width, default 1280
+--height <pixels>  Frame height, default 1088
 --fps <30|60>      Camera and encoder fps, default 60
---rotate <0|90|180|270> Output rotation, default 90; 270 is limited to 30fps and is not supported at 60fps
+--rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 2000; four streams are about 8Mbps total
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
@@ -190,7 +190,7 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses the fixed four-camera, 60fps, 90-degree output path. `--rotate 270` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
+Limit: default `./cam_demo` uses the fixed four-camera, 60fps, upright `1280x1088` output path. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
 
 Default RTSP URLs:
 
@@ -203,9 +203,63 @@ rtsp://<x5-ip>:557/PRR
 
 The default RTSP ports are fixed to `554/555/556/557`. Cameras 0/1/2/3 correspond to the four output streams. The delivered demo does not expose a port remapping option.
 
+### 4.1 Hardware check: single-sensor capture
+
+If the four-camera demo fails to start, one stream has no image, or the FPC/I2C/MIPI connection is suspected, start one physical sensor at a time. This mode is for hardware diagnosis only; normal operation still uses `./cam_demo` for the fixed four-camera path.
+
+Stop other camera processes before testing:
+
+```bash
+cd /root/demo
+killall -q cam_demo 2>/dev/null || true
+/etc/init.d/S90cam-service start 2>/dev/null || true
+```
+
+Start one physical camera id on the board:
+
+```bash
+./cam_demo --camera-id 0 --diagnostics   # cam0 -> rtsp://<x5-ip>:554/PRR
+./cam_demo --camera-id 1 --diagnostics   # cam1 -> rtsp://<x5-ip>:555/PRR
+./cam_demo --camera-id 2 --diagnostics   # cam2 -> rtsp://<x5-ip>:556/PRR
+./cam_demo --camera-id 3 --diagnostics   # cam3 -> rtsp://<x5-ip>:557/PRR
+```
+
+Run only one `cam_demo` process at a time. Before switching to another sensor, press `Ctrl-C` or run:
+
+```bash
+killall -q cam_demo 2>/dev/null || true
+```
+
+Use `ffprobe` or an RTSP player on the development machine to confirm video. The example below checks cam0; use ports `555/556/557` for the other sensors:
+
+```bash
+ffprobe -v error -rtsp_transport tcp \
+  -select_streams v:0 \
+  -show_entries stream=codec_name,width,height,avg_frame_rate \
+  -of default=noprint_wrappers=1 \
+  rtsp://<x5-ip>:554/PRR
+```
+
+Expected output includes:
+
+```text
+codec_name=h264
+width=1280
+height=1088
+avg_frame_rate=60/1
+```
+
+Diagnosis guide:
+
+- If the board log prints `Found sensor_name:sc132gs-1280p` and `ffprobe` receives an H.264 stream, that sensor plus its I2C, MIPI/VIN, and RTSP path are basically healthy.
+- If only one `--camera-id` fails, check that camera connector, FPC cable, power, and cable orientation first.
+- If all four sensors work individually but the default four-camera mode fails, check the four-camera trigger wiring, GPIO417 external trigger, `cam-service`, and whether another camera process is using the hardware.
+
+Single-sensor diagnosis supports only `--camera-id 0/1/2/3`; do not use this mode to validate two-camera or three-camera combinations.
+
 Frame flow:
 
-1. `cam_demo` registers a synchronized frame-set callback through `VioCamInitmFrameSet()`.
+1. `cam_demo` registers the synchronized four-camera callback through the `libsc132.so` frame-set API.
 2. `libsc132.so` synchronizes the four camera frames and emits a frame-set callback after grouping succeeds.
 3. The demo calls the user hook inside the frame-set callback, then retains each frame and pushes it into the corresponding RTSP queue.
 4. If a queue is full, the callback waits for a free slot instead of dropping older frames.

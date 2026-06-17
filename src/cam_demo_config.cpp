@@ -17,10 +17,10 @@ constexpr const char* kSc132Single60FpsProfile =
 // 输出：帮助文本写入 stdout。
 void PrintUsage(const char* program) {
   std::cout << "Usage: " << program << " [options]\n"
-            << "  --width <pixels>  Frame width, default 1088\n"
-            << "  --height <pixels> Frame height, default 1280\n"
+            << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
+            << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
             << "  --fps <30|60>     Camera and encoder fps, default 60\n"
-            << "  --rotate <0|90|180|270> Output rotation, default 90; 270 is limited to 30fps\n"
+            << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --url <path>      RTSP URL path, default /PRR\n"
             << "  --diagnostics     Print per-channel RTSP timing diagnostics\n"
@@ -57,6 +57,19 @@ int ParseInt(const std::string& text, const char* name) {
   return value;
 }
 
+// 功能：解析无符号 mask，支持 0x 前缀。
+// 输入：text 为参数文本，name 用于错误提示。
+// 输出：uint32_t 数值。
+// 异常：包含非数字尾缀或超出 uint32_t 时抛出异常。
+uint32_t ParseUint32(const std::string& text, const char* name) {
+  size_t parsed = 0;
+  const unsigned long value = std::stoul(text, &parsed, 0);
+  if (parsed != text.size() || value > 0xffffffffUL) {
+    throw std::invalid_argument(std::string("invalid unsigned integer for ") + name);
+  }
+  return static_cast<uint32_t>(value);
+}
+
 // 功能：解析长整型命令行参数。
 // 输入：text 为参数文本，name 用于错误提示。
 // 输出：long long 数值。
@@ -75,9 +88,13 @@ long long ParseLongLong(const std::string& text, const char* name) {
 // 输出：无。
 // 异常：参数不合法时抛出 std::invalid_argument。
 void ValidateOptions(const Options& options) {
-  // 2026-06-16 修改原因：交付只暴露固定四目默认链路；--channels 保留为内部调试入口，拒绝未验证的 2/3 路部分启动。
+  // 2026-06-17 修改原因：交付主路径只支持完整四目；内部诊断只支持单颗物理 sensor，继续拒绝未验证的 2/3 路组合。
   if (options.channels != 1 && options.channels != kMaxChannels) {
     throw std::invalid_argument("--channels is an internal debug option and only supports 1 or 4");
+  }
+  if (!IsSupportedCameraMask(options.camera_mask) ||
+      options.channels != CameraMaskPopCount(options.camera_mask)) {
+    throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
   }
   if (options.width <= 0 || options.height <= 0) {
     throw std::invalid_argument("--width and --height must be positive");
@@ -95,9 +112,9 @@ void ValidateOptions(const Options& options) {
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
   }
-  // 2026-06-16 修改原因：实测 rotate=270 的 Nano2D 后处理路径在四路 60fps 下吞吐不达标，启动阶段直接拒绝该非支持组合。
-  if (options.rotate_degrees == 270 && options.fps == 60) {
-    throw std::invalid_argument("--rotate 270 is not supported at 60fps; use --fps 30 or --rotate 90");
+  // 2026-06-17 修改原因：对外 rotate=0 表示正装画面；实际底层 rotate=270 的慢路径对应对外 rotate=180，四路 60fps 下不支持。
+  if (InternalRotateDegrees(options) == 270 && options.fps == 60) {
+    throw std::invalid_argument("--rotate 180 is not supported at 60fps; use --fps 30 or --rotate 0");
   }
   if (options.diagnostic_interval_ms < 100) {
     throw std::invalid_argument("--diag-interval-ms must be >= 100");
@@ -123,11 +140,37 @@ void ValidateOptions(const Options& options) {
 // 异常：未知参数或参数值非法时抛出 std::invalid_argument。
 Options ParseCommandLine(int argc, char** argv) {
   Options options;
-
+  int requested_channels = options.channels;
+  bool channels_set = false;
+  bool camera_selector_set = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
     if (arg == "--channels") {
       options.channels = ParseInt(RequireValue(argc, argv, &i, "--channels"), "--channels");
+      requested_channels = options.channels;
+      channels_set = true;
+      if (!camera_selector_set) {
+        options.camera_mask = CameraMaskFromChannelCount(options.channels);
+      }
+    } else if (arg == "--camera-id") {
+      const int camera_id = ParseInt(RequireValue(argc, argv, &i, "--camera-id"), "--camera-id");
+      if (camera_id < 0 || camera_id >= kMaxChannels) {
+        throw std::invalid_argument("--camera-id must be 0, 1, 2, or 3");
+      }
+      // 2026-06-17 修改原因：内部单颗 sensor 诊断按物理 id 选路，避免继续使用“前 N 路”语义误导接线排查。
+      options.camera_mask = 1U << static_cast<uint32_t>(camera_id);
+      options.channels = 1;
+      camera_selector_set = true;
+    } else if (arg == "--camera-mask") {
+      const uint32_t camera_mask = ParseUint32(RequireValue(argc, argv, &i, "--camera-mask"),
+                                              "--camera-mask");
+      // 2026-06-17 修改原因：仅允许单颗或四颗，防止把未验证的 2/3 路 SDK 组合伪装成 mask 路径。
+      if (!IsSupportedCameraMask(camera_mask)) {
+        throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
+      }
+      options.camera_mask = camera_mask;
+      options.channels = CameraMaskPopCount(camera_mask);
+      camera_selector_set = true;
     } else if (arg == "--width") {
       options.width = ParseInt(RequireValue(argc, argv, &i, "--width"), "--width");
     } else if (arg == "--height") {
@@ -161,6 +204,14 @@ Options ParseCommandLine(int argc, char** argv) {
     }
   }
 
+  if (!channels_set && !camera_selector_set) {
+    options.camera_mask = CameraMaskFromChannelCount(options.channels);
+  }
+  if (channels_set && camera_selector_set &&
+      requested_channels != CameraMaskPopCount(options.camera_mask)) {
+    throw std::invalid_argument("--channels conflicts with --camera-id/--camera-mask");
+  }
+
   ValidateOptions(options);
   return options;
 }
@@ -177,27 +228,26 @@ void ConfigureSc132TriggerMode(const Options& options) {
             << " (GPIO417 is used when mode=software_gpio)\n";
 }
 
-// 功能：为内部单路 smoke 自动补齐 60fps sensor profile。
-// 输入：options.channels/options.fps。
-// 副作用：当内部调试使用 --channels 1 且未预设 SC132_SENSOR_PROFILE 时设置兼容 profile。
+// 功能：为内部单颗 sensor smoke 自动补齐 60fps sensor profile。
+// 输入：options.camera_mask/options.fps。
+// 副作用：当内部诊断只启用一颗 sensor 且未预设 SC132_SENSOR_PROFILE 时设置兼容 profile。
 void ConfigureSc132SensorProfile(const Options& options) {
   const char* current_profile = std::getenv(kSc132SensorProfileEnv);
   if (current_profile != nullptr && current_profile[0] != '\0') {
-    std::cout << kSc132SensorProfileEnv << " already set to " << current_profile << "\n";
+    std::cout << "SC132 sensor profile already configured\n";
     return;
   }
 
-  // 四路同步路径沿用 libsc132 默认配置；这里只处理单路 60fps 兼容场景。
-  if (options.channels != 1 || options.fps != 60) {
+  // 2026-06-17 修改原因：四路同步路径沿用 libsc132 默认配置；单颗物理 sensor 60fps 需要 1lane profile 才能和 SDK pipeline 匹配。
+  if (CameraMaskPopCount(options.camera_mask) != 1 || options.fps != 60) {
     return;
   }
 
-  // setenv 只影响当前进程，避免修改板端全局 shell 环境。
+  // 2026-06-17 修改原因：setenv 只影响当前进程，避免修改板端全局 shell 环境。
   if (setenv(kSc132SensorProfileEnv, kSc132Single60FpsProfile, 1) != 0) {
     throw std::runtime_error("set SC132_SENSOR_PROFILE failed");
   }
-  std::cout << "Auto selected " << kSc132SensorProfileEnv << "="
-            << kSc132Single60FpsProfile << " for single-channel 60fps\n";
+  std::cout << "Auto selected single-sensor 60fps profile\n";
 }
 
 }  // namespace robobaton_demo

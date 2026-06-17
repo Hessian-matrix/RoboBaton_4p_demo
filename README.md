@@ -171,17 +171,17 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、60fps、90 度输出。
+`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、60fps、正装方向 `1280x1088` 输出。
 
 部署时请整目录拷贝 `/root/demo` 运行包。顶层入口会设置 `LD_LIBRARY_PATH`，如果只拷贝 `bin/cam_demo` 或单个 `.so`，板端可能加载系统库，导致运行环境和交付包不一致。
 
 常用参数：
 
 ```text
---width <pixels>   图像宽度，默认 1088
---height <pixels>  图像高度，默认 1280
+--width <pixels>   图像宽度，默认 1280
+--height <pixels>  图像高度，默认 1088
 --fps <30|60>      相机和编码帧率，默认 60
---rotate <0|90|180|270> 输出旋转角度，默认 90；270 仅支持 30fps，不支持 60fps
+--rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 60fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 2000；四路约 8Mbps 总码率
 --url <path>       RTSP path，默认 /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
@@ -190,7 +190,7 @@ killall -q cam_demo 2>/dev/null || true
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认 `./cam_demo` 使用固定四路、60fps、90 度输出。`--rotate 270` 仅支持 30fps 降载模式，不支持 60fps。
+限制说明：默认 `./cam_demo` 使用固定四路、60fps、正装方向 `1280x1088` 输出。`--rotate 180` 仅支持 30fps 降载模式，不支持 60fps。
 
 默认四路 RTSP 地址：
 
@@ -203,9 +203,63 @@ rtsp://<x5-ip>:557/PRR
 
 默认 RTSP 端口固定为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出，交付例程不提供端口重映射参数。
 
+### 4.1 硬件检测：单颗 sensor 取图
+
+当四目整体启动失败、某一路无图、怀疑 FPC/接口/I2C/MIPI 连接异常时，可以只启动单颗 sensor 做硬件排查。该模式只用于检测单颗 sensor 和连接状态；正常运行仍直接执行 `./cam_demo` 启动四路。
+
+测试前先停止其他相机进程：
+
+```bash
+cd /root/demo
+killall -q cam_demo 2>/dev/null || true
+/etc/init.d/S90cam-service start 2>/dev/null || true
+```
+
+板端按物理 camera id 启动单颗 sensor：
+
+```bash
+./cam_demo --camera-id 0 --diagnostics   # cam0 -> rtsp://<x5-ip>:554/PRR
+./cam_demo --camera-id 1 --diagnostics   # cam1 -> rtsp://<x5-ip>:555/PRR
+./cam_demo --camera-id 2 --diagnostics   # cam2 -> rtsp://<x5-ip>:556/PRR
+./cam_demo --camera-id 3 --diagnostics   # cam3 -> rtsp://<x5-ip>:557/PRR
+```
+
+每次只运行一个 `cam_demo`。切换到下一颗 sensor 前，先按 `Ctrl-C` 退出当前进程，或执行：
+
+```bash
+killall -q cam_demo 2>/dev/null || true
+```
+
+开发机用 `ffprobe` 或播放器拉流确认是否出图；下面以 cam0 为例，其他 sensor 替换端口 `555/556/557`：
+
+```bash
+ffprobe -v error -rtsp_transport tcp \
+  -select_streams v:0 \
+  -show_entries stream=codec_name,width,height,avg_frame_rate \
+  -of default=noprint_wrappers=1 \
+  rtsp://<x5-ip>:554/PRR
+```
+
+正常输出应包含：
+
+```text
+codec_name=h264
+width=1280
+height=1088
+avg_frame_rate=60/1
+```
+
+判定建议：
+
+- 板端日志出现 `Found sensor_name:sc132gs-1280p`，且 `ffprobe` 能读到 H.264 码流，说明该 sensor、I2C、MIPI/VIN 和 RTSP 链路基本正常。
+- 只有某个 `--camera-id` 失败时，优先检查对应 camera 接口、FPC、供电和连接方向。
+- 四颗单独都能出图但默认四路失败时，优先检查四路同步触发、GPIO417 外触发线、`cam-service` 状态和是否有其他相机进程占用资源。
+
+单颗诊断模式只支持 `--camera-id 0/1/2/3`；不要用该模式判断 2 路或 3 路组合能力。
+
 相机回调后的处理流程：
 
-1. `cam_demo` 使用 `VioCamInitmFrameSet()` 注册四目同步 frame-set callback。
+1. `cam_demo` 通过 `libsc132.so` 的 frame-set API 注册四目同步 callback。
 2. `libsc132.so` 对四路相机帧做同步配组，配组成功后回调给 demo。
 3. demo 在帧组回调里调用用户入口，并给每路 frame `retain` 后放入对应 RTSP 队列。
 4. 队列满时等待后台线程释放空槽，不丢弃旧帧。

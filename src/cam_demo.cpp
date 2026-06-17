@@ -35,8 +35,8 @@ void OnQueuedCameraFrame(const QueuedFrame& frame) {
   (void)frame;
 }
 
-// 功能：用户二次开发的四目同步帧组入口。
-// 输入：frame_set 已由 libsc132 配组，同一 group_id 下四路 frame_id 对外完全一致。
+// 功能：用户二次开发的同步帧组入口。
+// 输入：frame_set 已由 libsc132 配组；默认四路 frame_id 对齐，单颗诊断只有选中物理相机。
 // 输出：无。
 // 生命周期：frame_set 内的 frame 只在回调期间可靠；异步保存时需要自行 retain/release。
 void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set) {
@@ -45,7 +45,7 @@ void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set) {
 
 }  // namespace robobaton_demo
 
-// 功能：启动四目相机采集、libsc132 帧组同步、RTSP 推流和诊断流程。
+// 功能：启动 SC132 相机采集、libsc132 帧组同步、RTSP 推流和诊断流程。
 // 输入：argc/argv 为命令行参数。
 // 输出：0 表示正常退出，非 0 表示初始化或运行阶段失败。
 // 副作用：打开 hbmem、初始化 RTSP 和相机链路，退出时按顺序释放资源。
@@ -63,11 +63,12 @@ int main(int argc, char** argv) {
     signal(SIGTERM, SignalHandler);
 
     const Options options = ParseCommandLine(argc, argv);
-    std::cout << "Starting SC132 4-camera RTSP demo"
+    std::cout << "Starting SC132 RTSP demo"
               << " channels=" << options.channels
-              << " input_size=" << options.width << "x" << options.height
+              << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps
+              << " rotate=" << options.rotate_degrees
               << " bps=" << options.bps
               << " url=" << options.url
               << " trigger_mode=" << options.trigger_mode
@@ -78,7 +79,7 @@ int main(int argc, char** argv) {
     if (VioCamSetFps(options.fps) != 0) {
       throw std::runtime_error("VioCamSetFps failed");
     }
-    if (VioCamSetOutputRotate(options.rotate_degrees) != 0) {
+    if (VioCamSetOutputRotate(InternalRotateDegrees(options)) != 0) {
       throw std::runtime_error("VioCamSetOutputRotate failed");
     }
     ConfigureSc132TriggerMode(options);
@@ -93,22 +94,25 @@ int main(int argc, char** argv) {
     FramePipeline pipeline(options);
     pipeline.StartWorkers();
 
-    for (int channel = 0; channel < options.channels; ++channel) {
-      const RtspEndpoint endpoint = RtspEndpointForChannel(channel);
-      const int port = RtspPortForChannel(channel);
-      if (InitRtspEndpoint(endpoint, port, options) != 0) {
-        throw std::runtime_error("init RTSP channel " + std::to_string(channel) + " failed");
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      if (!CameraMaskContains(options.camera_mask, camera_id)) {
+        continue;
       }
-      initialized_rtsp_endpoints[channel] = endpoint;
+      const RtspEndpoint endpoint = RtspEndpointForChannel(camera_id);
+      const int port = RtspPortForChannel(camera_id);
+      if (InitRtspEndpoint(endpoint, port, options) != 0) {
+        throw std::runtime_error("init RTSP camera " + std::to_string(camera_id) + " failed");
+      }
+      initialized_rtsp_endpoints[initialized_rtsp_channels] = endpoint;
       ++initialized_rtsp_channels;
     }
 
     pipeline.StartDiagnosticsIfEnabled();
 
-    // 使用 libsc132 帧组 API：只有配组后的同步帧才进入用户 hook 和 RTSP 队列。
+    // 2026-06-17 修改原因：使用 mask-capable frame-set API，单颗诊断可启动 cam1/cam2/cam3 并保持物理 RTSP 端口映射。
     sc132_frame_set_config_t frame_set_config = pipeline.MakeFrameSetConfig();
-    if (VioCamInitmFrameSet(&frame_set_config) != 0) {
-      throw std::runtime_error("VioCamInitmFrameSet failed");
+    if (VioCamInitmFrameSetMask(&frame_set_config, options.camera_mask) != 0) {
+      throw std::runtime_error("VioCamInitmFrameSetMask failed");
     }
     camera_started = true;
 
@@ -138,6 +142,6 @@ int main(int argc, char** argv) {
     (void)hb_mem_module_close();
   }
 
-  std::cout << "SC132 4-camera RTSP demo stopped\n";
+  std::cout << "SC132 RTSP demo stopped\n";
   return exit_code;
 }

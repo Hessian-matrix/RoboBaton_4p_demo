@@ -115,14 +115,13 @@ class GroupSendBarrier {
   GroupSendBarrier(const GroupSendBarrier&) = delete;
   GroupSendBarrier& operator=(const GroupSendBarrier&) = delete;
 
-  // 功能：配置参与同组发送对齐的相机路数，并重置 barrier 状态。
-  // 输入：channels 为当前启用的相机数量。
+  // 功能：配置参与同组发送对齐的物理相机 mask，并重置 barrier 状态。
+  // 输入：camera_mask bit0..bit3 对应 cam0..cam3。
   // 输出：无。
   // 副作用：清空等待、到达和已发送状态。
-  void Configure(int channels) {
+  void Configure(uint32_t camera_mask) {
     std::lock_guard<std::mutex> lock(mutex_);
-    active_channels_ = channels;
-    all_channels_mask_ = channels <= 0 ? 0U : ((1U << channels) - 1U);
+    all_channels_mask_ = camera_mask & kDefaultCameraMask;
     current_group_id_ = 0;
     arrived_mask_ = 0;
     sent_mask_ = 0;
@@ -140,13 +139,13 @@ class GroupSendBarrier {
     std::unique_lock<std::mutex> lock(mutex_);
     const uint32_t channel_mask = 1U << static_cast<uint32_t>(channel);
 
-    // 记录每路正在等待的 group；某个 group 缺失时整体推进到所有通道都可达的最小 group。
+    // 2026-06-17 修改原因：单颗 sensor 诊断会启用非连续物理 camera_id，barrier 必须按物理 bitmask 判断到齐，不能按 0..N-1 连续路数遍历。
     waiting_group_ids_[channel] = group_id;
     waiting_mask_ |= channel_mask;
     while (!stopped_ && group_id > current_group_id_) {
       if ((waiting_mask_ | arrived_mask_) == all_channels_mask_) {
         uint64_t min_waiting_group_id = std::numeric_limits<uint64_t>::max();
-        for (int i = 0; i < active_channels_; ++i) {
+        for (int i = 0; i < kMaxChannels; ++i) {
           if ((waiting_mask_ & (1U << static_cast<uint32_t>(i))) != 0) {
             min_waiting_group_id = std::min(min_waiting_group_id, waiting_group_ids_[i]);
           }
@@ -177,7 +176,7 @@ class GroupSendBarrier {
       release_current_group_ = true;
       group_changed_.notify_all();
     } else {
-      // 当前 group 未到齐时等待，保证同组四路尽量一起进入 RTSP 发送阶段。
+      // 2026-06-17 修改原因：当前 group 未到齐时等待所有启用物理相机，单颗诊断时不会等待未启用通道。
       group_changed_.wait(lock, [&] {
         return stopped_ || release_current_group_ || group_id != current_group_id_;
       });
@@ -220,7 +219,6 @@ class GroupSendBarrier {
  private:
   std::mutex mutex_;
   std::condition_variable group_changed_;
-  int active_channels_ = 0;
   uint32_t all_channels_mask_ = 0;
   uint64_t current_group_id_ = 0;
   uint32_t arrived_mask_ = 0;
@@ -250,15 +248,17 @@ class FramePipeline::Impl {
   // 功能：创建流水线内部实现并配置发送 barrier。
   // 输入：options 为运行参数副本。
   explicit Impl(Options options) : options_(std::move(options)) {
-    group_send_barrier_.Configure(options_.channels);
+    group_send_barrier_.Configure(options_.camera_mask);
   }
 
-  // 功能：为每个启用通道启动一个 RTSP 发送线程。
+  // 功能：为每个启用物理相机启动一个 RTSP 发送线程。
   // 输入输出：无。
   // 副作用：线程启动后阻塞等待各自队列中的相机帧。
   void StartWorkers() {
-    for (int channel = 0; channel < options_.channels; ++channel) {
-      workers_[channel] = std::thread(&Impl::EncodeWorker, this, channel);
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      if (CameraMaskContains(options_.camera_mask, camera_id)) {
+        workers_[camera_id] = std::thread(&Impl::EncodeWorker, this, camera_id);
+      }
     }
   }
 
@@ -274,16 +274,17 @@ class FramePipeline::Impl {
 
   // 功能：构造 libsc132 帧组回调配置。
   // 输入：owner 为 FramePipeline 对象指针，将作为回调 user 传回。
-  // 输出：包含通道数、输入尺寸、同步阈值和超时时间的配置结构体。
+  // 输出：包含启用物理相机数量、sensor 原始尺寸、同步阈值和超时时间的配置结构体。
   sc132_frame_set_config_t MakeFrameSetConfig(FramePipeline* owner) const {
     sc132_frame_set_config_t config{};
     config.cb = FramePipeline::FrameSetCallback;
     config.user = owner;
-    config.camera_count = options_.channels;
+    config.camera_count = CameraMaskPopCount(options_.camera_mask);
     config.max_skew_ns = options_.frame_set_max_skew_ns;
     config.timeout_ms = options_.frame_set_timeout_ms;
-    config.width = options_.width;
-    config.height = options_.height;
+    // 2026-06-17 修改原因：对外 width/height 是正装输出尺寸；libsc132 内部仍按 sensor 原始采集尺寸配置。
+    config.width = kSensorInputWidth;
+    config.height = kSensorInputHeight;
     return config;
   }
 
@@ -329,12 +330,13 @@ class FramePipeline::Impl {
     }
     for (uint32_t i = 0; i < frame_set.camera_count; ++i) {
       const sc132_frame_set_item_t& item = frame_set.items[i];
-      const int channel = static_cast<int>(item.camera_id);
-      if (channel < 0 || channel >= kMaxChannels || item.frame == nullptr) {
+      const int camera_id = static_cast<int>(item.camera_id);
+      if (camera_id < 0 || camera_id >= kMaxChannels || item.frame == nullptr ||
+          !CameraMaskContains(options_.camera_mask, camera_id)) {
         std::cerr << "invalid frame-set item camera_id=" << item.camera_id << ", skip\n";
         continue;
       }
-      EnqueueCameraFrame(channel, item.frame, frame_set.group_id,
+      EnqueueCameraFrame(camera_id, item.frame, frame_set.group_id,
                          frame_set.group_timestamp_ns, frame_set.max_skew_ns,
                          item.sequence);
     }
@@ -380,8 +382,7 @@ class FramePipeline::Impl {
       oldest_ts = std::min(oldest_ts, item.timestamp_ns);
     }
 
-    if (mask != ((1U << frame_set.camera_count) - 1U) ||
-        oldest_ts == std::numeric_limits<uint64_t>::max()) {
+    if (mask != options_.camera_mask || oldest_ts == std::numeric_limits<uint64_t>::max()) {
       return;
     }
 
@@ -389,11 +390,14 @@ class FramePipeline::Impl {
               << " group_ts_ns=" << frame_set.group_timestamp_ns
               << " group_skew_ns=" << frame_set.max_skew_ns
               << " calc_skew_ns=" << (newest_ts - oldest_ts);
-    for (uint32_t channel = 0; channel < frame_set.camera_count; ++channel) {
-      std::cout << " cam" << channel
-                << "(seq=" << sequences[channel]
-                << ",frame_id=" << frame_ids[channel]
-                << ",camera_ts_ns=" << camera_ts[channel] << ")";
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      if (!CameraMaskContains(mask, camera_id)) {
+        continue;
+      }
+      std::cout << " cam" << camera_id
+                << "(seq=" << sequences[camera_id]
+                << ",frame_id=" << frame_ids[camera_id]
+                << ",camera_ts_ns=" << camera_ts[camera_id] << ")";
     }
     std::cout << "\n";
   }
@@ -570,7 +574,7 @@ class FramePipeline::Impl {
     *last_report = now;
   }
 
-  // 功能：周期性汇总四路最近已发送帧的同步和延迟状态。
+  // 功能：周期性汇总启用物理相机最近已发送帧的同步和延迟状态。
   // 输入：interval_ms 为诊断间隔。
   // 输出：无。
   // 副作用：写 stdout，帮助区分采集相位差、队列延迟和 RTSP 发送耗时。
@@ -590,30 +594,34 @@ class FramePipeline::Impl {
       uint64_t oldest_camera_ts_ns = std::numeric_limits<uint64_t>::max();
       uint64_t newest_rtsp_ts_ns = 0;
       uint64_t oldest_rtsp_ts_ns = std::numeric_limits<uint64_t>::max();
-      bool all_channels_have_frames = true;
-      for (int channel = 0; channel < options_.channels; ++channel) {
-        const uint64_t ts = diagnostics_[channel].last_camera_timestamp_ns.load(
+      bool all_enabled_cameras_have_frames = true;
+      // 2026-06-17 修改原因：内部单颗诊断可能只启用 cam1/cam2/cam3，诊断采样必须按物理 mask 遍历而不是按 0..channels-1。
+      for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+        if (!CameraMaskContains(options_.camera_mask, camera_id)) {
+          continue;
+        }
+        const uint64_t ts = diagnostics_[camera_id].last_camera_timestamp_ns.load(
             std::memory_order_relaxed);
-        const uint64_t rtsp_ts = diagnostics_[channel].last_rtsp_timestamp_ns.load(
+        const uint64_t rtsp_ts = diagnostics_[camera_id].last_rtsp_timestamp_ns.load(
             std::memory_order_relaxed);
         if (ts == 0 || rtsp_ts == 0) {
-          all_channels_have_frames = false;
+          all_enabled_cameras_have_frames = false;
           break;
         }
-        camera_ts_snapshot[channel] = ts;
-        rtsp_ts_snapshot[channel] = rtsp_ts;
-        send_duration_snapshot[channel] =
-            diagnostics_[channel].last_send_duration_ns.load(std::memory_order_relaxed);
-        pipeline_delay_snapshot[channel] =
-            diagnostics_[channel].last_pipeline_delay_ms.load(std::memory_order_relaxed);
-        sequence_snapshot[channel] =
-            diagnostics_[channel].last_sequence.load(std::memory_order_relaxed);
+        camera_ts_snapshot[camera_id] = ts;
+        rtsp_ts_snapshot[camera_id] = rtsp_ts;
+        send_duration_snapshot[camera_id] =
+            diagnostics_[camera_id].last_send_duration_ns.load(std::memory_order_relaxed);
+        pipeline_delay_snapshot[camera_id] =
+            diagnostics_[camera_id].last_pipeline_delay_ms.load(std::memory_order_relaxed);
+        sequence_snapshot[camera_id] =
+            diagnostics_[camera_id].last_sequence.load(std::memory_order_relaxed);
         newest_camera_ts_ns = std::max(newest_camera_ts_ns, ts);
         oldest_camera_ts_ns = std::min(oldest_camera_ts_ns, ts);
         newest_rtsp_ts_ns = std::max(newest_rtsp_ts_ns, rtsp_ts);
         oldest_rtsp_ts_ns = std::min(oldest_rtsp_ts_ns, rtsp_ts);
       }
-      if (!all_channels_have_frames) {
+      if (!all_enabled_cameras_have_frames) {
         continue;
       }
 
@@ -625,20 +633,23 @@ class FramePipeline::Impl {
       std::cout << std::fixed << std::setprecision(2)
                 << "[diag] rtsp_pts_skew_ms=" << rtsp_pts_skew_ms
                 << " camera_latest_skew_ms=" << camera_skew_ms;
-      for (int channel = 0; channel < options_.channels; ++channel) {
+      for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+        if (!CameraMaskContains(options_.camera_mask, camera_id)) {
+          continue;
+        }
         const double camera_lag_ms =
-            static_cast<double>(newest_camera_ts_ns - camera_ts_snapshot[channel]) / 1000000.0;
+            static_cast<double>(newest_camera_ts_ns - camera_ts_snapshot[camera_id]) / 1000000.0;
         const double rtsp_lag_ms =
-            static_cast<double>(newest_rtsp_ts_ns - rtsp_ts_snapshot[channel]) / 1000000.0;
+            static_cast<double>(newest_rtsp_ts_ns - rtsp_ts_snapshot[camera_id]) / 1000000.0;
         const double send_ms =
-            static_cast<double>(send_duration_snapshot[channel]) / 1000000.0;
-        std::cout << " cam" << channel
-                  << "(port=" << RtspPortForChannel(channel)
+            static_cast<double>(send_duration_snapshot[camera_id]) / 1000000.0;
+        std::cout << " cam" << camera_id
+                  << "(port=" << RtspPortForChannel(camera_id)
                   << ",camera_lag_ms=" << camera_lag_ms
                   << ",rtsp_lag_ms=" << rtsp_lag_ms
                   << ",send_ms=" << send_ms
-                  << ",pipe_ms=" << pipeline_delay_snapshot[channel]
-                  << ",seq=" << sequence_snapshot[channel] << ")";
+                  << ",pipe_ms=" << pipeline_delay_snapshot[camera_id]
+                  << ",seq=" << sequence_snapshot[camera_id] << ")";
       }
       std::cout << "\n";
     }

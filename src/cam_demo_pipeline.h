@@ -12,13 +12,13 @@ namespace robobaton_demo {
 // 生命周期：函数返回后 demo 会继续推流并释放 frame；异步保存图像时需自行复制或 retain。
 void OnQueuedCameraFrame(const QueuedFrame& frame);
 
-// 功能：四路帧组通过 libsc132 同步匹配后的用户扩展入口。
-// 输入：frame_set 包含同一 group_id 的多路相机帧和组时间戳。
+// 功能：同步帧组通过 libsc132 匹配后的用户扩展入口。
+// 输入：frame_set 包含同一 group_id 的启用物理相机帧和组时间戳。
 // 输出：无。
 // 生命周期：如需在函数外继续使用 frame_set 内的 frame，用户需自行 retain/release。
 void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set);
 
-// 功能：管理相机帧入队、四路对齐发送、RTSP 推流和诊断线程。
+// 功能：管理相机帧入队、启用物理相机对齐发送、RTSP 推流和诊断线程。
 // 输入：构造时传入 Options。
 // 输出：通过 MakeFrameSetConfig 提供 libsc132 回调配置。
 // 副作用：StartWorkers 后创建后台线程；Stop/Join 负责退出和回收。

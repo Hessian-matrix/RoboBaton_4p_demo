@@ -11,11 +11,11 @@ REMOTE_DIR="/root/demo"
 RUN_SECONDS=25
 STARTUP_TIMEOUT=14
 CHANNELS=4
-WIDTH=1088
-HEIGHT=1280
+WIDTH=1280
+HEIGHT=1088
 FPS=60
 BPS=2000
-ROTATE=90
+ROTATE=0
 URL_PATH="/PRR"
 DIAG_INTERVAL_MS=1000
 MIN_FPS=55
@@ -538,7 +538,7 @@ if (( base_skew_drop_count > 0 )); then
   record_warn "base-skew cleanup reports=${base_skew_drop_count}; allowed during startup recovery"
 fi
 
-if grep -q 'SC132 4-camera RTSP demo stopped' "${LOCAL_LOG}"; then
+if grep -Eq 'SC132 (4-camera )?RTSP demo stopped' "${LOCAL_LOG}"; then
   record_pass "cam_demo stopped cleanly"
 else
   record_warn "clean stop line not found; check timeout signal handling"

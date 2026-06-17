@@ -80,6 +80,7 @@ int VioCamInitm(sc132GetDataCallBack sc132GetData_dist1,
 int VioCamStartOnly(int camera_count, int width, int height);
 int VioCamInitmFrame(const sc132_frame_callbacks_t *cfg);
 int VioCamInitmFrameSet(const sc132_frame_set_config_t *cfg);
+int VioCamInitmFrameSetMask(const sc132_frame_set_config_t *cfg, uint32_t camera_mask);
 int VioCamSetFps(int fps);
 int VioCamSetOutputRotate(int rotate_clockwise_degree);
 int sc132_frame_retain(sc132_frame_t *frame);
