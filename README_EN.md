@@ -182,7 +182,7 @@ Common options:
 --height <pixels>  Frame height, default 1088
 --fps <30|60>      Camera and encoder fps, default 60
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 60fps
---bps <kbps>       Target average encoder bitrate in kbps, default 2000; four streams are about 8Mbps total
+--bps <kbps>       Target average encoder bitrate in kbps, default 4000; H.264 + P-frame GOP motion-quality baseline, can be overridden for bandwidth/quality trade-offs
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print per-channel send timing and timestamp skew diagnostics

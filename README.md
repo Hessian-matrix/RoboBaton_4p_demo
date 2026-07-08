@@ -182,7 +182,7 @@ killall -q cam_demo 2>/dev/null || true
 --height <pixels>  图像高度，默认 1088
 --fps <30|60>      相机和编码帧率，默认 60
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 60fps
---bps <kbps>       编码目标平均码率，单位 kbps，默认 2000；四路约 8Mbps 总码率
+--bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；H.264 + P 帧 GOP 运动画质基线，可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息

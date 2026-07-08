@@ -14,16 +14,13 @@ namespace robobaton_demo {
 
 // Demo 支持的最大相机路数。
 constexpr int kMaxChannels = 4;
-// 2026-06-17 修改原因：对外输出尺寸固定按用户看到的正装方向描述为 1280x1088。
 constexpr int kDefaultWidth = 1280;
 constexpr int kDefaultHeight = 1088;
-// 2026-06-17 修改原因：底层相机采集尺寸仍按 sensor pipeline 原始尺寸配置，不能用对外宽高替代。
 constexpr int kSensorInputWidth = 1088;
 constexpr int kSensorInputHeight = 1280;
 constexpr int kDefaultFps = 60;
 // 默认单路编码码率，单位为 kbps。
-constexpr long long kDefaultBps = 2000;
-// 2026-06-17 修改原因：对外默认旋转为 0；底层安装补偿由 InternalRotateDegrees() 处理。
+constexpr long long kDefaultBps = 4000;
 constexpr int kDefaultRotateDegrees = 0;
 constexpr int kMountRotateDegrees = 90;
 constexpr uint32_t kDefaultCameraMask = (1U << kMaxChannels) - 1U;
