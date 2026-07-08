@@ -1,7 +1,5 @@
 build_x5/*
-deploy_runtime/*
 build_x5_syncfix/*
 regression_logs/*
 RELEASE_CHECKLIST.md
 *.bin
-cam_demo

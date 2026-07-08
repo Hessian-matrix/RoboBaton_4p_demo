@@ -88,22 +88,32 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 ## 3. Deploy
 
-Recommended target directory on X5: `/root/demo/`. First generate the runtime package on the development host:
+This repository treats `RoboBaton_4p_demo/demo/` as the board-side runtime update package. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
+
+After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
 ```bash
-cd open_source_demo
-scripts/package_runtime.sh --build-dir build_x5 --output-dir deploy_runtime
+cd /root/x5/4cam
+scripts/build_sc132.sh
+scripts/build_rtsp_so_mp4.sh
+
+cd RoboBaton_4p_demo
+scripts/package_runtime.sh
 ```
 
-The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `deploy_runtime/` to the board. Do not copy only one executable or one `.so` file.
+`scripts/package_runtime.sh` reads from `./build_x5` and `./lib` by default, then writes the runtime package to `./demo`. Keep `demo/` in the public repository or release artifact; if `demo/*` is ignored again, users will not receive the update package from the repository.
+
+The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable or one `.so` file.
 
 Deploy it to X5:
 
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
-tar -C deploy_runtime -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
+tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
 ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
+
+Note: copy the contents of `demo/`, not the outer `demo/` directory itself; the board should not contain `/root/demo/demo/`.
 
 Runtime layout on X5:
 

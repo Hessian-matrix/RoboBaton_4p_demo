@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+export DEMO_DIR
+. "${DEMO_DIR}/env.sh"
+exec "${DEMO_DIR}/bin/cam_demo" "$@"

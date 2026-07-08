@@ -88,22 +88,32 @@ file lib/libprrtsp.so
 
 ## 3. 部署
 
-建议部署到 X5 的 `/root/demo/`。先在开发机生成板端运行包：
+本仓库约定 `RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
+
+代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
 ```bash
-cd open_source_demo
-scripts/package_runtime.sh --build-dir build_x5 --output-dir deploy_runtime
+cd /root/x5/4cam
+scripts/build_sc132.sh
+scripts/build_rtsp_so_mp4.sh
+
+cd RoboBaton_4p_demo
+scripts/package_runtime.sh
 ```
 
-运行包包含顶层启动脚本、`env.sh`、`bin/` 和 `lib/`。部署时请完整拷贝 `deploy_runtime/` 的内容到板端，不要只拷贝单个可执行文件或单个 `.so`。
+`scripts/package_runtime.sh` 默认从 `./build_x5` 和 `./lib` 取文件，输出到 `./demo`。`demo/` 应随公开仓库或 release 包一起发布；如果重新启用 `demo/*` ignore，用户将无法通过仓库直接拿到更新包。
+
+运行包包含顶层启动脚本、`env.sh`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件或单个 `.so`。
 
 部署到 X5：
 
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
-tar -C deploy_runtime -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
+tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
 ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
+
+注意：这里复制的是 `demo/` 目录里的内容，不是把外层 `demo/` 目录整体复制到板端；板端不应出现 `/root/demo/demo/`。
 
 板端目录结构：
 
