@@ -88,7 +88,7 @@ file lib/libprrtsp.so
 
 ## 3. 部署
 
-本仓库约定 `RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
+主仓库集成时，`/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -97,7 +97,7 @@ cd /root/x5/4cam
 scripts/build_sc132.sh
 scripts/build_rtsp_so_mp4.sh
 
-cd RoboBaton_4p_demo
+cd /root/x5/4cam/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 

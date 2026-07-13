@@ -88,7 +88,7 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 ## 3. Deploy
 
-This repository treats `RoboBaton_4p_demo/demo/` as the board-side runtime update package. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
+When integrated in the top-level workspace, `/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -97,7 +97,7 @@ cd /root/x5/4cam
 scripts/build_sc132.sh
 scripts/build_rtsp_so_mp4.sh
 
-cd RoboBaton_4p_demo
+cd /root/x5/4cam/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 

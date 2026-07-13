@@ -19,7 +19,7 @@ constexpr int kDefaultHeight = 1088;
 constexpr int kSensorInputWidth = 1088;
 constexpr int kSensorInputHeight = 1280;
 constexpr int kDefaultFps = 60;
-// 默认单路编码码率，单位为 kbps。
+// 2026-07-06 修改原因：H.264 P 帧运动画质需要默认 4000kbps，避免运动场景花屏。
 constexpr long long kDefaultBps = 4000;
 constexpr int kDefaultRotateDegrees = 0;
 constexpr int kMountRotateDegrees = 90;

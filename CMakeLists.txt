@@ -10,17 +10,17 @@ find_package(Threads REQUIRED)
 
 set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so")
 if(NOT EXISTS "${ICM42688_SO}")
-  message(FATAL_ERROR "Missing ${ICM42688_SO}. Copy libicm42688.so into RoboBaton_4p_demo/lib first.")
+  message(FATAL_ERROR "Missing ${ICM42688_SO}. Copy libicm42688.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
 endif()
 
 set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Copy libsc132.so into RoboBaton_4p_demo/lib first.")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Copy libsc132.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
 endif()
 
 set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so")
 if(NOT EXISTS "${PRRTSP_SO}")
-  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Copy libprrtsp.so into RoboBaton_4p_demo/lib first.")
+  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Copy libprrtsp.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
 endif()
 
 set(X5_USR_X5_INCLUDE_DIR "" CACHE PATH "X5 usr_x5 include directory that provides hbn_api.h")
