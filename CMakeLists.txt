@@ -8,19 +8,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so")
+set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.0.0")
 if(NOT EXISTS "${ICM42688_SO}")
-  message(FATAL_ERROR "Missing ${ICM42688_SO}. Copy libicm42688.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
+  message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
-set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so")
+set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Copy libsc132.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
-set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so")
+set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0")
 if(NOT EXISTS "${PRRTSP_SO}")
-  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Copy libprrtsp.so into this demo's lib/ directory (sub_module/RoboBaton_4p_demo/lib in the 4cam workspace).")
+  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Run the canonical producer build so libprrtsp.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
 set(X5_USR_X5_INCLUDE_DIR "" CACHE PATH "X5 usr_x5 include directory that provides hbn_api.h")
@@ -41,6 +41,18 @@ endif()
 add_library(icm42688_x5 SHARED IMPORTED GLOBAL)
 set_target_properties(icm42688_x5 PROPERTIES
   IMPORTED_LOCATION "${ICM42688_SO}"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+# 2026-07-16 修改原因：直接绑定 canonical 目录中的 real major-2 ELF，让 DT_NEEDED 由 SONAME 决定；默认构建无需 module-root 变量。
+add_library(sc132_v2 SHARED IMPORTED GLOBAL)
+set_target_properties(sc132_v2 PROPERTIES
+  IMPORTED_LOCATION "${SC132_SO}"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+add_library(prrtsp_v2 SHARED IMPORTED GLOBAL)
+set_target_properties(prrtsp_v2 PROPERTIES
+  IMPORTED_LOCATION "${PRRTSP_SO}"
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
@@ -92,29 +104,28 @@ target_link_options(serial_port_demo PRIVATE
 target_include_directories(cam_demo PRIVATE
   ${SC132_INCLUDE_DIRS}
 )
-target_link_directories(cam_demo PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/lib")
 if(X5_HOBOT_LIB_DIR)
-  # cam_demo 只直接使用 hbmem 模块开关；系统库路径限定在目标 sysroot，避免链接宿主机库。
-  target_link_directories(cam_demo PRIVATE "${X5_HOBOT_LIB_DIR}")
+  # 2026-07-16 修改原因：仅供 link-editor 解析 producer 的 vendor DT_NEEDED，不把 hbmem 加成 consumer 直接依赖或 RUNPATH。
+  target_link_options(cam_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
-target_link_libraries(cam_demo PRIVATE sc132 prrtsp hbmem Threads::Threads)
+target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
 target_link_options(cam_demo PRIVATE
   -static-libstdc++
   -static-libgcc
   "LINKER:--export-dynamic"
-  "LINKER:--allow-shlib-undefined"
+  "LINKER:--no-allow-shlib-undefined"
 )
 
 set_target_properties(imu_reader_demo PROPERTIES
   BUILD_WITH_INSTALL_RPATH ON
-  BUILD_RPATH "\$ORIGIN;\$ORIGIN/lib"
-  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib"
+  BUILD_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib"
+  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib"
 )
 
 set_target_properties(cam_demo PROPERTIES
   BUILD_WITH_INSTALL_RPATH ON
-  BUILD_RPATH "\$ORIGIN;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64;/lib"
-  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64;/lib"
+  BUILD_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
+  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
 )
 
 install(TARGETS imu_reader_demo serial_port_demo cam_demo

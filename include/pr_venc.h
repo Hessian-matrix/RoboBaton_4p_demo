@@ -1,79 +1,98 @@
-#ifndef _PR_RTSP_H
-#define _PR_RTSP_H
-#include <signal.h>
-#include <stdio.h>
-#include <sys/stat.h>
+#ifndef PRRTSP_V2_H
+#define PRRTSP_V2_H
+
 #include <stdint.h>
-/* 初始化默认 RTSP 通道。
-@width/@height: 输入 NV12 图像宽高。
-@fps: 编码帧率。
-@bps: 编码目标平均码率，单位 kbps；例如 2000 表示约 2Mbps。
-说明：默认通道内部使用 context_ch1，RTSP 端口固定 554，URL 固定 /PRR。
-*/
-int init_rtsp(int width,int height,int fps,long long _bps);
-/* 初始化默认 RTSP 通道，并让 VENC 在编码前按顺时针角度旋转输入帧。
-@rotate_clockwise_degree: 仅支持 0/90/180/270；输入仍为 width/height，码流显示尺寸由 VENC 旋转后决定。
-*/
-int init_rtsp_rotate(int width,int height,int fps,long long _bps,int rotate_clockwise_degree);
 
-/* 初始化连续编号 RTSP 扩展通道。
-@width/@height: 输入 NV12 图像宽高。
-@fps: 编码帧率。
-@bps: 编码目标平均码率，单位 kbps；例如 2000 表示约 2Mbps。
-@port: RTSP 端口；四目 demo 默认使用 554/555/556/557。
-@URL: 流媒体路径，格式示例 /PRR。
-说明：默认无编号通道保留给兼容入口；ch1-ch4 用于四目相机推流。
-如需单独一路非四目示例推流，可使用默认无编号通道，并避免和 ch1 同时占用 554 端口。
-*/
-int init_rtsp_ch1(int width,int height,int fps,long long _bps,int port,char* URL);
-int init_rtsp_ch1_rotate(int width,int height,int fps,long long _bps,int port,char* URL,
-		int rotate_clockwise_degree);
-int init_rtsp_ch2(int width,int height,int fps,long long _bps,int port,char* URL);
-int init_rtsp_ch2_rotate(int width,int height,int fps,long long _bps,int port,char* URL,
-		int rotate_clockwise_degree);
-int init_rtsp_ch3(int width,int height,int fps,long long _bps,int port,char* URL);
-int init_rtsp_ch3_rotate(int width,int height,int fps,long long _bps,int port,char* URL,
-		int rotate_clockwise_degree);
-int init_rtsp_ch4(int width,int height,int fps,long long _bps,int port,char* URL);
-int init_rtsp_ch4_rotate(int width,int height,int fps,long long _bps,int port,char* URL,
-		int rotate_clockwise_degree);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/*
-@data: 单块连续 NV12 图像虚拟地址，布局为 Y 平面后接 interleaved UV 平面。
-@phys: 同一块 DMA 缓冲区的 Y 平面物理地址，用于 X5 编码器零拷贝 DMA。
-@len: 当前实现未使用，输入大小按初始化 width * height * 3 / 2 推导。
-@time_stamp1: 相机/上层回调时间戳，单位 ns；内部会转换为 us 作为编码器 PTS。
-*/
-void Rtsp_SendImg(void * data,uint64_t phys,int len,uint64_t time_stamp1);
-void Rtsp_SendImg_planes(void *y_data, void *uv_data,
-		uint64_t y_phys, uint64_t uv_phys, int len, uint64_t time_stamp1);
+#if defined(__GNUC__) || defined(__clang__)
+#define PRRTSP_API __attribute__((visibility("default")))
+#else
+#define PRRTSP_API
+#endif
 
-/*
-@data: 单块连续 NV12 图像虚拟地址，布局为 Y 平面后接 interleaved UV 平面。
-@phys: 同一块 DMA 缓冲区的 Y 平面物理地址。
-@len: 当前实现未使用，输入大小按初始化 width * height * 3 / 2 推导。
-@time_stamp*: 相机/上层回调时间戳，单位 ns；内部会转换为 us。
-说明：*_planes 变体用于 Y/UV 分离的虚拟地址和物理地址。
-*/
-void Rtsp_SendImg_ch1(void * data,uint64_t phys,int len,uint64_t time_stamp2);
-void Rtsp_SendImg_ch1_planes(void *y_data, void *uv_data,
-		uint64_t y_phys, uint64_t uv_phys, int len, uint64_t time_stamp2);
-void Rtsp_SendImg_ch2(void * data,uint64_t phys,int len,uint64_t time_stamp3);
-void Rtsp_SendImg_ch2_planes(void *y_data, void *uv_data,
-		uint64_t y_phys, uint64_t uv_phys, int len, uint64_t time_stamp3);
-void Rtsp_SendImg_ch3(void * data,uint64_t phys,int len,uint64_t time_stamp3);
-void Rtsp_SendImg_ch3_planes(void *y_data, void *uv_data,
-		uint64_t y_phys, uint64_t uv_phys, int len, uint64_t time_stamp3);
-void Rtsp_SendImg_ch4(void * data,uint64_t phys,int len,uint64_t time_stamp4);
-void Rtsp_SendImg_ch4_planes(void *y_data, void *uv_data,
-		uint64_t y_phys, uint64_t uv_phys, int len, uint64_t time_stamp4);
+#define PRRTSP_OK ((int32_t)0)
+#define PRRTSP_E_INVALID_ARGUMENT ((int32_t)-1)
+#define PRRTSP_E_UNSUPPORTED ((int32_t)-2)
+#define PRRTSP_E_NO_MEMORY ((int32_t)-3)
+#define PRRTSP_E_BUSY ((int32_t)-4)
+#define PRRTSP_E_STATE ((int32_t)-5)
+#define PRRTSP_E_CODEC ((int32_t)-6)
+#define PRRTSP_E_RTSP ((int32_t)-7)
+#define PRRTSP_E_TIMEOUT ((int32_t)-8)
+#define PRRTSP_E_INTERNAL ((int32_t)-9)
+#define PRRTSP_E_CLEANUP_REQUIRED ((int32_t)-10)
 
-//关闭HD
-void rtspClose(void);
+#define PRRTSP_STREAM_OPENING ((uint32_t)1)
+#define PRRTSP_STREAM_OPEN ((uint32_t)2)
+#define PRRTSP_STREAM_CLOSING ((uint32_t)3)
+#define PRRTSP_STREAM_ERROR ((uint32_t)4)
 
-//关闭HD
-void rtspClose_ch1(void);
-void rtspClose_ch2(void);
-void rtspClose_ch3(void);
-void rtspClose_ch4(void);
+#define PRRTSP_STREAM_CONFIG_V2_0_SIZE ((uint32_t)232)
+#define PRRTSP_NV12_FRAME_V2_0_SIZE ((uint32_t)152)
+#define PRRTSP_STREAM_STATUS_V2_0_SIZE ((uint32_t)104)
+#define PRRTSP_PATH_CAPACITY_BYTES ((uint32_t)128)
+#define PRRTSP_PATH_CONTENT_MAX_BYTES_V2_0 ((uint32_t)56)
+
+typedef struct prrtsp_stream prrtsp_stream_t;
+
+typedef struct prrtsp_stream_config_v2 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t width;
+    uint32_t height;
+    uint32_t fps_num;
+    uint32_t fps_den;
+    uint32_t bitrate_kbps;
+    uint32_t rotation_clockwise;
+    uint32_t port;
+    uint32_t operation_timeout_ms;
+    char path[128];
+    uint64_t reserved[8];
+} prrtsp_stream_config_v2;
+
+typedef struct prrtsp_nv12_frame_v2 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t width;
+    uint32_t height;
+    uint32_t y_stride;
+    uint32_t uv_stride;
+    uint32_t y_vstride;
+    uint32_t uv_vstride;
+    uint64_t y_virtual_address;
+    uint64_t uv_virtual_address;
+    uint64_t y_physical_address;
+    uint64_t uv_physical_address;
+    uint64_t y_size_bytes;
+    uint64_t uv_size_bytes;
+    uint64_t timestamp_ns;
+    uint64_t reserved[8];
+} prrtsp_nv12_frame_v2;
+
+typedef struct prrtsp_stream_status_v2 {
+    uint32_t struct_size;
+    uint32_t state;
+    int32_t last_error;
+    uint32_t reserved0;
+    uint64_t frames_accepted;
+    uint64_t frames_failed;
+    uint64_t last_timestamp_ns;
+    uint64_t reserved[8];
+} prrtsp_stream_status_v2;
+
+PRRTSP_API int32_t prrtsp_stream_open(const prrtsp_stream_config_v2 *config,
+                                      prrtsp_stream_t **out_stream);
+PRRTSP_API int32_t prrtsp_stream_send(prrtsp_stream_t *stream,
+                                      const prrtsp_nv12_frame_v2 *frame);
+PRRTSP_API int32_t prrtsp_stream_get_status(prrtsp_stream_t *stream,
+                                            prrtsp_stream_status_v2 *status);
+PRRTSP_API int32_t prrtsp_stream_close(prrtsp_stream_t **stream);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

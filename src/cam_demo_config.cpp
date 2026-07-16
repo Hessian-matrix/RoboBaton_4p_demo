@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace robobaton_demo {
@@ -96,17 +97,28 @@ void ValidateOptions(const Options& options) {
       options.channels != CameraMaskPopCount(options.camera_mask)) {
     throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
   }
-  if (options.width <= 0 || options.height <= 0) {
-    throw std::invalid_argument("--width and --height must be positive");
+  if (options.width <= 0 || options.height <= 0 ||
+      (OutputWidth(options) & 1) != 0 || (OutputHeight(options) & 1) != 0) {
+    throw std::invalid_argument("--width and --height must produce positive even NV12 dimensions");
   }
   if (options.fps != 30 && options.fps != 60) {
     throw std::invalid_argument("--fps must be 30 or 60");
   }
-  if (options.bps <= 0) {
-    throw std::invalid_argument("--bps must be positive");
+  if (options.bps <= 0 ||
+      static_cast<unsigned long long>(options.bps) >
+          static_cast<unsigned long long>(std::numeric_limits<uint32_t>::max())) {
+    throw std::invalid_argument("--bps must fit the v2 uint32 bitrate field");
   }
-  if (options.url.empty() || options.url.front() != '/') {
-    throw std::invalid_argument("--url must start with '/'");
+  if (options.url.size() < 2U || options.url.size() > 56U || options.url.front() != '/') {
+    throw std::invalid_argument("--url must be a 2..56 byte path starting with '/'");
+  }
+  // 2026-07-15 修改原因：在任何 SC/vendor side effect 前拒绝 v2 path 禁止字符，
+  // 避免 RTSP open 阶段才发现 query/fragment/escape/反斜杠或空白歧义。
+  for (unsigned char character : options.url) {
+    if (character < 0x21U || character > 0x7eU || character == '?' ||
+        character == '#' || character == '%' || character == '\\') {
+      throw std::invalid_argument("--url contains a v2-forbidden character");
+    }
   }
   if (options.rotate_degrees != 0 && options.rotate_degrees != 90 &&
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {

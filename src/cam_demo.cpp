@@ -1,14 +1,14 @@
 #include <signal.h>
 
-#include <array>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <memory>
 #include <thread>
 
 extern "C" {
-#include "hb_mem_mgr.h"
 #include "sc132camera.h"
 }
 
@@ -17,131 +17,136 @@ extern "C" {
 #include "cam_demo_pipeline.h"
 #include "cam_demo_rtsp.h"
 
-namespace robobaton_demo {
+namespace {
 
-// 功能：处理 SIGINT/SIGTERM，通知主循环和后台线程退出。
-// 输入：signum 由系统信号传入，本 demo 不区分具体信号。
-// 输出：无。
-// 副作用：设置全局停止标志 g_stop_requested。
-void SignalHandler(int /*signum*/) {
-  g_stop_requested.store(true);
+volatile sig_atomic_t g_signal_stop = 0;
+
+void SignalHandler(int) { g_signal_stop = 1; }
+
+#ifdef RELEASE008_TESTING
+bool InjectJoinFailure(std::thread&, void*) { return false; }
+#endif
+
+robobaton_demo::PipelineHooks MainPipelineHooks() {
+  robobaton_demo::PipelineHooks hooks{};
+#ifdef RELEASE008_TESTING
+  // 2026-07-15 修改原因：仅 host production-bound test 可让真实 main cleanup
+  // owner 遇到未 reap 的 join failure；release build 不包含环境注入分支。
+  const char* inject = std::getenv("RELEASE008_TEST_JOIN_FAILURE");
+  if (inject != nullptr && inject[0] != '\0') {
+    hooks.join_thread = InjectJoinFailure;
+  }
+#endif
+  return hooks;
 }
 
-// 功能：用户二次开发的单帧入口。
-// 输入：frame 已 retain，包含 NV12 图像、DMA 地址、相机时间戳和组序号。
-// 输出：无。
-// 生命周期：函数返回后 demo 会继续推流并释放 frame；若要异步使用图像，请复制 Y/UV 数据或自行 retain。
-void OnQueuedCameraFrame(const QueuedFrame& frame) {
-  (void)frame;
-}
+}  // namespace
 
-// 功能：用户二次开发的同步帧组入口。
-// 输入：frame_set 已由 libsc132 配组；默认四路 frame_id 对齐，单颗诊断只有选中物理相机。
-// 输出：无。
-// 生命周期：frame_set 内的 frame 只在回调期间可靠；异步保存时需要自行 retain/release。
-void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set) {
-  (void)frame_set;
-}
-
-}  // namespace robobaton_demo
-
-// 功能：启动 SC132 相机采集、libsc132 帧组同步、RTSP 推流和诊断流程。
-// 输入：argc/argv 为命令行参数。
-// 输出：0 表示正常退出，非 0 表示初始化或运行阶段失败。
-// 副作用：打开 hbmem、初始化 RTSP 和相机链路，退出时按顺序释放资源。
 int main(int argc, char** argv) {
   using namespace robobaton_demo;
 
   int exit_code = 0;
-  int initialized_rtsp_channels = 0;
-  bool hb_mem_opened = false;
-  bool camera_started = false;
-  std::array<RtspEndpoint, kMaxChannels> initialized_rtsp_endpoints{};
+  bool sc_start_attempted = false;
+  bool consumer_quiescent = false;
+
+  // 2026-07-15 修改原因：callback/context 与失败 close handle 在进程结束前保持有效；
+  // 特别是 SC stop/RTSP 第三次 close 失败后禁止析构驱动 restart/unload 路径。
+  auto* rtsp = new RtspChannels();
+  FramePipeline* pipeline = nullptr;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
+    g_stop_requested.store(false, std::memory_order_release);
 
     const Options options = ParseCommandLine(argc, argv);
-    std::cout << "Starting SC132 RTSP demo"
-              << " channels=" << options.channels
+    std::cout << "Starting SC132 v2 RTSP demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
-              << " fps=" << options.fps
-              << " rotate=" << options.rotate_degrees
-              << " bps=" << options.bps
-              << " url=" << options.url
-              << " trigger_mode=" << options.trigger_mode
-              << " frame_set_max_skew_ns=" << options.frame_set_max_skew_ns
-              << " frame_set_timeout_ms=" << options.frame_set_timeout_ms
-              << " diagnostics=" << (options.diagnostics ? "on" : "off") << "\n";
+              << " fps=" << options.fps << " rotate=" << options.rotate_degrees
+              << " kbps=" << options.bps << " path=" << options.url << "\n";
 
-    if (VioCamSetFps(options.fps) != 0) {
-      throw std::runtime_error("VioCamSetFps failed");
+    if (sc132_set_fps(static_cast<uint32_t>(options.fps)) != SC132_STATUS_OK) {
+      throw std::runtime_error("sc132_set_fps failed");
     }
-    if (VioCamSetOutputRotate(InternalRotateDegrees(options)) != 0) {
-      throw std::runtime_error("VioCamSetOutputRotate failed");
+    if (sc132_set_output_rotation(
+            static_cast<uint32_t>(InternalRotateDegrees(options))) != SC132_STATUS_OK) {
+      throw std::runtime_error("sc132_set_output_rotation failed");
     }
     ConfigureSc132TriggerMode(options);
     ConfigureSc132SensorProfile(options);
 
-    // X5 上相机和编码链路依赖 hbmem 管理 DMA buffer，必须先打开模块。
-    if (hb_mem_module_open() != 0) {
-      throw std::runtime_error("hb_mem_module_open failed");
-    }
-    hb_mem_opened = true;
-
-    FramePipeline pipeline(options);
-    pipeline.StartWorkers();
+    pipeline = new FramePipeline(options, rtsp, MainPipelineHooks());
+    pipeline->StartWorkers();
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
       if (!CameraMaskContains(options.camera_mask, camera_id)) {
         continue;
       }
-      const RtspEndpoint endpoint = RtspEndpointForChannel(camera_id);
-      const int port = RtspPortForChannel(camera_id);
-      if (InitRtspEndpoint(endpoint, port, options) != 0) {
-        throw std::runtime_error("init RTSP camera " + std::to_string(camera_id) + " failed");
+      const int32_t status =
+          rtsp->Open(camera_id, RtspPortForChannel(camera_id), options);
+      if (status != PRRTSP_OK) {
+        throw std::runtime_error("prrtsp_stream_open failed for camera " +
+                                 std::to_string(camera_id) + " status=" +
+                                 std::to_string(status));
       }
-      initialized_rtsp_endpoints[initialized_rtsp_channels] = endpoint;
-      ++initialized_rtsp_channels;
     }
 
-    pipeline.StartDiagnosticsIfEnabled();
-
-    // 2026-06-17 修改原因：使用 mask-capable frame-set API，单颗诊断可启动 cam1/cam2/cam3 并保持物理 RTSP 端口映射。
-    sc132_frame_set_config_t frame_set_config = pipeline.MakeFrameSetConfig();
-    if (VioCamInitmFrameSetMask(&frame_set_config, options.camera_mask) != 0) {
-      throw std::runtime_error("VioCamInitmFrameSetMask failed");
-    }
-    camera_started = true;
-
-    while (!g_stop_requested.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    pipeline->StartDiagnosticsIfEnabled();
+    sc132_frame_set_config_t config = pipeline->MakeFrameSetConfig();
+    // start 可能部分创建 producer threads；attempt 必须先锁存，失败也执行 drain/join/stop×2。
+    sc_start_attempted = true;
+    const int32_t start_status = sc132_start_frame_set(&config, options.camera_mask);
+    if (start_status != SC132_STATUS_OK) {
+      throw std::runtime_error("sc132_start_frame_set failed status=" +
+                               std::to_string(start_status));
     }
 
-    if (camera_started) {
-      VioCamClose();
-      camera_started = false;
+    while (g_signal_stop == 0 && !g_stop_requested.load(std::memory_order_acquire) &&
+           pipeline->FirstError() == 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    pipeline.Stop();
-    pipeline.Join();
-  } catch (const std::exception& e) {
-    std::cerr << "fatal: " << e.what() << "\n";
+  } catch (const std::exception& error) {
+    std::cerr << "fatal: " << error.what() << "\n";
     exit_code = 1;
-    g_stop_requested.store(true);
+    g_stop_requested.store(true, std::memory_order_release);
+  } catch (...) {
+    std::cerr << "fatal: unknown C++ exception\n";
+    exit_code = 1;
+    g_stop_requested.store(true, std::memory_order_release);
   }
 
-  if (camera_started) {
-    VioCamClose();
+  if (pipeline != nullptr) {
+    if (sc_start_attempted) {
+      consumer_quiescent = FinishSc132Shutdown(pipeline);
+    } else {
+      pipeline->BeginShutdown(false);
+      consumer_quiescent = pipeline->Join();
+    }
+    if (pipeline->FirstError() != 0) {
+      std::cerr << "fatal: pipeline first_error=" << pipeline->FirstError() << "\n";
+      exit_code = 1;
+    }
+  } else {
+    consumer_quiescent = true;
   }
 
-  CloseRtspChannels(initialized_rtsp_endpoints, initialized_rtsp_channels);
-  if (hb_mem_opened) {
-    // 等相机帧和 RTSP 通道都释放后关闭 hbmem，避免 DMA buffer 仍被使用。
-    (void)hb_mem_module_close();
+  if (!consumer_quiescent) {
+    // 2026-07-15 修改原因：join failure 时不能声称 producer/RTSP 已 quiescent；
+    // 保留所有 ownership flag/context，并直接非零终止，禁止 close/unload/restart。
+    std::cerr << "fatal: consumer join failed; skipping RTSP status/close\n" << std::flush;
+    std::_Exit(1);
   }
 
-  std::cout << "SC132 RTSP demo stopped\n";
+  if (!rtsp->CaptureStatuses()) {
+    std::cerr << "fatal: prrtsp_stream_get_status failed\n";
+    exit_code = 1;
+  }
+  if (!rtsp->CloseReverse()) {
+    std::cerr << "fatal: RTSP handle remains after three close attempts\n";
+    exit_code = 1;
+  }
+
+  std::cout << "SC132 v2 RTSP demo stopped exit_code=" << exit_code << "\n";
   return exit_code;
 }

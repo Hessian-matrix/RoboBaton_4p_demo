@@ -1,60 +1,67 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <thread>
+
+extern "C" {
+#include "sc132camera.h"
+}
 
 #include "cam_demo_common.h"
 
 namespace robobaton_demo {
 
-// 功能：单帧入队后的用户扩展入口。
-// 输入：frame 已 retain，包含 NV12 地址、时间戳、序号和同步组信息。
-// 输出：无。
-// 生命周期：函数返回后 demo 会继续推流并释放 frame；异步保存图像时需自行复制或 retain。
-void OnQueuedCameraFrame(const QueuedFrame& frame);
+class RtspChannels;
 
-// 功能：同步帧组通过 libsc132 匹配后的用户扩展入口。
-// 输入：frame_set 包含同一 group_id 的启用物理相机帧和组时间戳。
-// 输出：无。
-// 生命周期：如需在函数外继续使用 frame_set 内的 frame，用户需自行 retain/release。
-void OnSynchronizedFrameSet(const sc132_frame_set_t& frame_set);
+struct PipelineHooks {
+  void (*on_frame_set)(const sc132_frame_set_t& frame_set, void* user) = nullptr;
+  void (*on_queued_frame)(const QueuedFrame& frame, void* user) = nullptr;
+  void (*before_queue_insert)(void* user) = nullptr;
+  // 2026-07-15 修改原因：测试可在 production StartWorkers 路径中注入与
+  // std::thread constructor 等价的 create exception，并保留已创建线程 ownership。
+  std::thread (*create_thread)(std::function<void()> entry, void* user) = nullptr;
+  bool (*join_thread)(std::thread& worker, void* user) = nullptr;
+  void* user = nullptr;
+};
 
-// 功能：管理相机帧入队、启用物理相机对齐发送、RTSP 推流和诊断线程。
-// 输入：构造时传入 Options。
-// 输出：通过 MakeFrameSetConfig 提供 libsc132 回调配置。
-// 副作用：StartWorkers 后创建后台线程；Stop/Join 负责退出和回收。
+// 2026-07-15 修改原因：FramePipeline 是 callback context 与 retained-job 的唯一 owner。
+// callback 只发布 failure/request_stop；blocking stop 只允许 FinishSc132Shutdown 调用。
 class FramePipeline {
  public:
-  // 功能：创建帧处理流水线。
-  // 输入：options 为运行参数副本。
-  explicit FramePipeline(Options options);
-
-  // 功能：析构时停止并回收后台线程。
+  FramePipeline(Options options, RtspChannels* rtsp, PipelineHooks hooks = {});
   ~FramePipeline();
 
   FramePipeline(const FramePipeline&) = delete;
   FramePipeline& operator=(const FramePipeline&) = delete;
 
-  // 功能：启动每路 RTSP 发送 worker。
   void StartWorkers();
-
-  // 功能：按配置启动诊断线程；未开启 diagnostics 时不创建线程。
   void StartDiagnosticsIfEnabled();
-
-  // 功能：生成 libsc132 帧组回调配置。
-  // 输出：包含回调函数、用户指针、通道数和帧组超时参数。
   sc132_frame_set_config_t MakeFrameSetConfig();
+  void BeginShutdown(bool request_sc_stop = true) noexcept;
+  bool Join() noexcept;
 
-  // 功能：通知所有队列、barrier 和线程退出。
-  void Stop();
+  int32_t FirstError() const noexcept;
+  uint64_t TotalSentFrames(int camera_id) const noexcept;
+  bool IsQuiescent() const noexcept;
+#ifdef RELEASE008_TESTING
+  size_t OwnedThreadCountForTesting() const noexcept;
+#endif
 
-  // 功能：等待后台线程全部退出。
-  void Join();
+  // 功能：返回 worker/RTSP 运行阶段是否发生致命错误。
+  bool HasFatalError() const;
 
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 
-  static void FrameSetCallback(const sc132_frame_set_t* frame_set, void* user);
+  static void FrameSetCallback(const sc132_frame_set_t* frame_set, void* user) noexcept;
 };
+
+// 2026-07-15 修改原因：SC 唯一 lifecycle owner 强制 admission-close/request/drain/join，
+// 只有 consumer threads 真正 quiescent 后才连续调用 blocking stop 两次。
+bool FinishSc132Shutdown(FramePipeline* pipeline) noexcept;
 
 }  // namespace robobaton_demo

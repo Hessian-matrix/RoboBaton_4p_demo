@@ -64,8 +64,14 @@ for path in \
   "${BUILD_DIR}/cam_demo" \
   "${BUILD_DIR}/imu_reader_demo" \
   "${BUILD_DIR}/serial_port_demo" \
+  "${PACKAGE_LIB_DIR}/libicm42688.so.2.0.0" \
+  "${PACKAGE_LIB_DIR}/libicm42688.so.2" \
   "${PACKAGE_LIB_DIR}/libicm42688.so" \
+  "${PACKAGE_LIB_DIR}/libsc132.so.2.0.0" \
+  "${PACKAGE_LIB_DIR}/libsc132.so.2" \
   "${PACKAGE_LIB_DIR}/libsc132.so" \
+  "${PACKAGE_LIB_DIR}/libprrtsp.so.2.0.0" \
+  "${PACKAGE_LIB_DIR}/libprrtsp.so.2" \
   "${PACKAGE_LIB_DIR}/libprrtsp.so"; do
   if [[ ! -f "${path}" ]]; then
     echo "Missing required file: ${path}" >&2
@@ -84,9 +90,13 @@ mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/lib"
 cp "${BUILD_DIR}/cam_demo" "${OUTPUT_DIR}/bin/"
 cp "${BUILD_DIR}/imu_reader_demo" "${OUTPUT_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${OUTPUT_DIR}/bin/"
-cp "${PACKAGE_LIB_DIR}/libicm42688.so" "${OUTPUT_DIR}/lib/"
-cp "${PACKAGE_LIB_DIR}/libsc132.so" "${OUTPUT_DIR}/lib/"
-cp "${PACKAGE_LIB_DIR}/libprrtsp.so" "${OUTPUT_DIR}/lib/"
+# 2026-07-16 修改原因：保留 demo/lib 目录与 unversioned 入口，同时随 real ELF 提供 major-2 loader 名称。
+for library in \
+  libicm42688.so.2.0.0 libicm42688.so.2 libicm42688.so \
+  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
+  cp "${PACKAGE_LIB_DIR}/${library}" "${OUTPUT_DIR}/lib/${library}"
+done
 
 if [[ -z "${STRIP_TOOL}" ]]; then
   if command -v aarch64-linux-gnu-strip >/dev/null 2>&1; then
@@ -100,37 +110,25 @@ if [[ -n "${STRIP_TOOL}" ]]; then
   "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/bin/cam_demo"
   "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/bin/imu_reader_demo"
   "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/bin/serial_port_demo"
-  "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/lib/libicm42688.so"
-  "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/lib/libsc132.so"
-  "${STRIP_TOOL}" --strip-unneeded "${OUTPUT_DIR}/lib/libprrtsp.so"
 fi
 
-cat > "${OUTPUT_DIR}/env.sh" <<'EOF'
-#!/bin/sh
-DEMO_DIR="${DEMO_DIR:-$(pwd)}"
-DEMO_LD_LIBRARY_PATH="${DEMO_DIR}/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib"
-if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-  export LD_LIBRARY_PATH="${DEMO_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}"
-else
-  export LD_LIBRARY_PATH="${DEMO_LD_LIBRARY_PATH}"
-fi
-unset DEMO_LD_LIBRARY_PATH
-EOF
-
-for name in cam_demo imu_reader_demo serial_port_demo; do
-  cat > "${OUTPUT_DIR}/${name}" <<EOF
-#!/bin/sh
-set -eu
-DEMO_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-export DEMO_DIR
-. "\${DEMO_DIR}/env.sh"
-exec "\${DEMO_DIR}/bin/${name}" "\$@"
-EOF
+# Preserve the canonical wrapper/environment entrypoints byte-for-byte.
+for entry in env.sh cam_demo imu_reader_demo serial_port_demo; do
+  source_entry="${PROJECT_DIR}/demo/${entry}"
+  if [[ ! -f "${source_entry}" ]]; then
+    echo "Missing canonical runtime entrypoint: ${source_entry}" >&2
+    exit 1
+  fi
+  cp "${source_entry}" "${OUTPUT_DIR}/${entry}"
 done
 
 chmod 755 "${OUTPUT_DIR}" "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/lib"
 chmod 755 "${OUTPUT_DIR}/cam_demo" "${OUTPUT_DIR}/imu_reader_demo" "${OUTPUT_DIR}/serial_port_demo"
 chmod 755 "${OUTPUT_DIR}/bin/cam_demo" "${OUTPUT_DIR}/bin/imu_reader_demo" "${OUTPUT_DIR}/bin/serial_port_demo"
 chmod 644 "${OUTPUT_DIR}/env.sh" "${OUTPUT_DIR}/lib/"*.so
+
+# 2026-07-14 修改原因：运行包必须绑定同一 ABI 批次并携带可复核哈希，禁止旧可执行文件混入 v2 SO。
+python3 "${SCRIPT_DIR}/verify_runtime_package.py" --write-manifest "${OUTPUT_DIR}"
+chmod 644 "${OUTPUT_DIR}/manifest.sha256"
 
 echo "Runtime package generated: ${OUTPUT_DIR}"

@@ -1,98 +1,124 @@
-#ifndef _SC132CAMERA_H
-#define _SC132CAMERA_H
+#ifndef SC132_CAMERA_H
+#define SC132_CAMERA_H
 
+#include <stddef.h>
 #include <stdint.h>
 
-#include "hbn_api.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/*
-定义回调数据
-@y_plane / @uv_plane  Y / UV 平面虚拟地址（hbn_vnode DMA 缓冲）
-@y_phys  / @uv_phys   Y / UV 平面物理地址（用于下游零拷贝送编码器）
-@y_len / @uv_len      数据长度
-@width  宽度
-@height 高度
-*/
-typedef void (*sc132GetDataCallBack)(void *y_plane, void *uv_plane,
-                                    uint64_t y_phys, uint64_t uv_phys,
-                                    long y_len, long uv_len,
-                                    int width, int height,
-                                    uint64_t timestamp);
+#define SC132_ABI_VERSION_MAJOR 2U
+#define SC132_ABI_VERSION_MINOR 0U
+
+#define SC132_STATUS_OK ((int32_t)0)
+#define SC132_STATUS_INVALID_ARGUMENT ((int32_t)-1)
+#define SC132_STATUS_INVALID_STATE ((int32_t)-2)
+#define SC132_STATUS_STARTUP_FAILED ((int32_t)-3)
+
+#define SC132_FRAME_SET_MAX_CAMERAS 4U
+#define SC132_NATIVE_OUTPUT_WIDTH 1280U
+#define SC132_NATIVE_OUTPUT_HEIGHT 1088U
+
 typedef struct sc132_frame sc132_frame_t;
-typedef void (*sc132FrameCallBack)(sc132_frame_t *frame, void *user);
 
-#define SC132_FRAME_SET_MAX_CAMERAS 4
+typedef struct sc132_frame_info {
+  uint32_t struct_size;
+  uint32_t camera_id;
+  uint64_t sequence;
+  uint32_t frame_id;
+  uint32_t reserved0;
+  uint64_t timestamp_ns;
+  const void *y_data;
+  const void *uv_data;
+  uint64_t y_phys;
+  uint64_t uv_phys;
+  uint64_t y_size;
+  uint64_t uv_size;
+  uint32_t width;
+  uint32_t height;
+  uint32_t stride;
+  uint32_t vstride;
+  uint32_t reserved[8];
+} sc132_frame_info_t;
 
-typedef struct {
-	sc132FrameCallBack ch0_cb;
-	void *ch0_user;
-	sc132FrameCallBack ch1_cb;
-	void *ch1_user;
-	sc132FrameCallBack ch2_cb;
-	void *ch2_user;
-	sc132FrameCallBack ch3_cb;
-	void *ch3_user;
-	int width;
-	int height;
-} sc132_frame_callbacks_t;
-
-typedef struct {
-	sc132_frame_t *frame;
-	uint32_t camera_id;
-	uint64_t sequence;
-	uint32_t frame_id;
-	uint64_t timestamp_ns;
-	int width;
-	int height;
+typedef struct sc132_frame_set_item {
+  sc132_frame_t *frame;
+  uint32_t camera_id;
+  uint32_t frame_id;
+  uint64_t sequence;
+  uint64_t timestamp_ns;
+  uint32_t width;
+  uint32_t height;
 } sc132_frame_set_item_t;
 
-typedef struct {
-	uint64_t group_id;
-	uint32_t camera_count;
-	uint64_t group_timestamp_ns;
-	uint64_t max_skew_ns;
-	sc132_frame_set_item_t items[SC132_FRAME_SET_MAX_CAMERAS];
+typedef struct sc132_frame_set {
+  uint32_t struct_size;
+  uint32_t camera_count;
+  uint64_t group_id;
+  uint64_t group_timestamp_ns;
+  uint64_t max_skew_ns;
+  sc132_frame_set_item_t items[SC132_FRAME_SET_MAX_CAMERAS];
+  uint32_t reserved[8];
 } sc132_frame_set_t;
 
-typedef void (*sc132FrameSetCallBack)(const sc132_frame_set_t *frame_set, void *user);
+/*
+ * 2026-07-13 修改原因：明确 DMA 帧的只读访问、时间域和引用生命周期，防止 release 后继续保存裸指针。
+ * timestamp_ns 单位为 ns，优先使用 sensor/VIO 随帧时间；缺失时退回系统出帧时间，两者不保证与墙上时钟同域。
+ * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
+ * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback
+ * 保存 frame，必须在回调内先 sc132_frame_retain，并在最终使用完成后自行 sc132_frame_release。
+ * user_data 必须保持有效直到 blocking sc132_stop 返回；仅 request_stop 返回不代表 callback 已退出。
+ * C++ 消费者的 callback 必须 noexcept，并在内部捕获所有异常；异常不得跨越本 C ABI。
+ * frame_info 中的 Y/UV 地址只读，且只在对应 frame 引用有效期间有效。
+ */
+typedef void (*sc132_frame_set_callback_t)(const sc132_frame_set_t *frame_set,
+                                            void *user_data);
 
-typedef struct {
-	sc132FrameSetCallBack cb;
-	void *user;
-	int camera_count;
-	uint64_t max_skew_ns;
-	uint32_t timeout_ms;
-	int width;
-	int height;
+typedef struct sc132_frame_set_config {
+  uint32_t struct_size;
+  sc132_frame_set_callback_t callback;
+  void *user_data;
+  uint32_t camera_count;
+  uint32_t width;
+  uint32_t height;
+  uint32_t timeout_ms;
+  uint64_t max_skew_ns;
+  uint32_t reserved[8];
 } sc132_frame_set_config_t;
 
-//typedef void (*sc132GetDataCallBack)(void *camera, long len, int width, int height, uint64_t time_stamp);
-/*初始化HD
-@HDGetData_dist 相机1-4 回调
-@width 设置输出宽度	
-@width 设置输出高度		
-*/
-int VioCamInitm(sc132GetDataCallBack sc132GetData_dist1,
-				sc132GetDataCallBack sc132GetData_dist2,
-				sc132GetDataCallBack sc132GetData_dist3,
-				sc132GetDataCallBack sc132GetData_dist4,
-				int width, int height);
-int VioCamStartOnly(int camera_count, int width, int height);
-int VioCamInitmFrame(const sc132_frame_callbacks_t *cfg);
-int VioCamInitmFrameSet(const sc132_frame_set_config_t *cfg);
-int VioCamInitmFrameSetMask(const sc132_frame_set_config_t *cfg, uint32_t camera_mask);
-int VioCamSetFps(int fps);
-int VioCamSetOutputRotate(int rotate_clockwise_degree);
-int sc132_frame_retain(sc132_frame_t *frame);
-void sc132_frame_release(sc132_frame_t *frame);
-const hb_mem_graphic_buf_t *sc132_frame_get_graphic_buf(const sc132_frame_t *frame);
-int sc132_frame_get_camera_id(const sc132_frame_t *frame);
-uint64_t sc132_frame_get_sequence(const sc132_frame_t *frame);
-uint64_t sc132_frame_get_timestamp_ns(const sc132_frame_t *frame);
-uint32_t sc132_frame_get_frame_id(const sc132_frame_t *frame);
-int sc132_frame_get_width(const sc132_frame_t *frame);
-int sc132_frame_get_height(const sc132_frame_t *frame);
+#define SC132_FRAME_SET_CONFIG_INIT \
+  { sizeof(sc132_frame_set_config_t), NULL, NULL, 4U, SC132_NATIVE_OUTPUT_WIDTH, SC132_NATIVE_OUTPUT_HEIGHT, 100U, 1000000ULL, {0U} }
 
-//关闭HD
-void VioCamClose(void);
+int32_t sc132_set_fps(uint32_t fps);
+int32_t sc132_set_output_rotation(uint32_t rotate_clockwise_degrees);
+int32_t sc132_start_frame_set(const sc132_frame_set_config_t *config,
+                              uint32_t camera_mask);
+int32_t sc132_frame_retain(sc132_frame_t *frame);
+void sc132_frame_release(sc132_frame_t *frame);
+int32_t sc132_frame_get_info(const sc132_frame_t *frame,
+                             sc132_frame_info_t *out_info);
+/*
+ * 2026-07-14 修改原因：两阶段关闭避免阻塞回调与 retained frame 相互等待。
+ * request_stop 只线性化停止、禁止新采集/新 callback admission 并广播唤醒；它不 drain/release frame，
+ * 不调用 vendor API，也不 join trigger、worker、dispatcher 或等待 callback，因而可从任意线程快速返回。
+ * idle 状态调用 request_stop 也会锁存 STOPPING；必须再由非回调线程调用 blocking sc132_stop
+ * 完成对应 stop generation，之后 start/config 才重新开放。
+ * 普通 lifecycle owner 随后调用 blocking sc132_stop；它负责 drain pending/queued frame、等待 inflight
+ * callback、join 库创建的线程并关闭 I2C。若 vendor worker 永久不退出，sc132_stop 允许持续阻塞，
+ * 且在真实 quiescence 前生命周期保持 STOPPING，不会伪装成 STOPPED。
+ * 极少数 internal pthread_join 失败时，sc132_stop 会保留 thread ownership、I2C 与 callback/config，
+ * 释放 cleanup owner 但继续保持 STOPPING；外部非回调线程必须 retry sc132_stop，成功前禁止 start/unload。
+ * sc132_start_frame_set 返回 STARTUP_FAILED 后必须由外部非回调线程调用 sc132_stop 完成 quiescence，
+ * 才能卸载本库；在此之前后续 start/config 均返回 INVALID_STATE。库不会创建 detached cleanup guard。
+ * stop 从 dispatcher 回调线程调用时只发布 request_stop 并立即返回，必须由外部非回调线程再次
+ * 调用 stop 完成唯一 cleanup owner 的 drain/join，避免 dispatcher 确定性 self-deadlock。
+ */
+void sc132_request_stop(void);
+void sc132_stop(void);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif
