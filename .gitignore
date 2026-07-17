@@ -1,5 +1,5 @@
-build_x5/*
+build_x5/
 build_x5_syncfix/*
 regression_logs/*
 *.bin
-tests/
+.package-build-icm42688/

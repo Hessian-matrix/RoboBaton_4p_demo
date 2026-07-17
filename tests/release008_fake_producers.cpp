@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <utility>
+#include <thread>
 #include <vector>
 
 #include <unistd.h>
@@ -13,7 +16,8 @@
 struct icm42688_handle {
   icm42688_sample_callback_t callback = nullptr;
   void* user = nullptr;
-  bool running = false;
+  std::atomic<bool> running{false};
+  std::thread producer;
 };
 
 struct sc132_frame {
@@ -58,6 +62,9 @@ int g_icm_stop_status = ICM42688_STATUS_OK;
 bool g_icm_emit_on_start = true;
 uint32_t g_icm_start_burst_count = 1U;
 bool g_icm_emit_during_stop = true;
+uint32_t g_icm_async_sample_count = 0U;
+uint32_t g_icm_async_interval_us = 0U;
+std::atomic<uint32_t> g_icm_async_produced_count{0U};
 
 void Record(const std::string& event) {
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -124,6 +131,9 @@ void Reset() {
   g_icm_emit_on_start = true;
   g_icm_start_burst_count = 1U;
   g_icm_emit_during_stop = true;
+  g_icm_async_sample_count = 0U;
+  g_icm_async_interval_us = 0U;
+  g_icm_async_produced_count.store(0U, std::memory_order_release);
 }
 
 std::vector<std::string> Events() {
@@ -255,6 +265,15 @@ void SetIcmStartBurstCount(uint32_t count) {
 }
 void SetIcmEmitDuringStop(bool enabled) {
   std::lock_guard<std::mutex> lock(g_mutex); g_icm_emit_during_stop = enabled;
+}
+void SetIcmAsyncProduction(uint32_t sample_count, uint32_t interval_us) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_icm_async_sample_count = sample_count;
+  g_icm_async_interval_us = interval_us;
+}
+
+uint32_t IcmAsyncProducedCount() {
+  return g_icm_async_produced_count.load(std::memory_order_acquire);
 }
 
 }  // namespace release008_fake
@@ -419,22 +438,48 @@ int icm42688_start(icm42688_handle_t* handle) {
   int status = ICM42688_STATUS_OK;
   bool emit = false;
   uint32_t burst_count = 0U;
+  uint32_t async_sample_count = 0U;
+  uint32_t async_interval_us = 0U;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     status = g_icm_start_status;
     emit = g_icm_emit_on_start;
     burst_count = g_icm_start_burst_count;
+    async_sample_count = g_icm_async_sample_count;
+    // CLI 端到端测试通过环境变量注入同步 burst，使用多个样本区分默认逐样本输出
+    // 与限速输出。
+    const char* burst_override = std::getenv("RELEASE008_FAKE_ICM_START_BURST");
+    if (burst_override != nullptr && burst_override[0] != '\0') {
+      burst_count = static_cast<uint32_t>(std::strtoul(burst_override, nullptr, 10));
+    }
+    async_interval_us = g_icm_async_interval_us;
   }
   if (status != ICM42688_STATUS_OK) {
     return status;
   }
-  handle->running = true;
+  handle->running.store(true, std::memory_order_release);
   if (emit && handle->callback != nullptr) {
     // 同步 burst 的单调时间戳用于区分 FIFO 与单槽覆盖语义。
     for (uint32_t index = 0U; index < burst_count; ++index) {
       const icm42688_sample_t sample = Sample(100U + 10000000ULL * index);
       handle->callback(&sample, handle->user);
     }
+  }
+  if (async_sample_count != 0U) {
+    // 异步 fake 模拟驱动在 consumer observer 执行期间持续产样。
+    handle->producer = std::thread([handle, async_sample_count, async_interval_us] {
+      for (uint32_t index = 0U; index < async_sample_count; ++index) {
+        if (async_interval_us != 0U) {
+          std::this_thread::sleep_for(std::chrono::microseconds(async_interval_us));
+        }
+        if (!handle->running.load(std::memory_order_acquire) || handle->callback == nullptr) {
+          break;
+        }
+        const icm42688_sample_t sample = Sample(100U + 1000000ULL * index);
+        handle->callback(&sample, handle->user);
+        g_icm_async_produced_count.fetch_add(1U, std::memory_order_acq_rel);
+      }
+    });
   }
   return ICM42688_STATUS_OK;
 }
@@ -456,16 +501,24 @@ int icm42688_stop(icm42688_handle_t* handle) {
     handle->callback(&sample, handle->user);
     Record("icm_stop_callback_return");
   }
-  handle->running = false;
+  // 先关闭 producer admission，再 join；destroy 仅在 join 后执行。
+  handle->running.store(false, std::memory_order_release);
+  if (handle->producer.joinable()) {
+    handle->producer.join();
+  }
   return status;
 }
 
 int icm42688_is_running(const icm42688_handle_t* handle) {
-  return handle != nullptr && handle->running ? 1 : 0;
+  return handle != nullptr && handle->running.load(std::memory_order_acquire) ? 1 : 0;
 }
 
 void icm42688_destroy(icm42688_handle_t* handle) {
   Record("icm_destroy");
+  if (handle != nullptr && handle->producer.joinable()) {
+    handle->running.store(false, std::memory_order_release);
+    handle->producer.join();
+  }
   delete handle;
 }
 

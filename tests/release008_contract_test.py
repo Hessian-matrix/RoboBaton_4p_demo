@@ -521,6 +521,48 @@ def run_main_behavior_mutants(build: Path) -> None:
             raise AssertionError(f"behavior mutant {label} failed without expected kill evidence")
 
 
+def compile_imu_cli(output: Path) -> None:
+    """构建链接 fake producer 的 host CLI，覆盖真实参数解析与 main。"""
+    common = [
+        "-O2", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-pthread",
+        "-I", str(ROOT / "src"), "-I", str(ROOT / "tests"), "-I", str(ROOT / "include"),
+        "-I", str(ICM_ROOT / "include"), "-I", str(SC_ROOT / "include"),
+        "-I", str(RTSP_ROOT / "include"),
+    ]
+    run([compiler(), *common, str(ROOT / "src/imu_reader_demo.cpp"),
+         str(ROOT / "tests/release008_fake_producers.cpp"), "-o", str(output)])
+
+
+def verify_imu_cli_contract(build: Path) -> None:
+    cli = build / "imu-reader-cli"
+    compile_imu_cli(cli)
+
+    help_result = run([str(cli), "--help"])
+    if "[--print-rate-hz HZ]" not in help_result.stdout:
+        raise AssertionError("IMU CLI help omitted --print-rate-hz")
+
+    default_env = dict(os.environ)
+    default_env["RELEASE008_FAKE_ICM_START_BURST"] = "2"
+    default_output = run([str(cli), "--sample-rate-hz", "1000", "--count", "2"],
+                         env=default_env)
+    if default_output.stdout.count("ts_ns=") != 2:
+        raise AssertionError("IMU CLI default did not print every consumed sample")
+    if "accel_mps2=[1.000000, 2.000000, 3.000000]" not in default_output.stdout:
+        raise AssertionError("IMU CLI omitted acceleration XYZ components")
+
+    disabled = run([str(cli), "--print-rate-hz", "0", "--sample-rate-hz", "10",
+                    "--count", "1"])
+    if disabled.stdout:
+        raise AssertionError("--print-rate-hz 0 produced terminal output")
+
+    expected_error = "--print-rate-hz must not exceed --sample-rate-hz"
+    for arguments in (["--print-rate-hz", "100", "--sample-rate-hz", "10"],
+                      ["--sample-rate-hz", "10", "--print-rate-hz", "100"]):
+        rejected = run([str(cli), *arguments], expect=1)
+        if expected_error not in rejected.stdout:
+            raise AssertionError("IMU CLI order-independent validation message missing")
+
+
 def run_lifecycle_gates(repeat: int) -> None:
     with tempfile.TemporaryDirectory(prefix="RELEASE-008-nonros-host-") as temp:
         build = Path(temp)
@@ -528,6 +570,7 @@ def run_lifecycle_gates(repeat: int) -> None:
         asan = build / "lifecycle-asan-ubsan"
         tsan = build / "lifecycle-tsan"
         compile_binary(strict, None)
+        verify_imu_cli_contract(build)
         run([str(strict), "--repeat", str(repeat)])
         run_main_behavior_mutants(build)
         compile_binary(asan, "address,undefined")

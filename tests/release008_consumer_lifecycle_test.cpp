@@ -33,6 +33,10 @@ using robobaton_demo::Options;
 using robobaton_demo::PipelineHooks;
 using robobaton_demo::RtspChannels;
 using robobaton_demo::RunIcmConsumer;
+#ifdef RELEASE008_TESTING
+using robobaton_demo::ImuIdleWaitCountForTest;
+using robobaton_demo::ResetImuIdleWaitCountForTest;
+#endif
 
 int g_checks = 0;
 
@@ -65,7 +69,6 @@ Options OneCameraOptions() {
   options.url = "/PRR";
   options.rotate_degrees = 0;
   options.frame_set_timeout_ms = 100U;
-  options.frame_set_max_skew_ns = 1000000ULL;
   return options;
 }
 
@@ -78,6 +81,34 @@ void AssertZero(const uint64_t* values, size_t count, const char* message) {
   for (size_t i = 0; i < count; ++i) {
     Check(values[i] == 0U, message);
   }
+}
+
+// 2026-07-17 修改原因：验证外部角度叠加固定 90 度安装补偿后的真实帧尺寸；纯计算，无硬件或全局副作用。
+void TestOutputDimensionsFollowInternalRotation() {
+  Options options = OneCameraOptions();
+
+  // 2026-07-17 修改原因：外部角度叠加 90 度安装补偿后，RTSP 与 frame-set 必须使用底层真实输出宽高。
+  options.rotate_degrees = 0;
+  Check(robobaton_demo::InternalRotateDegrees(options) == 90 &&
+            robobaton_demo::OutputWidth(options) == 1280 &&
+            robobaton_demo::OutputHeight(options) == 1088,
+        "external rotation 0 dimensions");
+  options.rotate_degrees = 90;
+  Check(robobaton_demo::InternalRotateDegrees(options) == 180 &&
+            robobaton_demo::OutputWidth(options) == 1088 &&
+            robobaton_demo::OutputHeight(options) == 1280,
+        "external rotation 90 dimensions");
+  options.rotate_degrees = 180;
+  // 2026-07-17 修改原因：覆盖 internal 270/0 的后半映射，防止只修默认角度后其它 CLI 角度再次启动失败。
+  Check(robobaton_demo::InternalRotateDegrees(options) == 270 &&
+            robobaton_demo::OutputWidth(options) == 1280 &&
+            robobaton_demo::OutputHeight(options) == 1088,
+        "external rotation 180 dimensions");
+  options.rotate_degrees = 270;
+  Check(robobaton_demo::InternalRotateDegrees(options) == 0 &&
+            robobaton_demo::OutputWidth(options) == 1088 &&
+            robobaton_demo::OutputHeight(options) == 1280,
+        "external rotation 270 dimensions");
 }
 
 void TestRtspFullConfigAndDescriptor() {
@@ -107,7 +138,7 @@ void TestRtspFullConfigAndDescriptor() {
   Check(sc_config.camera_count == 1U, "SC camera_count");
   Check(sc_config.width == 1280U && sc_config.height == 1088U, "SC output dimensions");
   Check(sc_config.timeout_ms == 100U, "SC timeout");
-  Check(sc_config.max_skew_ns == 1000000ULL, "SC max skew");
+  Check(sc_config.max_skew_ns == 2000000ULL, "SC default max skew");
   AssertZero(reinterpret_cast<const uint64_t*>(sc_config.reserved), 4U, "SC reserved");
   Check(sc132_start_frame_set(&sc_config, options.camera_mask) == SC132_STATUS_OK, "SC start");
 
@@ -502,6 +533,58 @@ void ObserveIcm(const icm42688_sample_t& sample, void* user) {
   }
 }
 
+struct SlowIcmObserverState {
+  std::atomic<int> calls{0};
+};
+
+void ObserveIcmSlowly(const icm42688_sample_t&, void* user) {
+  auto* state = static_cast<SlowIcmObserverState*>(user);
+  state->calls.fetch_add(1, std::memory_order_acq_rel);
+  // 2 ms observer 明确慢于 1 kHz producer，用于复现持续背压。
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+}
+
+void TestIcmSustainedSlowObserverFailsClosed() {
+  release008_fake::Reset();
+  release008_fake::SetIcmEmitOnStart(false);
+  release008_fake::SetIcmEmitDuringStop(false);
+  release008_fake::SetIcmAsyncProduction(200U, 1000U);
+  ImuConsumerOptions options;
+  options.sample_rate_hz = 1000U;
+  options.count = 200U;
+  SlowIcmObserverState state;
+
+  // 持续 producer 与慢 observer 必须触发显式 fail-closed，证明底层 consumer
+  // 不会静默丢样，并界定 CLI observer 的吞吐责任。
+  Check(RunIcmConsumer(options, ObserveIcmSlowly, &state) != 0,
+        "ICM sustained slow observer did not fail closed");
+  Check(release008_fake::IcmAsyncProducedCount() > 64U,
+        "ICM async producer did not sustain beyond queue capacity");
+  Check(state.calls.load(std::memory_order_acquire) < 200,
+        "ICM slow observer unexpectedly consumed every sample");
+}
+
+void TestIcmRateLimitedCliObserverSustainsProduction() {
+  release008_fake::Reset();
+  release008_fake::SetIcmEmitOnStart(false);
+  release008_fake::SetIcmEmitDuringStop(false);
+  release008_fake::SetIcmAsyncProduction(200U, 1000U);
+  ImuConsumerOptions options;
+  options.sample_rate_hz = 1000U;
+  options.count = 200U;
+  robobaton_demo::ImuPrintState state;
+  state.print_every_samples = robobaton_demo::ImuPrintEverySamples(1000U, 0U);
+
+  // 禁用终端输出时仍逐样本消费，持续 1 kHz producer 不应溢出。
+  Check(RunIcmConsumer(options, robobaton_demo::PrintImuSample, &state) == 0,
+        "rate-limited CLI observer failed sustained production");
+  Check(state.observed_samples == 200U, "CLI observer did not consume every IMU sample");
+  Check(release008_fake::IcmAsyncProducedCount() == 200U,
+        "ICM async producer did not complete sustained run");
+  Check(robobaton_demo::ImuPrintEverySamples(1000U, 1000U) == 1U,
+        "full-rate CLI print cadence is not one sample");
+}
+
 void TestIcmBurstOrderAndQueueFullFailClosed() {
   release008_fake::Reset();
   release008_fake::SetIcmStartBurstCount(8U);
@@ -522,6 +605,26 @@ void TestIcmBurstOrderAndQueueFullFailClosed() {
   Check(RunIcmConsumer(options, ObserveIcm, &state) != 0,
         "ICM full queue silently dropped or overwrote a sample");
   Check(state.calls == 0, "ICM full queue emitted after fail-closed admission");
+}
+
+void ResetIcmIdleWaitCount() { ResetImuIdleWaitCountForTest(); }
+
+void TestIcmConsumerContinuouslyDrainsPendingSamples() {
+  release008_fake::Reset();
+  release008_fake::SetIcmStartBurstCount(64U);
+  ImuConsumerOptions options;
+  options.sample_rate_hz = 1000U;
+  options.count = 64U;
+  ResetIcmIdleWaitCount();
+  IcmObserverState state;
+
+  // producer 填满有界 FIFO 后不会再回调；队列非空时 consumer 必须连续 drain，
+  // 只有队列为空时才允许进入 idle wait。
+  Check(RunIcmConsumer(options, ObserveIcm, &state) == 0,
+        "ICM consumer failed while draining a valid full queue");
+  Check(state.calls == 64, "ICM consumer did not drain all pending samples");
+  Check(ImuIdleWaitCountForTest() == 0U,
+        "ICM consumer waited while pending samples remained");
 }
 
 void TestIcmLifecycleAndExceptionFirewall() {
@@ -590,8 +693,12 @@ int main(int argc, char** argv) {
     TestJoinFailureIsFailClosed();
     TestRealMainJoinFailureSkipsRtspCleanupAndDoesNotReturn();
     TestIcmBurstOrderAndQueueFullFailClosed();
+    TestIcmSustainedSlowObserverFailsClosed();
+    TestIcmRateLimitedCliObserverSustainsProduction();
+    TestIcmConsumerContinuouslyDrainsPendingSamples();
     TestIcmLifecycleAndExceptionFirewall();
     for (int iteration = 0; iteration < repeat; ++iteration) {
+      TestOutputDimensionsFollowInternalRotation();
       TestRtspFullConfigAndDescriptor();
     }
     std::cout << "release008 lifecycle PASS checks=" << g_checks

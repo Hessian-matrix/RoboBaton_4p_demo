@@ -44,5 +44,7 @@ void SetIcmStopStatus(int status);
 void SetIcmEmitOnStart(bool enabled);
 void SetIcmStartBurstCount(uint32_t count);
 void SetIcmEmitDuringStop(bool enabled);
+void SetIcmAsyncProduction(uint32_t sample_count, uint32_t interval_us);
+uint32_t IcmAsyncProducedCount();
 
 }  // namespace release008_fake

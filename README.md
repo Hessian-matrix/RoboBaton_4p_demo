@@ -88,22 +88,20 @@ file lib/libprrtsp.so
 
 ## 3. 部署
 
-主仓库集成时，`/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
+主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示（2026-07-14）：`demo/` 已由最新 C ABI v2 可执行文件和三套 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 开发机校验。该结果只证明 AArch64 构建、ABI 版本和包内哈希一致；X5 目标板 `ldd/--help/IMU/相机/RTSP` smoke 尚未执行，不能标记为实机发布完成。
+> 当前仓库状态提示：`demo/` 已由最新 C ABI v2 可执行文件和三套 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 开发机校验。该结果只证明 AArch64 构建、ABI 版本和包内哈希一致；X5 目标板 `ldd/--help/IMU/相机/RTSP` smoke 尚未执行，不能标记为实机发布完成。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
 ```bash
-cd /root/x5/4cam
-scripts/build_sc132.sh
-scripts/build_rtsp_so_mp4.sh
-
-cd /root/x5/4cam/sub_module/RoboBaton_4p_demo
+cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` 默认从 `./build_x5` 和 `./lib` 取文件，输出到 `./demo`。`demo/` 应随公开仓库或 release 包一起发布；如果重新启用 `demo/*` ignore，用户将无法通过仓库直接拿到更新包。
+`scripts/package_runtime.sh` 是完整发布入口：先从顶层权威源码干净重编译
+`libicm42688`、`libsc132`、`libprrtsp` 并同步到 `./lib`，然后删除并重建
+`./build_x5`、编译仓库 CMake 声明的全部 demo target，最终原子发布并验证 `./demo`。
 
 运行包包含顶层启动脚本、`env.sh`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件或单个 `.so`。
 
@@ -198,7 +196,7 @@ killall -q cam_demo 2>/dev/null || true
 --url <path>       RTSP path，默认 /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息
---max-skew-ns <ns> timestamp skew 诊断阈值，默认 1000000；同步配组后四路 frame_id 对外保持绝对一致
+--max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
@@ -278,7 +276,7 @@ avg_frame_rate=60/1
 5. 后台线程从队列取帧，调用对应 `Rtsp_SendImg*_planes()` 推流。
 6. 后台线程处理完成后调用 `sc132_frame_release()` 归还帧。
 
-用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；其中 `max_skew_ns` 是时间戳诊断值，不是当前配组放行条件。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
+用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`libsc132.so` 仅在归一化 `frame_id` 一致且 timestamp skew 不超过配置上限时放行，默认上限 `2000000 ns` 覆盖 30fps 板端实测约 `1.06 ms` 的同帧链路相位差，同时仍远小于一帧周期。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
 
 日志字段：
 
@@ -304,13 +302,17 @@ avg_frame_rate=60/1
 示例：
 
 ```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10
+./imu_reader_demo --sample-rate-hz 1000 --count 10000
 ```
+
+默认终端输出频率跟随 `--sample-rate-hz`，即每个 IMU 样本都打印；若需要限速，
+可显式设置 `--print-rate-hz`，该值必须不超过 `--sample-rate-hz`。
+显式设置为 `0` 时禁用终端输出，但仍消费并计入全部 IMU 样本，`--count` 语义不变。
 
 输出字段：
 
 - `ts_ns`：host monotonic clock 时间戳，单位 `ns`
-- `dt_ms`：相邻两帧时间戳差，单位 `ms`
+- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认逐样本输出时代表相邻 IMU 样本周期，1 kHz 下通常约为 `1 ms`
 - `temp_c`：温度，单位 `degC`
 - `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
@@ -321,7 +323,9 @@ avg_frame_rate=60/1
 - demo 默认使用 FIFO 模式
 - FIFO 模式下，驱动按配置 ODR 展开连续时间戳，用于提供稳定 `dt`
 - 当前时间戳不是 FSYNC 外部同步时间戳
-- 回调函数运行在驱动采集线程中，实际项目里应避免在回调里做耗时操作
+- 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
+- CLI 默认打印每个 IMU 样本；1 kHz 同步终端输出可能使 FIFO 持续积压，可用较小的 `--print-rate-hz` 主动限速
+- 若自定义 observer 的平均处理时间超过采样周期，FIFO 仍会按设计 fail-closed，不会静默丢样
 
 ## 6. 串口通信 Demo
 
@@ -392,6 +396,20 @@ rtsp://<x5-ip>:557/PRR
 - 日志中四路 `fps` 长期接近目标帧率。
 - 日志中 `full_waits` 保持为 `0`。
 - 不出现明显错误、崩溃或相机反复重启。
+
+完整 30fps 自动回归脚本不属于 `/root/demo` 运行包；它是开发机源码仓库中的 SSH 驱动工具。先把 `demo/` 完整部署到板端 `/root/demo`，再在开发机的 `4cam` 仓库根目录执行：
+
+```bash
+cd <4cam-repo-root>
+sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
+  --host <x5-ip> \
+  --fps 30 \
+  --min-fps 28 \
+  --max-group-skew-ns 2000000 \
+  --kill-existing
+```
+
+不要在板端 `/root/demo` 中执行 `scripts/cam_demo_regression.sh`；运行包只包含 `bin/`、`lib/`、顶层启动脚本 `cam_demo`、`imu_reader_demo`、`serial_port_demo`，以及 `env.sh` 和 `manifest.sha256`。
 
 ## 8. 运行约束
 

@@ -93,12 +93,14 @@ bool IsSupportedCameraMask(uint32_t camera_mask) {
 }
 
 int OutputWidth(const Options& options) {
+  // 2026-07-17 修改原因：width/height 是默认横屏交付画布；外部 0/180 保持画布轴，90/270 才交换。
   return options.rotate_degrees == 90 || options.rotate_degrees == 270
              ? options.height
              : options.width;
 }
 
 int OutputHeight(const Options& options) {
+  // 2026-07-17 修改原因：与 OutputWidth 共用对外交付坐标系，安装补偿只影响底层角度，不得二次交换画布。
   return options.rotate_degrees == 90 || options.rotate_degrees == 270
              ? options.width
              : options.height;

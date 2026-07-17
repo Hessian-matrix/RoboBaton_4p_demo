@@ -66,7 +66,7 @@ typedef struct icm42688_sample {
 } icm42688_sample_t;
 
 /*
- * 回调与句柄遵循以下线程及生命周期约束：
+ * 2026-07-13 修改原因：固定回调线程与句柄生命周期契约，避免跨语言调用者在采集线程内自销毁。
  * 回调由驱动采集线程串行调用；sample 仅在回调期间有效。
  * set_callback 可与采集并发，返回后的后续样本使用新回调；不会等待已进入的旧回调结束。
  * C++ 调用者的 callback 必须 noexcept；库会隔离误抛异常并禁用该回调，但不得依赖该兜底。
@@ -84,7 +84,7 @@ ICM42688_X5_API int icm42688_start(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_stop(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_is_running(const icm42688_handle_t *handle);
 ICM42688_X5_API void icm42688_destroy(icm42688_handle_t *handle);
-/* 返回静态只读字符串，调用者不得释放。 */
+/* 2026-07-13 修改原因：返回进程静态只读字符串，指针在进程退出前有效，调用者不得释放。 */
 ICM42688_X5_API const char *icm42688_status_message(int status);
 
 #ifdef __cplusplus

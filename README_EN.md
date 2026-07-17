@@ -88,22 +88,21 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 ## 3. Deploy
 
-When integrated in the top-level workspace, `/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
+When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
-> Current repository status (2026-07-14): `demo/` has been regenerated from the latest C ABI v2 executables and all three shared libraries, and passes host-side `scripts/verify_runtime_package.py` plus `manifest.sha256` verification. This proves the AArch64 build, ABI versions, and package hashes only. X5 target-board `ldd`, `--help`, IMU, camera, and RTSP smoke tests have not run, so this is not yet a board-verified release.
+> Current repository status: `demo/` has been regenerated from the latest C ABI v2 executables and all three shared libraries, and passes host-side `scripts/verify_runtime_package.py` plus `manifest.sha256` verification. This proves the AArch64 build, ABI versions, and package hashes only. X5 target-board `ldd`, `--help`, IMU, camera, and RTSP smoke tests have not run, so this is not yet a board-verified release.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
 ```bash
-cd /root/x5/4cam
-scripts/build_sc132.sh
-scripts/build_rtsp_so_mp4.sh
-
-cd /root/x5/4cam/sub_module/RoboBaton_4p_demo
+cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` reads from `./build_x5` and `./lib` by default, then writes the runtime package to `./demo`. Keep `demo/` in the public repository or release artifact; if `demo/*` is ignored again, users will not receive the update package from the repository.
+`scripts/package_runtime.sh` is the complete release entry point. It first clean-builds
+`libicm42688`, `libsc132`, and `libprrtsp` from their canonical top-level sources and
+synchronizes them into `./lib`; it then recreates `./build_x5`, builds every demo target
+declared by this repository's CMake project, and atomically publishes and verifies `./demo`.
 
 The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable or one `.so` file.
 
@@ -198,7 +197,7 @@ Common options:
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print per-channel send timing and timestamp skew diagnostics
---max-skew-ns <ns> Timestamp skew diagnostic threshold, default 1000000; after synchronized grouping, all four exposed frame_id values match exactly
+--max-skew-ns <ns> Frame-set timestamp skew release limit, default 2000000; after synchronized grouping, all four exposed frame_id values match exactly
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
@@ -278,7 +277,7 @@ Frame flow:
 5. Worker threads pop frames and call the matching `Rtsp_SendImg*_planes()` function.
 6. Worker threads call `sc132_frame_release()` after processing.
 
-The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`; `max_skew_ns` is a timestamp diagnostic value, not the current frame-set release condition. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
+The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default `2000000 ns` covers the measured approximately `1.06 ms` same-frame pipeline phase at 30 fps while remaining far below one frame period. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
 
 Log fields:
 
@@ -303,13 +302,19 @@ Default run:
 Example:
 
 ```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10
+./imu_reader_demo --sample-rate-hz 1000 --count 10000
 ```
+
+Terminal output defaults to `--sample-rate-hz`, so every IMU sample is printed.
+Set `--print-rate-hz` explicitly to limit output; it must not exceed
+`--sample-rate-hz`.
+Set it explicitly to `0` to disable terminal output while still consuming and counting
+every IMU sample; `--count` semantics do not change.
 
 Output fields:
 
 - `ts_ns`: host monotonic clock timestamp in `ns`
-- `dt_ms`: timestamp delta between adjacent frames in `ms`
+- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; with default per-sample output it represents the adjacent IMU sample period, typically about `1 ms` at 1 kHz
 - `temp_c`: temperature in `degC`
 - `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
@@ -320,7 +325,9 @@ Notes:
 - The demo uses FIFO mode by default.
 - In FIFO mode, the driver expands sample timestamps by the configured ODR to provide stable `dt`.
 - The timestamp is not an external FSYNC timestamp.
-- The callback runs in the driver's acquisition thread. Avoid blocking or heavy work inside the callback in real applications.
+- The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
+- The CLI prints every IMU sample by default; synchronous 1 kHz terminal output can create sustained FIFO backlog, so use a lower `--print-rate-hz` when needed.
+- A custom observer whose average processing time exceeds the sample period still causes the FIFO to fail closed; samples are never dropped silently.
 
 ## 6. UART Communication Demo
 
@@ -391,6 +398,20 @@ Basic pass criteria:
 - The log reports per-camera `fps` close to the target frame rate.
 - The log keeps `full_waits` at `0`.
 - No obvious error, crash, or repeated camera restart appears.
+
+The complete 30 fps regression script is not part of the `/root/demo` runtime package. It is an SSH-driven tool in the development-host source tree. First deploy the complete `demo/` directory to `/root/demo` on the board, then run this from the `4cam` repository root on the development host:
+
+```bash
+cd <4cam-repo-root>
+sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
+  --host <x5-ip> \
+  --fps 30 \
+  --min-fps 28 \
+  --max-group-skew-ns 2000000 \
+  --kill-existing
+```
+
+Do not run `scripts/cam_demo_regression.sh` from `/root/demo` on the board. The runtime package contains only `bin/`, `lib/`, the top-level launchers `cam_demo`, `imu_reader_demo`, and `serial_port_demo`, plus `env.sh` and `manifest.sha256`.
 
 ## 8. Runtime Constraints
 

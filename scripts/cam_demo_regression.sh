@@ -22,7 +22,7 @@ MIN_FPS=55
 MIN_GOOD_FPS_SAMPLES=3
 MAX_PIPELINE_DELAY_MS=80
 MAX_SEND_MAX_MS=120
-MAX_GROUP_SKEW_NS=1000000
+MAX_GROUP_SKEW_NS=2000000
 MAX_RTSP_PTS_SKEW_MS=1
 MAX_FRAME_ID_OFFSET_JITTER=0
 MIN_GROUP_ID=""
@@ -55,7 +55,7 @@ Evaluation thresholds:
   --min-good-fps-samples <n>  Minimum FPS samples per channel above --min-fps, default 3
   --max-pipeline-delay-ms <n> Maximum pipeline_delay_ms, default 80
   --max-send-max-ms <n>       Maximum send_max_ms, default 120
-  --max-group-skew-ns <n>     Maximum group_skew_ns, default 1000000
+  --max-group-skew-ns <n>     Maximum group_skew_ns, default 2000000
   --max-rtsp-pts-skew-ms <n>  Maximum RTSP PTS skew across channels, default 1
   --max-frame-id-offset-jitter <n>
                               Maximum jitter of per-group frame_id offsets, default 0; absolute offsets must be 0

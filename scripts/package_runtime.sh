@@ -7,6 +7,7 @@ BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build_x5}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/demo}"
 PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR:-${PROJECT_DIR}/lib}"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-$(cd "${PROJECT_DIR}/../.." && pwd)}"
 STRIP_TOOL="${STRIP_TOOL:-}"
 WORK_ROOT=""
 BACKUP_ACTIVE=0
@@ -17,15 +18,17 @@ Usage:
   scripts/package_runtime.sh [options]
 
 Default behavior:
-  Build cam_demo, imu_reader_demo and serial_port_demo, then publish a verified
-  runtime package to ./demo.
+  Recreate the CMake build directory, build every repository target from source,
+  then publish a verified runtime package to ./demo.
+  This rebuilds ICM42688, SC132, PRRTSP, and every non-ROS consumer target.
 
 Options:
   --build-dir <path>       CMake build directory, default ./build_x5
   --output-dir <path>      Runtime package output directory, default ./demo
   --package-lib-dir <path> Runtime shared library source directory, default ./lib
-  --toolchain-file <path>  CMake toolchain file used by all three builds
-  --strip-tool <path>      Strip tool, default auto-detect aarch64 strip
+  --toolchain-file <path>  CMake toolchain selecting the producer/consumer compiler
+  --strip-tool <path>      Optional strip override for final staged executables only
+  --workspace-dir <path>   Top-level workspace containing producer sources/scripts
   -h, --help               Show this help
 USAGE
 }
@@ -61,6 +64,11 @@ while [[ $# -gt 0 ]]; do
       TOOLCHAIN_FILE="$2"
       shift 2
       ;;
+    --workspace-dir)
+      require_option_value "$1" "${2:-}"
+      WORKSPACE_DIR="$2"
+      shift 2
+      ;;
     --strip-tool)
       require_option_value "$1" "${2:-}"
       STRIP_TOOL="$2"
@@ -87,20 +95,58 @@ resolve_project_path() {
   fi
 }
 
-# 构建前规范化路径，使入口可创建尚不存在的 build 目录。
+# 2026-07-17 修改原因：读取 CMake 已解析的编译器，而不是猜测 toolchain 文件中的条件分支。
+read_configured_c_compiler() {
+  local metadata_files=("${ICM_BUILD_DIR}"/CMakeFiles/*/CMakeCCompiler.cmake)
+  local metadata_file=""
+  local line=""
+  local compiler=""
+
+  if [[ "${#metadata_files[@]}" -ne 1 || ! -f "${metadata_files[0]}" ]]; then
+    echo "Unable to locate unique CMake C compiler metadata under ${ICM_BUILD_DIR}" >&2
+    exit 1
+  fi
+  metadata_file="${metadata_files[0]}"
+  while IFS= read -r line; do
+    if [[ "${line}" =~ ^set\(CMAKE_C_COMPILER\ \"([^\"]+)\"\)$ ]]; then
+      compiler="${BASH_REMATCH[1]}"
+      break
+    fi
+  done < "${metadata_file}"
+  if [[ -z "${compiler}" ]]; then
+    echo "Missing CMAKE_C_COMPILER in ${metadata_file}" >&2
+    exit 1
+  fi
+  if [[ "${compiler}" != /* ]]; then
+    compiler="$(command -v "${compiler}" || true)"
+  fi
+  if [[ -z "${compiler}" || ! -x "${compiler}" ]]; then
+    echo "Configured C compiler is not executable: ${compiler:-<unresolved>}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${compiler}"
+}
+
+# 规范化路径后删除并重建 build 目录，确保发布不复用旧对象或旧 CMake 缓存。
 BUILD_DIR="$(resolve_project_path "${BUILD_DIR}")"
 OUTPUT_DIR="$(resolve_project_path "${OUTPUT_DIR}")"
 PACKAGE_LIB_DIR="$(resolve_project_path "${PACKAGE_LIB_DIR}")"
 TOOLCHAIN_FILE="$(resolve_project_path "${TOOLCHAIN_FILE}")"
-mkdir -p "${BUILD_DIR}" "$(dirname "${OUTPUT_DIR}")"
-BUILD_DIR="$(cd "${BUILD_DIR}" && pwd)"
+WORKSPACE_DIR="$(resolve_project_path "${WORKSPACE_DIR}")"
+mkdir -p "$(dirname "${BUILD_DIR}")" "$(dirname "${OUTPUT_DIR}")" "${PACKAGE_LIB_DIR}"
+BUILD_DIR="$(cd "$(dirname "${BUILD_DIR}")" && pwd)/$(basename "${BUILD_DIR}")"
 OUTPUT_DIR="$(cd "$(dirname "${OUTPUT_DIR}")" && pwd)/$(basename "${OUTPUT_DIR}")"
-
-if [[ ! -d "${PACKAGE_LIB_DIR}" ]]; then
-  echo "Missing runtime lib directory: ${PACKAGE_LIB_DIR}" >&2
+case "${BUILD_DIR}" in
+  "${PROJECT_DIR}"/*) ;;
+  *)
+    echo "Refusing build directory outside project: ${BUILD_DIR}" >&2
+    exit 1
+    ;;
+esac
+if [[ "${BUILD_DIR}" == "${PROJECT_DIR}" || "${BUILD_DIR}" == "/" || -L "${BUILD_DIR}" ]]; then
+  echo "Refusing unsafe build directory: ${BUILD_DIR}" >&2
   exit 1
 fi
-PACKAGE_LIB_DIR="$(cd "${PACKAGE_LIB_DIR}" && pwd)"
 
 if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" ]]; then
   echo "Refusing unsafe output directory: ${OUTPUT_DIR}" >&2
@@ -110,15 +156,62 @@ if [[ -L "${OUTPUT_DIR}" ]]; then
   echo "Refusing symlink output directory: ${OUTPUT_DIR}" >&2
   exit 1
 fi
+if [[ ! -f "${WORKSPACE_DIR}/CMakeLists.txt" || ! -x "${WORKSPACE_DIR}/scripts/build_sc132.sh" ||
+      ! -x "${WORKSPACE_DIR}/scripts/build_rtsp_so_mp4.sh" ]]; then
+  echo "Missing canonical producer workspace: ${WORKSPACE_DIR}" >&2
+  exit 1
+fi
 
-# 三个 consumer 共用同一 build 目录和 toolchain。
-for builder in \
-  build_cam_demo.sh \
-  build_imu_reader_demo.sh \
-  build_serial_port_demo.sh; do
-  BUILD_DIR="${BUILD_DIR}" TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-    "${SCRIPT_DIR}/${builder}"
-done
+# 先从权威源码干净构建三套 producer，并同步 SO/公共头到当前非 ROS 仓库。
+ICM_BUILD_DIR="${PROJECT_DIR}/.package-build-icm42688"
+rm -rf "${ICM_BUILD_DIR}"
+cmake -S "${WORKSPACE_DIR}" -B "${ICM_BUILD_DIR}" \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+  -DROBOBATON_SYNC_BUILT_SHARED_LIBS=ON \
+  -DROBOBATON_DEMO_LIB_DIR="${PACKAGE_LIB_DIR}" \
+  -DROBOBATON_DEMO_ICM_HEADER="${PROJECT_DIR}/include/icm42688_driver.h"
+# 2026-07-17 修改原因：用 CMake 实际选中的 C 编译器 triplet 统一 SC132 与 RTSP，避免各脚本回退到 /opt 默认值。
+PRODUCER_GCC="$(read_configured_c_compiler)"
+if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then
+  echo "Configured C compiler does not support -dumpmachine: ${PRODUCER_GCC}" >&2
+  exit 1
+fi
+# 2026-07-17 修改原因：拒绝空值、路径或含空白的伪 triplet，避免拼接出仓库外或错误的工具路径。
+if [[ -z "${TARGET_TRIPLET}" || "${TARGET_TRIPLET}" == */* || "${TARGET_TRIPLET}" == *[[:space:]]* ]]; then
+  echo "Configured C compiler returned invalid target triplet: ${TARGET_TRIPLET:-<empty>}" >&2
+  exit 1
+fi
+TOOLCHAIN_BIN_DIR="$(cd "$(dirname "${PRODUCER_GCC}")" && pwd)"
+PRODUCER_CROSS_COMPILE="${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-"
+DERIVED_STRIP_TOOL="${PRODUCER_CROSS_COMPILE}strip"
+# 2026-07-17 修改原因：要求 strip 与编译器同目录同 triplet，保证 producer 和最终可执行文件使用同一工具链族。
+if [[ ! -x "${DERIVED_STRIP_TOOL}" ]]; then
+  echo "Missing companion strip for configured C compiler: ${DERIVED_STRIP_TOOL}" >&2
+  exit 1
+fi
+if [[ -z "${STRIP_TOOL}" ]]; then
+  STRIP_TOOL="${DERIVED_STRIP_TOOL}"
+fi
+if [[ ! -x "${STRIP_TOOL}" ]]; then
+  echo "Strip tool is not executable: ${STRIP_TOOL}" >&2
+  exit 1
+fi
+
+cmake --build "${ICM_BUILD_DIR}" --target icm42688_x5 --clean-first -j
+
+PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR}" \
+  "${WORKSPACE_DIR}/scripts/build_sc132.sh" \
+  --gcc "${PRODUCER_GCC}" --strip "${DERIVED_STRIP_TOOL}" --clean-first
+PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR}" PRRTSP_DEBUG=0 \
+  "${WORKSPACE_DIR}/scripts/build_rtsp_so_mp4.sh" \
+  --cross-compile "${PRODUCER_CROSS_COMPILE}" --clean-first
+
+
+# 单次 configure 后构建默认 all 目标，覆盖仓库 CMakeLists 声明的全部可执行文件。
+rm -rf "${BUILD_DIR}"
+cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+cmake --build "${BUILD_DIR}" --clean-first -j
 
 for path in \
   "${BUILD_DIR}/cam_demo" \
@@ -139,17 +232,6 @@ for path in \
   fi
 done
 
-if [[ -z "${STRIP_TOOL}" ]]; then
-  if command -v aarch64-linux-gnu-strip >/dev/null 2>&1; then
-    STRIP_TOOL="$(command -v aarch64-linux-gnu-strip)"
-  elif [[ -x /opt/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-strip ]]; then
-    STRIP_TOOL="/opt/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-strip"
-  fi
-fi
-if [[ -n "${STRIP_TOOL}" && ! -x "${STRIP_TOOL}" ]]; then
-  echo "Strip tool is not executable: ${STRIP_TOOL}" >&2
-  exit 1
-fi
 
 cleanup() {
   local rc=$?

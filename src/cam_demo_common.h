@@ -3,12 +3,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include "sc132camera.h"
 #include <string>
 #include <utility>
 
 extern "C" {
 typedef struct icm42688_sample icm42688_sample_t;
-typedef struct sc132_frame sc132_frame_t;
 }
 
 namespace robobaton_demo {
@@ -24,7 +24,7 @@ constexpr uint32_t kDefaultCameraMask = (1U << kMaxChannels) - 1U;
 constexpr int kBaseRtspPort = 554;
 constexpr size_t kQueueCapacity = 10;
 constexpr int kDefaultDiagnosticIntervalMs = 1000;
-constexpr uint64_t kDefaultFrameSetMaxSkewNs = 1000000ULL;
+constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
 
@@ -83,11 +83,27 @@ struct ImuConsumerOptions {
   uint32_t count = 0U;
 };
 
+#ifdef RELEASE008_TESTING
+void ResetImuIdleWaitCountForTest();
+uint32_t ImuIdleWaitCountForTest();
+#endif
+
 using ImuSampleObserver = void (*)(const icm42688_sample_t& sample, void* user);
 
 // adapter 独占 ICM C handle，并在 callback trampoline 截断 observer 异常。
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
                    void* observer_user);
+
+struct ImuPrintState {
+  uint32_t print_every_samples = 1U;
+  uint64_t observed_samples = 0U;
+  uint64_t last_timestamp_ns = 0U;
+};
+
+// 按采样率和输出率计算抽样步长；任一输入为 0 时返回 0，表示禁用输出。
+uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz);
+// CLI observer 仅按配置抽样输出，消费仍覆盖每个 IMU 样本。
+void PrintImuSample(const icm42688_sample_t& sample, void* user);
 
 uint64_t SteadyClockNowNs();
 int RtspPortForChannel(int channel);
