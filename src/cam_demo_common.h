@@ -46,8 +46,7 @@ struct Options {
   std::string trigger_mode = kDefaultSc132TriggerMode;
 };
 
-// 2026-07-15 修改原因：retained SC frame 必须由可移动、不可复制的 RAII job 独占，
-// 队列 drain、worker 当前帧和异常展开因此都只会 release 一次。
+// retained SC frame 由可移动、不可复制的 RAII job 独占。
 struct QueuedFrame {
   QueuedFrame() = default;
   ~QueuedFrame();
@@ -86,8 +85,7 @@ struct ImuConsumerOptions {
 
 using ImuSampleObserver = void (*)(const icm42688_sample_t& sample, void* user);
 
-// 2026-07-15 修改原因：测试与 main 共用真实 ICM C-handle adapter；函数拥有唯一
-// create/start/stop/destroy 生命周期，observer 异常被 callback trampoline 截断。
+// adapter 独占 ICM C handle，并在 callback trampoline 截断 observer 异常。
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
                    void* observer_user);
 

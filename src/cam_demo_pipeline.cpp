@@ -55,8 +55,7 @@ class FrameQueue {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       stopped_ = true;
-      // 2026-07-15 修改原因：锁内只 detach ownership；sc132_frame_release 可能触发
-      // producer/vendor 回收，必须在 queue mutex 外由 detached RAII 析构执行。
+      // 锁内只 detach；可能进入 vendor 的 frame release 在 mutex 外执行。
       detached.swap(frames_);
     }
     condition_.notify_all();
@@ -186,8 +185,7 @@ class FramePipeline::Impl {
         worker_owned_[camera_id].store(true, std::memory_order_release);
       }
     } catch (...) {
-      // 2026-07-15 修改原因：worker create 发生在 producer start attempt 之前；
-      // 这里只发布 consumer failure 并回收已创建 worker，禁止 idle sc132_request_stop。
+      // worker 创建失败只停止 consumer，不发布空闲态 SC stop 请求。
       RecordFailure(kErrorWorker);
       BeginShutdown(false);
       throw;
@@ -202,8 +200,7 @@ class FramePipeline::Impl {
       diagnostics_worker_ = std::thread(&Impl::DiagnosticsEntry, this);
       diagnostics_owned_.store(true, std::memory_order_release);
     } catch (...) {
-      // 2026-07-15 修改原因：diagnostics create 也早于 producer start attempt；
-      // 与 worker-create 一致，仅停止 consumer，不发布 idle SC request。
+      // diagnostics 创建失败只停止 consumer，不发布空闲态 SC stop 请求。
       RecordFailure(kErrorWorker);
       BeginShutdown(false);
       throw;
@@ -261,8 +258,7 @@ class FramePipeline::Impl {
         throw std::runtime_error("SC frame retain failed");
       }
 
-      // 2026-07-15 修改原因：retain 成功后立刻交给 move-only RAII job；后续 hook、
-      // queue allocation 或 callback 异常均由栈展开 release，不能留下 borrowed pointer。
+      // retain 后立即转交 move-only RAII job，异常由栈展开 release。
       QueuedFrame& job = jobs[index];
       job.frame = item.frame;
       job.channel = static_cast<int>(item.camera_id);
@@ -439,8 +435,7 @@ class FramePipeline::Impl {
         }
         const int32_t send_result = rtsp_->Send(camera_id, frame);
         if (send_result != PRRTSP_OK) {
-          // 2026-07-15 修改原因：保留 producer 原始 send status；当前 RAII frame
-          // 在本轮退出时 release，且绝不 MarkSent/增加 success counter。
+          // 保留原始 send status，失败帧 release 且不计成功。
           RequestFailure(send_result);
           break;
         }
@@ -525,8 +520,7 @@ void FramePipeline::FrameSetCallback(const sc132_frame_set_t* frame_set, void* u
     auto* pipeline = static_cast<FramePipeline*>(user);
     pipeline->impl_->HandleFrameSet(*frame_set);
   } catch (...) {
-    // 2026-07-15 修改原因：任何 observer/allocation/validation 异常均不可跨 C ABI；
-    // callback 只关闭 admission、发布首错和 request_stop，不执行 blocking stop/join。
+    // 异常不得跨越 C ABI；callback 只请求停止，不执行 blocking cleanup。
     if (user != nullptr) {
       static_cast<FramePipeline*>(user)->impl_->RequestFailure(kErrorCallback);
     }

@@ -62,8 +62,8 @@ bool g_icm_emit_during_stop = true;
 void Record(const std::string& event) {
   std::lock_guard<std::mutex> lock(g_mutex);
   g_events.push_back(event);
-  // 2026-07-15 修改原因：真实 cam_demo main 的 join-failure gate 必须在 _Exit
-  // 子进程外观察 producer/RTSP 调用；测试专用 trace 直接写 fd，不能依赖析构/flush。
+  // join-failure gate 在 _Exit 子进程外观察调用轨迹；
+  // trace 直接写 fd，不依赖析构或缓冲区 flush。
   const char* trace = std::getenv("RELEASE008_FAKE_TRACE");
   if (trace != nullptr && trace[0] != '\0') {
     const std::string line = "FAKE_EVENT " + event + "\n";
@@ -430,8 +430,7 @@ int icm42688_start(icm42688_handle_t* handle) {
   }
   handle->running = true;
   if (emit && handle->callback != nullptr) {
-    // 2026-07-16 修改原因：同步 burst 绑定真实 production callback 路径，
-    // 单调时间戳使测试能区分 FIFO oldest-first 与单槽 latest-value 覆盖。
+    // 同步 burst 的单调时间戳用于区分 FIFO 与单槽覆盖语义。
     for (uint32_t index = 0U; index < burst_count; ++index) {
       const icm42688_sample_t sample = Sample(100U + 10000000ULL * index);
       handle->callback(&sample, handle->user);

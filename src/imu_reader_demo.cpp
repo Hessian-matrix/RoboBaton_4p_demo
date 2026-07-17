@@ -33,8 +33,7 @@ struct IcmCallbackContext {
   std::atomic<bool> callback_failed{false};
   std::atomic<uint32_t> emitted{0U};
   std::mutex pending_mutex;
-  // 2026-07-16 修改原因：producer 会在一次 FIFO drain 中同步回调多个样本；
-  // 固定容量环形队列保持原序且避免 callback 路径动态分配。
+  // 固定容量 FIFO 保持 burst 顺序并避免 callback 路径动态分配。
   std::array<icm42688_sample_t, kPendingCapacity> pending_samples{};
   std::size_t pending_head = 0U;
   std::size_t pending_size = 0U;
@@ -42,8 +41,7 @@ struct IcmCallbackContext {
   void* observer_user = nullptr;
 };
 
-// 2026-07-15 修改原因：producer callback thread 只能发布数据/首错；所有 C++
-// observer 异常在此 catch-all，且 stop/destroy 始终由 RunIcmConsumer owner 执行。
+// callback 只发布数据或首错；stop/destroy 由 lifecycle owner 执行。
 void IcmCallback(const icm42688_sample_t* sample, void* user) noexcept {
   auto* context = static_cast<IcmCallbackContext*>(user);
   if (context == nullptr || !context->accepting.load(std::memory_order_acquire)) {
@@ -51,16 +49,14 @@ void IcmCallback(const icm42688_sample_t* sample, void* user) noexcept {
   }
   try {
     if (sample == nullptr || sample->struct_size != sizeof(*sample)) {
-      // 2026-07-16 修改原因：callback 的无效输入直接首错关闭 admission，
-      // 不构造可能分配内存的 C++ 异常对象。
+      // 无效输入直接关闭 admission，避免在 producer 线程分配异常对象。
       context->callback_failed.store(true, std::memory_order_release);
       context->accepting.store(false, std::memory_order_release);
       return;
     }
     {
       std::lock_guard<std::mutex> lock(context->pending_mutex);
-      // 2026-07-16 修改原因：在同一锁域内复核 admission 并执行 enqueue，
-      // 防止 owner 关闭接收后，已等待锁的 callback 再写入队列。
+      // 在同一锁域复核 admission 并 enqueue。
       if (!context->accepting.load(std::memory_order_acquire)) {
         return;
       }
@@ -118,8 +114,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   result = icm42688_start(handle);
   if (result != ICM42688_STATUS_OK) {
     context.accepting.store(false, std::memory_order_release);
-    // 2026-07-15 修改原因：start 失败仍由 create owner finalizer 销毁非空 handle；
-    // 不在同一进程重试/restart 半初始化 generation。
+    // start 失败后仍由 create owner 销毁非空 handle。
     icm42688_destroy(handle);
     return 1;
   }
@@ -131,8 +126,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     {
       std::lock_guard<std::mutex> lock(context.pending_mutex);
       if (context.pending_size != 0U) {
-        // 2026-07-16 修改原因：owner 每次只取最老样本；observer 在解锁后运行，
-        // 避免打印或用户逻辑阻塞 producer callback enqueue。
+        // 按 FIFO 取最老样本，并在解锁后执行 observer。
         sample = context.pending_samples[context.pending_head];
         context.pending_head =
             (context.pending_head + 1U) % IcmCallbackContext::kPendingCapacity;
@@ -142,8 +136,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     }
     if (has_sample) {
       try {
-        // 2026-07-15 修改原因：打印/用户 observer 在 lifecycle owner 线程运行；
-        // producer callback 只复制发布 sample，绝不执行潜在阻塞 I/O。
+        // observer 在 owner 线程运行，producer callback 不执行阻塞 I/O。
         if (context.observer != nullptr) {
           context.observer(sample, context.observer_user);
         }

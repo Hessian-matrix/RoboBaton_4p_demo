@@ -90,6 +90,8 @@ file lib/libprrtsp.so
 
 主仓库集成时，`/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
+> 当前仓库状态提示（2026-07-14）：`demo/` 已由最新 C ABI v2 可执行文件和三套 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 开发机校验。该结果只证明 AArch64 构建、ABI 版本和包内哈希一致；X5 目标板 `ldd/--help/IMU/相机/RTSP` smoke 尚未执行，不能标记为实机发布完成。
+
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
 ```bash

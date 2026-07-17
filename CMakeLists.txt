@@ -44,7 +44,7 @@ set_target_properties(icm42688_x5 PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
-# 2026-07-16 修改原因：直接绑定 canonical 目录中的 real major-2 ELF，让 DT_NEEDED 由 SONAME 决定；默认构建无需 module-root 变量。
+# 直接绑定 canonical major-2 ELF，由 SONAME 决定消费者的 DT_NEEDED。
 add_library(sc132_v2 SHARED IMPORTED GLOBAL)
 set_target_properties(sc132_v2 PROPERTIES
   IMPORTED_LOCATION "${SC132_SO}"
@@ -105,7 +105,7 @@ target_include_directories(cam_demo PRIVATE
   ${SC132_INCLUDE_DIRS}
 )
 if(X5_HOBOT_LIB_DIR)
-  # 2026-07-16 修改原因：仅供 link-editor 解析 producer 的 vendor DT_NEEDED，不把 hbmem 加成 consumer 直接依赖或 RUNPATH。
+  # rpath-link 仅供链接器解析 producer 的 vendor 依赖，不增加 consumer 的直接依赖或 RUNPATH。
   target_link_options(cam_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
 target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)

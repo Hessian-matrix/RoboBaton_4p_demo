@@ -90,6 +90,8 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 When integrated in the top-level workspace, `/root/x5/4cam/sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
+> Current repository status (2026-07-14): `demo/` has been regenerated from the latest C ABI v2 executables and all three shared libraries, and passes host-side `scripts/verify_runtime_package.py` plus `manifest.sha256` verification. This proves the AArch64 build, ABI versions, and package hashes only. X5 target-board `ldd`, `--help`, IMU, camera, and RTSP smoke tests have not run, so this is not yet a board-verified release.
+
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
 ```bash

@@ -43,8 +43,7 @@ QueuedFrame& QueuedFrame::operator=(QueuedFrame&& other) noexcept {
 
 void QueuedFrame::Reset() noexcept {
   if (frame != nullptr) {
-    // 2026-07-15 修改原因：release 只绑定 RAII ownership；所有 drain/异常路径通过
-    // Reset 收敛，禁止另有裸指针 release 分支造成 double-release。
+    // retained frame 由 RAII 唯一管理，所有路径统一经 Reset release。
     sc132_frame_release(frame);
     frame = nullptr;
   }

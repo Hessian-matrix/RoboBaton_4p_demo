@@ -20,8 +20,7 @@ bool RtspChannels::ValidPath(const std::string& path) noexcept {
     return false;
   }
   for (unsigned char character : path) {
-    // 2026-07-15 修改原因：v2 path 是纯路径而不是 URI；拒绝控制/空白以及会
-    // 引入 query、fragment、escape 或反斜杠歧义的字符，再调用 producer open。
+    // v2 path 拒绝控制字符、空白及 URI 歧义字符。
     if (character < 0x21U || character > 0x7eU || character == '?' ||
         character == '#' || character == '%' || character == '\\') {
       return false;
@@ -61,8 +60,7 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
 
   prrtsp_stream_t* opened = nullptr;
   const int32_t result = prrtsp_stream_open(&config, &opened);
-  // 2026-07-15 修改原因：CLEANUP_REQUIRED/失败 open 仍可能返回必须 close 的句柄；
-  // 先按物理槽位保存，再把原始 status 交给唯一 lifecycle owner。
+  // 失败 open 仍可能返回 handle，必须先接管再返回状态。
   if (opened != nullptr) {
     handles_[camera_id] = opened;
     widths_[camera_id] = config.width;
@@ -152,10 +150,7 @@ bool RtspChannels::CloseReverse() noexcept {
       ++close_calls_[camera_id];
       (void)prrtsp_stream_close(&handles_[camera_id]);
     }
-    // 2026-07-15 修改原因：前两次失败但后续成功仍属于完成 cleanup；只有三次后
-    // 句柄仍被 producer 保留才是不可恢复的关闭失败。
-    // 2026-07-15 修改原因：第三次失败后保留 opaque handle；上层据此非零退出，
-    // 不伪报 cleanup success，也不在同进程 restart/unload producer。
+    // close 最多三次；handle 仍非空表示 cleanup 未完成。
     if (handles_[camera_id] != nullptr) {
       success = false;
     }

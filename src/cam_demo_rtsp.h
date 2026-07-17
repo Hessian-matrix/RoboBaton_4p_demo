@@ -5,7 +5,7 @@
 #include <cstdint>
 
 extern "C" {
-// 2026-07-16 修改原因：保留 canonical include/pr_venc.h 路径，但其内容已同步为 PRRTSP opaque-handle v2 公共契约。
+// pr_venc.h 承载 PRRTSP opaque-handle v2 公共契约。
 #include "pr_venc.h"
 }
 
@@ -13,8 +13,7 @@ extern "C" {
 
 namespace robobaton_demo {
 
-// 2026-07-15 修改原因：v2 API 是 opaque handle API；四个槽位固定按物理 camera_id
-// 索引，禁止恢复 singleton/ch1..ch4 符号或把初始化顺序当作通道身份。
+// opaque handle 槽位固定按物理 camera id 索引。
 class RtspChannels {
  public:
   RtspChannels() = default;

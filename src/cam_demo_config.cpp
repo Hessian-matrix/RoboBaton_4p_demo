@@ -89,7 +89,7 @@ long long ParseLongLong(const std::string& text, const char* name) {
 // 输出：无。
 // 异常：参数不合法时抛出 std::invalid_argument。
 void ValidateOptions(const Options& options) {
-  // 2026-06-17 修改原因：交付主路径只支持完整四目；内部诊断只支持单颗物理 sensor，继续拒绝未验证的 2/3 路组合。
+  // 交付路径仅支持完整四目，内部诊断仅支持单颗物理 sensor。
   if (options.channels != 1 && options.channels != kMaxChannels) {
     throw std::invalid_argument("--channels is an internal debug option and only supports 1 or 4");
   }
@@ -112,8 +112,7 @@ void ValidateOptions(const Options& options) {
   if (options.url.size() < 2U || options.url.size() > 56U || options.url.front() != '/') {
     throw std::invalid_argument("--url must be a 2..56 byte path starting with '/'");
   }
-  // 2026-07-15 修改原因：在任何 SC/vendor side effect 前拒绝 v2 path 禁止字符，
-  // 避免 RTSP open 阶段才发现 query/fragment/escape/反斜杠或空白歧义。
+  // 在任何副作用前拒绝 query、fragment、escape 或路径歧义字符。
   for (unsigned char character : options.url) {
     if (character < 0x21U || character > 0x7eU || character == '?' ||
         character == '#' || character == '%' || character == '\\') {
@@ -124,7 +123,7 @@ void ValidateOptions(const Options& options) {
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
   }
-  // 2026-06-17 修改原因：对外 rotate=0 表示正装画面；实际底层 rotate=270 的慢路径对应对外 rotate=180，四路 60fps 下不支持。
+  // 对外 180 度进入底层 270 度慢路径，四路 60fps 不支持。
   if (InternalRotateDegrees(options) == 270 && options.fps == 60) {
     throw std::invalid_argument("--rotate 180 is not supported at 60fps; use --fps 30 or --rotate 0");
   }
@@ -169,14 +168,14 @@ Options ParseCommandLine(int argc, char** argv) {
       if (camera_id < 0 || camera_id >= kMaxChannels) {
         throw std::invalid_argument("--camera-id must be 0, 1, 2, or 3");
       }
-      // 2026-06-17 修改原因：内部单颗 sensor 诊断按物理 id 选路，避免继续使用“前 N 路”语义误导接线排查。
+      // 单颗诊断按物理 camera id 选路。
       options.camera_mask = 1U << static_cast<uint32_t>(camera_id);
       options.channels = 1;
       camera_selector_set = true;
     } else if (arg == "--camera-mask") {
       const uint32_t camera_mask = ParseUint32(RequireValue(argc, argv, &i, "--camera-mask"),
                                               "--camera-mask");
-      // 2026-06-17 修改原因：仅允许单颗或四颗，防止把未验证的 2/3 路 SDK 组合伪装成 mask 路径。
+      // camera mask 仅接受单颗诊断或完整四目组合。
       if (!IsSupportedCameraMask(camera_mask)) {
         throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
       }
@@ -232,7 +231,7 @@ Options ParseCommandLine(int argc, char** argv) {
 // 输入：options.trigger_mode，支持 software_gpio、vin_lpwm、none 等别名。
 // 副作用：覆盖当前进程的 SC132_TRIGGER_MODE；software_gpio 模式使用 GPIO417。
 void ConfigureSc132TriggerMode(const Options& options) {
-  // 命令行参数优先于 shell 环境，确保本次进程按显式配置启动。
+  // 命令行参数优先于 shell 环境。
   if (setenv(kSc132TriggerModeEnv, options.trigger_mode.c_str(), 1) != 0) {
     throw std::runtime_error("set SC132_TRIGGER_MODE failed");
   }
@@ -250,12 +249,12 @@ void ConfigureSc132SensorProfile(const Options& options) {
     return;
   }
 
-  // 2026-06-17 修改原因：四路同步路径沿用 libsc132 默认配置；单颗物理 sensor 60fps 需要 1lane profile 才能和 SDK pipeline 匹配。
+  // 四路使用默认 profile；单颗 60fps 使用匹配 SDK 的 1-lane profile。
   if (CameraMaskPopCount(options.camera_mask) != 1 || options.fps != 60) {
     return;
   }
 
-  // 2026-06-17 修改原因：setenv 只影响当前进程，避免修改板端全局 shell 环境。
+  // setenv 仅影响当前进程，不修改板端全局 shell 环境。
   if (setenv(kSc132SensorProfileEnv, kSc132Single60FpsProfile, 1) != 0) {
     throw std::runtime_error("set SC132_SENSOR_PROFILE failed");
   }

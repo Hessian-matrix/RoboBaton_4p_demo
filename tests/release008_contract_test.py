@@ -244,8 +244,7 @@ def verify_sc132_startup_correction_binding() -> None:
     module_text = module_path.read_text(encoding="utf-8")
     package_text = package_path.read_text(encoding="utf-8")
 
-    # 2026-07-16 修改原因：VERIFY-009-SC132-003 只允许四路 startup
-    # 修复后的 producer bytes；任何旧 generation 都必须在 production preflight fail closed。
+    # production preflight 只接受满足四路 startup 契约的 SC132 producer。
     for token in (REPLACEMENT_SC_MANIFEST_SHA256, REPLACEMENT_SC_ELF_SHA256):
         if token not in module_text or token not in package_text:
             raise AssertionError(f"replacement SC132 identity missing from scripts: {token}")
@@ -276,8 +275,7 @@ def verify_rtsp_board_addendum_binding() -> None:
     package_text = package_path.read_text(encoding="utf-8")
     runtime_text = runtime_path.read_text(encoding="utf-8")
 
-    # 2026-07-16 修改原因：VERIFY-009-RTSP-002 必须淘汰前一 VBV operand，
-    # 并让 active package/module gate 只接受 RC 修复后的 producer bytes。
+    # active package/module 只接受满足 RC 契约的 RTSP producer。
     for token in (REPLACEMENT_RTSP_MANIFEST_SHA256, REPLACEMENT_RTSP_ELF_SHA256):
         if token not in module_text or token not in package_text:
             raise AssertionError(f"replacement RTSP identity missing from scripts: {token}")
@@ -408,8 +406,8 @@ def compile_binary(output: Path, sanitizer: str | None,
     else:
         common[0:0] = ["-O2"]
 
-    # 2026-07-15 修改原因：cam_demo.cpp 单独重命名 main 后再链接生命周期 harness；
-    # join-failure gate 因而执行真实 production cleanup owner，而不是测试内复制流程。
+    # 重命名真实 cam_demo main 后链接 harness，
+    # 使 join-failure gate 执行 production cleanup owner。
     main_object = output.with_name(output.name + "-cam-main.o")
     run([compiler(), *common, "-Dmain=release008_cam_demo_main", "-c",
          str(cam_main_source), "-o", str(main_object)])

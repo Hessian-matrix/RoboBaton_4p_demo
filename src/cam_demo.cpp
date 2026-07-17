@@ -30,8 +30,8 @@ bool InjectJoinFailure(std::thread&, void*) { return false; }
 robobaton_demo::PipelineHooks MainPipelineHooks() {
   robobaton_demo::PipelineHooks hooks{};
 #ifdef RELEASE008_TESTING
-  // 2026-07-15 修改原因：仅 host production-bound test 可让真实 main cleanup
-  // owner 遇到未 reap 的 join failure；release build 不包含环境注入分支。
+  // Host production-bound 测试可在真实 main cleanup owner 中注入 join failure；
+  // release build 不包含该环境注入分支。
   const char* inject = std::getenv("RELEASE008_TEST_JOIN_FAILURE");
   if (inject != nullptr && inject[0] != '\0') {
     hooks.join_thread = InjectJoinFailure;
@@ -49,8 +49,8 @@ int main(int argc, char** argv) {
   bool sc_start_attempted = false;
   bool consumer_quiescent = false;
 
-  // 2026-07-15 修改原因：callback/context 与失败 close handle 在进程结束前保持有效；
-  // 特别是 SC stop/RTSP 第三次 close 失败后禁止析构驱动 restart/unload 路径。
+  // callback context 与关闭失败后仍被 producer 持有的 handle
+  // 必须存活到进程结束，避免析构触发 restart/unload。
   auto* rtsp = new RtspChannels();
   FramePipeline* pipeline = nullptr;
 
@@ -132,8 +132,7 @@ int main(int argc, char** argv) {
   }
 
   if (!consumer_quiescent) {
-    // 2026-07-15 修改原因：join failure 时不能声称 producer/RTSP 已 quiescent；
-    // 保留所有 ownership flag/context，并直接非零终止，禁止 close/unload/restart。
+    // join failure 后尚未 quiescent，必须保留 ownership 并非零终止。
     std::cerr << "fatal: consumer join failed; skipping RTSP status/close\n" << std::flush;
     std::_Exit(1);
   }

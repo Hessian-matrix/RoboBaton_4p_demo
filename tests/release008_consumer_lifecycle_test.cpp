@@ -510,8 +510,8 @@ void TestIcmBurstOrderAndQueueFullFailClosed() {
   options.count = 1U;
   IcmObserverState state;
 
-  // 2026-07-16 修改原因：真实 RunIcmConsumer 必须按 FIFO 顺序交付 producer
-  // 在 start 内同步产生的 burst；单槽实现会错误交付最后一个时间戳。
+  // RunIcmConsumer 按 FIFO 交付 start 内同步产生的 burst，
+  // 防止单槽 latest-value 语义覆盖较早样本。
   Check(RunIcmConsumer(options, ObserveIcm, &state) == 0, "ICM burst run");
   Check(state.timestamps == std::vector<uint64_t>{100U},
         "ICM burst did not preserve oldest sample");
