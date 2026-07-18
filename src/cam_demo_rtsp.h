@@ -4,10 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-extern "C" {
-// pr_venc.h 承载 PRRTSP opaque-handle v2 公共契约。
-#include "pr_venc.h"
-}
+#include "prrtsp_v2.h"
 
 #include "cam_demo_common.h"
 

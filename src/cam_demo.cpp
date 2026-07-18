@@ -64,7 +64,8 @@ int main(int argc, char** argv) {
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps << " rotate=" << options.rotate_degrees
-              << " kbps=" << options.bps << " path=" << options.url << "\n";
+              << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
+              << " path=" << options.url << "\n";
 
     if (sc132_set_fps(static_cast<uint32_t>(options.fps)) != SC132_STATUS_OK) {
       throw std::runtime_error("sc132_set_fps failed");

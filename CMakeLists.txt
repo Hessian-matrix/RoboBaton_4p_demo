@@ -140,6 +140,6 @@ install(FILES "${ICM42688_SO}" "${SC132_SO}" "${PRRTSP_SO}"
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/include/icm42688_driver.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/sc132camera.h"
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/pr_venc.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/prrtsp_v2.h"
   DESTINATION include
 )

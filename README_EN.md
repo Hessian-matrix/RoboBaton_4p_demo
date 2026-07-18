@@ -10,32 +10,36 @@ This is the minimal user-facing demo package. It includes the SC132 4-camera RTS
 ```text
 open_source_demo/
 ├── CMakeLists.txt
-├── README.md
-├── README_EN.md
+├── README.md / README_EN.md
+├── demo/                    # Runtime package deployable to X5 /root/demo
+│   ├── cam_demo / imu_reader_demo / serial_port_demo
+│   ├── env.sh / manifest.sha256
+│   ├── bin/                 # AArch64 executables
+│   └── lib/                 # Shared libraries matched to the runtime package
+├── image/                   # Wiring images used by the README files
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
-│   └── pr_venc.h
-├── lib/
-│   ├── libicm42688.so
-│   ├── libsc132.so
-│   └── libprrtsp.so
+│   └── prrtsp_v2.h
+├── lib/                     # Delivered libraries used for source cross-builds
 ├── scripts/
 │   ├── build_cam_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
-│   └── package_runtime.sh
+│   ├── cam_demo_regression.sh
+│   ├── package_runtime.sh
+│   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp
-    ├── cam_demo_common.h / cam_demo_common.cpp
-    ├── cam_demo_config.h / cam_demo_config.cpp
-    ├── cam_demo_pipeline.h / cam_demo_pipeline.cpp
-    ├── cam_demo_rtsp.h / cam_demo_rtsp.cpp
+    ├── cam_demo_common.* / cam_demo_config.*
+    ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
 
 `cam_demo.cpp` keeps the main flow and user extension hooks. Command-line parsing, RTSP wrapping, frame queues, and background streaming are split into `cam_demo_config.*`, `cam_demo_rtsp.*`, and `cam_demo_pipeline.*` for easier reading.
+
+This public repository does not contain the internal `tests/` directory or release checklist. When integrated into the top-level `4cam` workspace, those maintainer assets live under `tests/robobaton_4p_demo/`; they are not part of the user source delivery or the board-side `demo/` package. `build_x5/`, `.package-build-*`, `regression_logs/`, and Python caches are local generated artifacts and are not release content.
 
 ## 2. Build
 
@@ -90,7 +94,7 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
-> Current repository status: `demo/` has been regenerated from the latest C ABI v2 executables and all three shared libraries, and passes host-side `scripts/verify_runtime_package.py` plus `manifest.sha256` verification. This proves the AArch64 build, ABI versions, and package hashes only. X5 target-board `ldd`, `--help`, IMU, camera, and RTSP smoke tests have not run, so this is not yet a board-verified release.
+> Current repository status: as of 2026-07-17, `demo/` has been regenerated from the current C ABI v2 sources and all three delivered shared libraries, and passes `scripts/verify_runtime_package.py` plus `manifest.sha256` package-integrity verification. The three real shared libraries under `lib/` and `demo/lib/` now match byte-for-byte, so the H.265 provider is included in the board runtime package. This proves that the AArch64 build, ABI, dependencies, and hashes are internally consistent; final delivery still requires X5 board `ldd`, `--help`, IMU, camera, H.264 RTSP, and H.265 RTSP smoke tests.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -182,7 +186,7 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly; it starts the fixed four-camera, 60fps, upright `1280x1088` output path.
+`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly for fixed four-camera, 60fps, H.264, upright `1280x1088` output; run `./cam_demo --codec h265` to switch all four streams to H.265.
 
 Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
 
@@ -192,8 +196,9 @@ Common options:
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
 --fps <30|60>      Camera and encoder fps, default 60
+--codec <h264|h265> Video codec, default h264
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 60fps
---bps <kbps>       Target average encoder bitrate in kbps, default 4000; H.264 + P-frame GOP motion-quality baseline, can be overridden for bandwidth/quality trade-offs
+--bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print per-channel send timing and timestamp skew diagnostics
@@ -201,7 +206,20 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses the fixed four-camera, 60fps, upright `1280x1088` output path. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
+Limit: default `./cam_demo` uses fixed four-camera, 60fps, H.264, upright `1280x1088` output. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
+
+### H.265 Client Playback Notes
+
+The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. When four `1280x1088@60fps` streams are displayed concurrently, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not by itself indicate a board-side encoder or RTSP transmission failure.
+
+Check both sides when diagnosing playback:
+
+- If the board reports per-channel `fps` close to the target, keeps `full_waits=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
+- Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain four 60fps streams.
+- If the client still cannot play in real time, reduce `--fps` to `30`, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
+- With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
+
+H.265 acceptance must therefore verify both that the board continuously publishes a valid bitstream and that the target client can decode and render it in real time. Do not use one player's visual smoothness as the sole indicator of board-side interface health.
 
 Default RTSP URLs:
 
@@ -254,7 +272,12 @@ ffprobe -v error -rtsp_transport tcp \
 Expected output includes:
 
 ```text
+# Default ./cam_demo
 codec_name=h264
+
+# ./cam_demo --codec h265
+codec_name=hevc
+
 width=1280
 height=1088
 avg_frame_rate=60/1
@@ -262,7 +285,7 @@ avg_frame_rate=60/1
 
 Diagnosis guide:
 
-- If the board log prints `Found sensor_name:sc132gs-1280p` and `ffprobe` receives an H.264 stream, that sensor plus its I2C, MIPI/VIN, and RTSP path are basically healthy.
+- If the board log prints `Found sensor_name:sc132gs-1280p` and `ffprobe` receives the selected `h264` or `hevc` stream, that sensor plus its I2C, MIPI/VIN, and RTSP path are basically healthy.
 - If only one `--camera-id` fails, check that camera connector, FPC cable, power, and cable orientation first.
 - If all four sensors work individually but the default four-camera mode fails, check the four-camera trigger wiring, GPIO417 external trigger, `cam-service`, and whether another camera process is using the hardware.
 
@@ -274,7 +297,7 @@ Frame flow:
 2. `libsc132.so` synchronizes the four camera frames and emits a frame-set callback after grouping succeeds.
 3. The demo calls the user hook inside the frame-set callback, then retains each frame and pushes it into the corresponding RTSP queue.
 4. If a queue is full, the callback waits for a free slot instead of dropping older frames.
-5. Worker threads pop frames and call the matching `Rtsp_SendImg*_planes()` function.
+5. Worker threads pop frames, build `prrtsp_nv12_frame_v2`, and call `prrtsp_stream_send()`.
 6. Worker threads call `sc132_frame_release()` after processing.
 
 The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default `2000000 ns` covers the measured approximately `1.06 ms` same-frame pipeline phase at 30 fps while remaining far below one frame period. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
@@ -288,7 +311,7 @@ Log fields:
 - `camera_ts_ns`: camera frame timestamp in `ns`; sensor/VIO timestamp first, system output timestamp as fallback
 - `full_waits`: number of times the callback waited for a full queue; this should remain `0` in stable streaming
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
-- `send_avg_ms` / `send_max_ms`: `Rtsp_SendImg*_planes()` call timing when `--diagnostics` is enabled
+- `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
 - `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
 
 ## 5. IMU Reader Demo

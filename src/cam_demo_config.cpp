@@ -23,6 +23,7 @@ void PrintUsage(const char* program) {
             << "  --fps <30|60>     Camera and encoder fps, default 60\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
+            << "  --codec <h264|h265> Encoder format, default h264\n"
             << "  --url <path>      RTSP URL path, default /PRR\n"
             << "  --diagnostics     Print per-channel RTSP timing diagnostics\n"
             << "  --diag-interval-ms <ms> Diagnostics interval, default 1000\n"
@@ -83,6 +84,18 @@ long long ParseLongLong(const std::string& text, const char* name) {
     throw std::invalid_argument(std::string("invalid integer for ") + name);
   }
   return value;
+}
+
+// 将不可信的 CLI 编码格式收敛为强类型枚举，仅接受 h264/h265。
+// 输入：小写编码格式文本；输出：VideoCodec；非法值抛出 std::invalid_argument。
+VideoCodec ParseVideoCodec(const std::string& text) {
+  if (text == "h264") {
+    return VideoCodec::kH264;
+  }
+  if (text == "h265") {
+    return VideoCodec::kH265;
+  }
+  throw std::invalid_argument("--codec must be h264 or h265");
 }
 
 // 功能：检查运行参数是否处于 demo 支持范围。
@@ -191,6 +204,8 @@ Options ParseCommandLine(int argc, char** argv) {
       options.fps = ParseInt(RequireValue(argc, argv, &i, "--fps"), "--fps");
     } else if (arg == "--bps") {
       options.bps = ParseLongLong(RequireValue(argc, argv, &i, "--bps"), "--bps");
+    } else if (arg == "--codec") {
+      options.video_codec = ParseVideoCodec(RequireValue(argc, argv, &i, "--codec"));
     } else if (arg == "--url") {
       options.url = RequireValue(argc, argv, &i, "--url");
     } else if (arg == "--rotate") {

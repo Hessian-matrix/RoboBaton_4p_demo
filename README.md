@@ -10,32 +10,36 @@ English version: [README_EN.md](README_EN.md)
 ```text
 open_source_demo/
 ├── CMakeLists.txt
-├── README.md
-├── README_EN.md
+├── README.md / README_EN.md
+├── demo/                    # 可直接部署到 X5 /root/demo 的运行包
+│   ├── cam_demo / imu_reader_demo / serial_port_demo
+│   ├── env.sh / manifest.sha256
+│   ├── bin/                 # AArch64 可执行文件
+│   └── lib/                 # 与运行包匹配的三套动态库
+├── image/                   # README 接线图片
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
-│   └── pr_venc.h
-├── lib/
-│   ├── libicm42688.so
-│   ├── libsc132.so
-│   └── libprrtsp.so
+│   └── prrtsp_v2.h
+├── lib/                     # 源码交叉构建时链接的交付库
 ├── scripts/
 │   ├── build_cam_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
-│   └── package_runtime.sh
+│   ├── cam_demo_regression.sh
+│   ├── package_runtime.sh
+│   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp
-    ├── cam_demo_common.h / cam_demo_common.cpp
-    ├── cam_demo_config.h / cam_demo_config.cpp
-    ├── cam_demo_pipeline.h / cam_demo_pipeline.cpp
-    ├── cam_demo_rtsp.h / cam_demo_rtsp.cpp
+    ├── cam_demo_common.* / cam_demo_config.*
+    ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
 
 `cam_demo.cpp` 保留主流程和用户二次开发入口；配置解析、RTSP 封装、帧队列和后台推流流程分别拆到 `cam_demo_config.*`、`cam_demo_rtsp.*`、`cam_demo_pipeline.*`，便于用户按模块阅读。
+
+本公开仓库不包含内部 `tests/` 和发布检查清单。集成到顶层 `4cam` 工作区时，这些维护资产位于主仓库的 `tests/robobaton_4p_demo/`；它们不属于用户源码交付，也不会进入 `demo/` 板端运行包。`build_x5/`、`.package-build-*`、`regression_logs/` 和 Python 缓存均为本地生成物，不属于发布内容。
 
 ## 2. 构建
 
@@ -90,7 +94,7 @@ file lib/libprrtsp.so
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示：`demo/` 已由最新 C ABI v2 可执行文件和三套 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 开发机校验。该结果只证明 AArch64 构建、ABI 版本和包内哈希一致；X5 目标板 `ldd/--help/IMU/相机/RTSP` smoke 尚未执行，不能标记为实机发布完成。
+> 当前仓库状态提示：截至 2026-07-17，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；`lib/` 与 `demo/lib/` 中三套 real SO 已逐字节一致，H.265 provider 已进入板端运行包。该结果证明 AArch64 构建、ABI、依赖和哈希自洽；最终发布前仍需在目标 X5 上完成 `ldd/--help/IMU/相机/H.264/H.265 RTSP` smoke。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -181,7 +185,7 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、60fps、正装方向 `1280x1088` 输出。
+`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、60fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
 
 部署时请整目录拷贝 `/root/demo` 运行包。顶层入口会设置 `LD_LIBRARY_PATH`，如果只拷贝 `bin/cam_demo` 或单个 `.so`，板端可能加载系统库，导致运行环境和交付包不一致。
 
@@ -191,8 +195,9 @@ killall -q cam_demo 2>/dev/null || true
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
 --fps <30|60>      相机和编码帧率，默认 60
+--codec <h264|h265> 编码格式，默认 h264
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 60fps
---bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；H.264 + P 帧 GOP 运动画质基线，可按带宽/画质折中覆盖
+--bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息
@@ -200,7 +205,20 @@ killall -q cam_demo 2>/dev/null || true
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认 `./cam_demo` 使用固定四路、60fps、正装方向 `1280x1088` 输出。`--rotate 180` 仅支持 30fps 降载模式，不支持 60fps。
+限制说明：默认 `./cam_demo` 使用固定四路、60fps、H.264、正装方向 `1280x1088` 输出。`--codec h265` 使用相同的四路端口和 path。`--rotate 180` 仅支持 30fps 降载模式，不支持 60fps。
+
+### H.265 客户端播放说明
+
+`--codec h265` 的板端编码和 RTSP 接口已经完成，可输出固定四路 H.265 码流。四路 `1280x1088@60fps` 同时播放时，部分客户端可能因 H.265 接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或 RTSP 发送失败。
+
+排查时应同时观察板端和客户端：
+
+- 如果板端日志中四路 `fps` 接近目标值、`full_waits=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
+- 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法稳定处理四路 60fps。
+- 如果客户端仍无法实时播放，可将 `--fps` 降为 `30`、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
+- H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
+
+因此，验收 H.265 接口时应分别确认“板端持续输出有效码流”和“目标客户端能够实时解码显示”，不要只凭单一播放器的画面流畅度判断板端接口状态。
 
 默认四路 RTSP 地址：
 
@@ -253,7 +271,12 @@ ffprobe -v error -rtsp_transport tcp \
 正常输出应包含：
 
 ```text
+# 默认 ./cam_demo
 codec_name=h264
+
+# ./cam_demo --codec h265
+codec_name=hevc
+
 width=1280
 height=1088
 avg_frame_rate=60/1
@@ -261,7 +284,7 @@ avg_frame_rate=60/1
 
 判定建议：
 
-- 板端日志出现 `Found sensor_name:sc132gs-1280p`，且 `ffprobe` 能读到 H.264 码流，说明该 sensor、I2C、MIPI/VIN 和 RTSP 链路基本正常。
+- 板端日志出现 `Found sensor_name:sc132gs-1280p`，且 `ffprobe` 能按所选格式读到 `h264` 或 `hevc` 码流，说明该 sensor、I2C、MIPI/VIN 和 RTSP 链路基本正常。
 - 只有某个 `--camera-id` 失败时，优先检查对应 camera 接口、FPC、供电和连接方向。
 - 四颗单独都能出图但默认四路失败时，优先检查四路同步触发、GPIO417 外触发线、`cam-service` 状态和是否有其他相机进程占用资源。
 
@@ -273,7 +296,7 @@ avg_frame_rate=60/1
 2. `libsc132.so` 对四路相机帧做同步配组，配组成功后回调给 demo。
 3. demo 在帧组回调里调用用户入口，并给每路 frame `retain` 后放入对应 RTSP 队列。
 4. 队列满时等待后台线程释放空槽，不丢弃旧帧。
-5. 后台线程从队列取帧，调用对应 `Rtsp_SendImg*_planes()` 推流。
+5. 后台线程从队列取帧，构造 `prrtsp_nv12_frame_v2` 并调用 `prrtsp_stream_send()` 推流。
 6. 后台线程处理完成后调用 `sc132_frame_release()` 归还帧。
 
 用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`libsc132.so` 仅在归一化 `frame_id` 一致且 timestamp skew 不超过配置上限时放行，默认上限 `2000000 ns` 覆盖 30fps 板端实测约 `1.06 ms` 的同帧链路相位差，同时仍远小于一帧周期。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
@@ -288,7 +311,7 @@ avg_frame_rate=60/1
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `full_waits`：队列满时回调等待空槽的次数，正常稳定推流时应长期为 `0`
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
-- `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `Rtsp_SendImg*_planes()` 调用耗时
+- `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `prrtsp_stream_send()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
 
 ## 5. IMU 读取 Demo

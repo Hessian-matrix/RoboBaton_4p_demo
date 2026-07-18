@@ -95,7 +95,7 @@ resolve_project_path() {
   fi
 }
 
-# 2026-07-17 修改原因：读取 CMake 已解析的编译器，而不是猜测 toolchain 文件中的条件分支。
+# 从 CMake 编译器元数据读取实际编译器，避免猜测 toolchain 文件中的条件分支。
 read_configured_c_compiler() {
   local metadata_files=("${ICM_BUILD_DIR}"/CMakeFiles/*/CMakeCCompiler.cmake)
   local metadata_file=""
@@ -170,13 +170,13 @@ cmake -S "${WORKSPACE_DIR}" -B "${ICM_BUILD_DIR}" \
   -DROBOBATON_SYNC_BUILT_SHARED_LIBS=ON \
   -DROBOBATON_DEMO_LIB_DIR="${PACKAGE_LIB_DIR}" \
   -DROBOBATON_DEMO_ICM_HEADER="${PROJECT_DIR}/include/icm42688_driver.h"
-# 2026-07-17 修改原因：用 CMake 实际选中的 C 编译器 triplet 统一 SC132 与 RTSP，避免各脚本回退到 /opt 默认值。
+# 使用 CMake 实际选中的 C 编译器 triplet 统一 SC132 与 RTSP 的工具链。
 PRODUCER_GCC="$(read_configured_c_compiler)"
 if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then
   echo "Configured C compiler does not support -dumpmachine: ${PRODUCER_GCC}" >&2
   exit 1
 fi
-# 2026-07-17 修改原因：拒绝空值、路径或含空白的伪 triplet，避免拼接出仓库外或错误的工具路径。
+# 拒绝空值、路径或含空白的伪 triplet，避免拼接出仓库外或错误的工具路径。
 if [[ -z "${TARGET_TRIPLET}" || "${TARGET_TRIPLET}" == */* || "${TARGET_TRIPLET}" == *[[:space:]]* ]]; then
   echo "Configured C compiler returned invalid target triplet: ${TARGET_TRIPLET:-<empty>}" >&2
   exit 1
@@ -184,7 +184,7 @@ fi
 TOOLCHAIN_BIN_DIR="$(cd "$(dirname "${PRODUCER_GCC}")" && pwd)"
 PRODUCER_CROSS_COMPILE="${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-"
 DERIVED_STRIP_TOOL="${PRODUCER_CROSS_COMPILE}strip"
-# 2026-07-17 修改原因：要求 strip 与编译器同目录同 triplet，保证 producer 和最终可执行文件使用同一工具链族。
+# strip 必须与编译器位于同一目录并使用同一 triplet，保证 producer 和最终可执行文件使用同一工具链族。
 if [[ ! -x "${DERIVED_STRIP_TOOL}" ]]; then
   echo "Missing companion strip for configured C compiler: ${DERIVED_STRIP_TOOL}" >&2
   exit 1

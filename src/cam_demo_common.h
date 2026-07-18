@@ -29,6 +29,12 @@ constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
 
 extern std::atomic<bool> g_stop_requested;
+enum class VideoCodec : uint32_t {
+  kH264 = 0U,
+  kH265 = 1U,
+};
+
+const char* VideoCodecName(VideoCodec codec) noexcept;
 
 struct Options {
   int channels = kMaxChannels;
@@ -37,6 +43,7 @@ struct Options {
   int height = kDefaultHeight;
   int fps = kDefaultFps;
   long long bps = kDefaultBps;
+  VideoCodec video_codec = VideoCodec::kH264;
   std::string url = "/PRR";
   int rotate_degrees = kDefaultRotateDegrees;
   bool diagnostics = false;

@@ -57,6 +57,18 @@ uint64_t SteadyClockNowNs() {
 
 int RtspPortForChannel(int channel) { return kBaseRtspPort + channel; }
 
+// 编码格式名称统一用于用户可见的状态和日志输出。
+const char* VideoCodecName(VideoCodec codec) noexcept {
+  switch (codec) {
+    case VideoCodec::kH264:
+      return "h264";
+    case VideoCodec::kH265:
+      return "h265";
+  }
+  // 非法枚举统一输出 unknown，避免日志路径产生未定义行为。
+  return "unknown";
+}
+
 uint32_t CameraMaskFromChannelCount(int channels) {
   if (channels <= 0) {
     return 0U;
@@ -93,14 +105,14 @@ bool IsSupportedCameraMask(uint32_t camera_mask) {
 }
 
 int OutputWidth(const Options& options) {
-  // 2026-07-17 修改原因：width/height 是默认横屏交付画布；外部 0/180 保持画布轴，90/270 才交换。
+  // width/height 是默认横屏交付画布；外部 0/180 保持画布轴，90/270 交换宽高。
   return options.rotate_degrees == 90 || options.rotate_degrees == 270
              ? options.height
              : options.width;
 }
 
 int OutputHeight(const Options& options) {
-  // 2026-07-17 修改原因：与 OutputWidth 共用对外交付坐标系，安装补偿只影响底层角度，不得二次交换画布。
+  // 安装补偿只影响底层旋转角度，不改变对外交付画布的宽高判定。
   return options.rotate_degrees == 90 || options.rotate_degrees == 270
              ? options.width
              : options.height;

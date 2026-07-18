@@ -45,8 +45,21 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
     return PRRTSP_E_INVALID_ARGUMENT;
   }
 
+  // 在 consumer 边界将强类型编码格式映射到 PRRTSP v2.1 ABI。
+  uint32_t codec = PRRTSP_CODEC_DEFAULT;
+  switch (options.video_codec) {
+    case VideoCodec::kH264:
+      codec = PRRTSP_CODEC_H264;
+      break;
+    case VideoCodec::kH265:
+      codec = PRRTSP_CODEC_H265;
+      break;
+    default:
+      return PRRTSP_E_UNSUPPORTED;
+  }
+
   prrtsp_stream_config_v2 config{};
-  config.struct_size = PRRTSP_STREAM_CONFIG_V2_0_SIZE;
+  config.struct_size = PRRTSP_STREAM_CONFIG_V2_1_SIZE;
   config.flags = 0U;
   config.width = static_cast<uint32_t>(output_width);
   config.height = static_cast<uint32_t>(output_height);
@@ -56,6 +69,7 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
   config.rotation_clockwise = 0U;
   config.port = static_cast<uint32_t>(port);
   config.operation_timeout_ms = 1000U;
+  config.codec = codec;
   std::memcpy(config.path, options.url.data(), options.url.size());
 
   prrtsp_stream_t* opened = nullptr;

@@ -31,10 +31,15 @@ extern "C" {
 #define PRRTSP_STREAM_ERROR ((uint32_t)4)
 
 #define PRRTSP_STREAM_CONFIG_V2_0_SIZE ((uint32_t)232)
+#define PRRTSP_STREAM_CONFIG_V2_1_SIZE ((uint32_t)240)
 #define PRRTSP_NV12_FRAME_V2_0_SIZE ((uint32_t)152)
 #define PRRTSP_STREAM_STATUS_V2_0_SIZE ((uint32_t)104)
 #define PRRTSP_PATH_CAPACITY_BYTES ((uint32_t)128)
 #define PRRTSP_PATH_CONTENT_MAX_BYTES_V2_0 ((uint32_t)56)
+
+#define PRRTSP_CODEC_DEFAULT ((uint32_t)0)
+#define PRRTSP_CODEC_H264 ((uint32_t)1)
+#define PRRTSP_CODEC_H265 ((uint32_t)2)
 
 typedef struct prrtsp_stream prrtsp_stream_t;
 
@@ -51,6 +56,8 @@ typedef struct prrtsp_stream_config_v2 {
     uint32_t operation_timeout_ms;
     char path[128];
     uint64_t reserved[8];
+    uint32_t codec;
+    uint32_t reserved_v2_1;
 } prrtsp_stream_config_v2;
 
 typedef struct prrtsp_nv12_frame_v2 {

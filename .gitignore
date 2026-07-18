@@ -3,3 +3,5 @@ build_x5_syncfix/*
 regression_logs/*
 *.bin
 .package-build-icm42688/
+__pycache__/
+*.py[cod]
