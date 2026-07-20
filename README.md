@@ -328,14 +328,14 @@ avg_frame_rate=60/1
 ./imu_reader_demo --sample-rate-hz 1000 --count 10000
 ```
 
-默认终端输出频率跟随 `--sample-rate-hz`，即每个 IMU 样本都打印；若需要限速，
-可显式设置 `--print-rate-hz`，该值必须不超过 `--sample-rate-hz`。
-显式设置为 `0` 时禁用终端输出，但仍消费并计入全部 IMU 样本，`--count` 语义不变。
+终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置
+`--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0`
+时禁用终端输出，`--count` 语义不变。
 
 输出字段：
 
 - `ts_ns`：host monotonic clock 时间戳，单位 `ns`
-- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认逐样本输出时代表相邻 IMU 样本周期，1 kHz 下通常约为 `1 ms`
+- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，显式使用 `--print-rate-hz 1000` 时约为 `1ms`
 - `temp_c`：温度，单位 `degC`
 - `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
@@ -347,8 +347,9 @@ avg_frame_rate=60/1
 - FIFO 模式下，驱动按配置 ODR 展开连续时间戳，用于提供稳定 `dt`
 - 当前时间戳不是 FSYNC 外部同步时间戳
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
-- CLI 默认打印每个 IMU 样本；1 kHz 同步终端输出可能使 FIFO 持续积压，可用较小的 `--print-rate-hz` 主动限速
-- 若自定义 observer 的平均处理时间超过采样周期，FIFO 仍会按设计 fail-closed，不会静默丢样
+- CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本
+- 默认 10Hz 进一步降低正常终端的文本量；`--print-rate-hz 1000` 可用于诊断，但慢 sink 下输出日志不保证完整
+- 若自定义 observer 的平均处理时间超过采样周期等 owner 计算路径持续变慢，64 槽 FIFO 仍按设计 fail-closed，禁止静默丢 IMU 样本
 
 ## 6. 串口通信 Demo
 

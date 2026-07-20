@@ -328,16 +328,15 @@ Example:
 ./imu_reader_demo --sample-rate-hz 1000 --count 10000
 ```
 
-Terminal output defaults to `--sample-rate-hz`, so every IMU sample is printed.
-Set `--print-rate-hz` explicitly to limit output; it must not exceed
-`--sample-rate-hz`.
-Set it explicitly to `0` to disable terminal output while still consuming and counting
-every IMU sample; `--count` semantics do not change.
+Terminal output defaults to `10 Hz` while the program still consumes and counts every
+IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
+exceed `--sample-rate-hz`. Set it to `0` to disable terminal output without changing
+`--count` semantics.
 
 Output fields:
 
 - `ts_ns`: host monotonic clock timestamp in `ns`
-- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; with default per-sample output it represents the adjacent IMU sample period, typically about `1 ms` at 1 kHz
+- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or about `1 ms` with explicit `--print-rate-hz 1000`
 - `temp_c`: temperature in `degC`
 - `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
@@ -349,8 +348,9 @@ Notes:
 - In FIFO mode, the driver expands sample timestamps by the configured ODR to provide stable `dt`.
 - The timestamp is not an external FSYNC timestamp.
 - The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
-- The CLI prints every IMU sample by default; synchronous 1 kHz terminal output can create sustained FIFO backlog, so use a lower `--print-rate-hz` when needed.
-- A custom observer whose average processing time exceeds the sample period still causes the FIFO to fail closed; samples are never dropped silently.
+- CLI output uses one non-blocking write per line. If an SSH session, pipe, or log collector slows down or closes, CLI log lines are dropped while the owner continues consuming every IMU sample.
+- The 10 Hz default further reduces normal terminal traffic. Explicit `--print-rate-hz 1000` remains available for diagnostics, but log completeness is not guaranteed with a slow sink.
+- If a custom observer or other owner-side computation remains slower than the sample period, the bounded 64-slot FIFO still fails closed rather than silently dropping IMU samples.
 
 ## 6. UART Communication Demo
 
