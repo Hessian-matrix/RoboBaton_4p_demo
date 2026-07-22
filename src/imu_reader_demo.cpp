@@ -208,7 +208,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
   if (state->print_every_samples == 0U) {
     return;
   }
-  // 2026-07-19 修改原因：仅在固定抽样点尝试输出；输出端失效后仍完整消费样本。
+  // 仅在固定抽样点尝试输出；输出端失效后仍完整消费样本。
   if (state->observed_samples != 1U &&
       (state->observed_samples - 1U) % state->print_every_samples != 0U) {
     return;
@@ -228,7 +228,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
                 sample.accel_mps2[1] * sample.accel_mps2[1] +
                 sample.accel_mps2[2] * sample.accel_mps2[2]);
 
-  // 2026-07-19 修改原因：固定栈缓冲保证单行小于 PIPE_BUF，一次 write 对 pipe 保持原子性，
+  // 固定栈缓冲保证单行小于 PIPE_BUF，一次 write 对 pipe 保持原子性，
   // 且避免 iostream 在 O_NONBLOCK fd 上产生不可控的缓冲、重试或部分写行为。
   std::array<char, PIPE_BUF> line;
   const int line_length = std::snprintf(
@@ -251,7 +251,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
     return;
   }
 
-  // 2026-07-19 修改原因：慢 sink 或信号中断只丢当前日志，owner 绝不重试；
+  // 慢 sink 或信号中断只丢当前日志，owner 绝不重试；
   // partial write 与 EPIPE/永久 fd 错误均关闭后续日志，避免连续产生截断行。
   ++state->dropped_output_lines;
   if (written >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
@@ -279,7 +279,7 @@ std::string RequireValue(int argc, char** argv, int* index, const char* name) {
 class ScopedNonblockingFd final {
  public:
   explicit ScopedNonblockingFd(int fd) : fd_(fd), original_flags_(fcntl(fd, F_GETFL, 0)) {
-    // 2026-07-19 修改原因：仅成功设置非阻塞位后才 armed；失败时调用方必须禁用输出。
+    // 仅成功设置非阻塞位后才 armed；失败时调用方必须禁用输出。
     if (original_flags_ >= 0 &&
         fcntl(fd_, F_SETFL, original_flags_ | O_NONBLOCK) == 0) {
       armed_ = true;
@@ -291,7 +291,7 @@ class ScopedNonblockingFd final {
 
   ~ScopedNonblockingFd() {
     if (armed_ && fcntl(fd_, F_SETFL, original_flags_) < 0) {
-      // 2026-07-19 修改原因：析构路径不得抛异常，但恢复失败必须留下明确诊断。
+      // 析构路径不得抛异常，但恢复失败必须留下明确诊断。
       constexpr char kWarning[] =
           "warning: failed to restore stdout file status flags\n";
       const ssize_t warning_result =
@@ -338,7 +338,7 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       throw std::invalid_argument("unknown argument: " + argument);
     }
   }
-  // 2026-07-19 修改原因：默认 10Hz 只限制终端日志，owner 仍消费全部 IMU 样本。
+  // 默认 10Hz 只限制终端日志，owner 仍消费全部 IMU 样本。
   constexpr uint32_t kDefaultPrintRateHz = 10U;
   *print_rate_hz = print_rate_was_set
                        ? requested_print_rate_hz
@@ -356,14 +356,14 @@ int main(int argc, char** argv) {
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
-    // 2026-07-19 修改原因：stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。
+    // stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。
     signal(SIGPIPE, SIG_IGN);
     uint32_t print_rate_hz = 0U;
     const ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
         robobaton_demo::ImuPrintEverySamples(options.sample_rate_hz, print_rate_hz);
-    // 2026-07-19 修改原因：非阻塞标志属于共享 OFD；RAII 将修改严格限制在采集窗口，
+    // 非阻塞标志属于共享 OFD；RAII 将修改严格限制在采集窗口，
     // 设置失败时禁用 CLI 输出，析构覆盖正常返回和异常路径并恢复调用方状态。
     ScopedNonblockingFd output_mode(state.output_fd);
     state.output_available = output_mode.active();

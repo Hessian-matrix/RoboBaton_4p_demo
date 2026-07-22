@@ -19,7 +19,7 @@ extern "C" {
 #define SC132_FRAME_SET_MAX_CAMERAS 4U
 #define SC132_NATIVE_OUTPUT_WIDTH 1280U
 #define SC132_NATIVE_OUTPUT_HEIGHT 1088U
-/* 30fps 四路同一曝光帧存在约 1.06ms 的视频链路时间戳相位差；默认 2ms 可避免误丢同帧且仍远小于单帧周期。 */
+/* 30 帧四路同一曝光帧实测存在约 1.06 毫秒的视频链路时间戳相位差，默认 2 毫秒可避免误丢同帧且仍远小于单帧周期。 */
 #define SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS 2000000ULL
 
 typedef struct sc132_frame sc132_frame_t;
@@ -65,7 +65,7 @@ typedef struct sc132_frame_set {
 } sc132_frame_set_t;
 
 /*
- * DMA 帧的只读访问、时间域和引用生命周期约束如下：
+ * 明确 DMA 帧的只读访问、时间域和引用生命周期，防止 release 后继续保存裸指针。
  * timestamp_ns 单位为 ns，优先使用 sensor/VIO 随帧时间；缺失时退回系统出帧时间，两者不保证与墙上时钟同域。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
  * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback
@@ -101,7 +101,7 @@ void sc132_frame_release(sc132_frame_t *frame);
 int32_t sc132_frame_get_info(const sc132_frame_t *frame,
                              sc132_frame_info_t *out_info);
 /*
- * 两阶段关闭用于避免阻塞回调与 retained frame 相互等待：
+ * 两阶段关闭避免阻塞回调与 retained frame 相互等待。
  * request_stop 只线性化停止、禁止新采集/新 callback admission 并广播唤醒；它不 drain/release frame，
  * 不调用 vendor API，也不 join trigger、worker、dispatcher 或等待 callback，因而可从任意线程快速返回。
  * idle 状态调用 request_stop 也会锁存 STOPPING；必须再由非回调线程调用 blocking sc132_stop

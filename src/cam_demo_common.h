@@ -115,7 +115,7 @@ struct ImuPrintState {
 
 // 按采样率和输出率计算抽样步长；任一输入为 0 时返回 0，表示禁用输出。
 uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz);
-// 2026-07-19 修改原因：CLI observer 使用单次非阻塞 write；慢/关闭的输出端只丢日志，
+// CLI observer 使用单次非阻塞 write；慢/关闭的输出端只丢日志，
 // 消费仍覆盖每个 IMU 样本。
 void PrintImuSample(const icm42688_sample_t& sample, void* user);
 
