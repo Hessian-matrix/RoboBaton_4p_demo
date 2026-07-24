@@ -109,7 +109,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   icm42688_config_t config = ICM42688_CONFIG_INIT;
   config.sample_rate_hz = options.sample_rate_hz;
   config.fifo_watermark_samples = 8U;
-  config.read_mode = ICM42688_READ_MODE_FIFO;
+  config.read_mode = ICM42688_READ_MODE_DIRECT;
 
   IcmCallbackContext context;
   context.observer = observer;
@@ -140,6 +140,8 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   }
 
   while (g_imu_signal_stop == 0 &&
+         (options.stop_requested == nullptr ||
+          !options.stop_requested->load(std::memory_order_acquire)) &&
          !context.callback_failed.load(std::memory_order_acquire)) {
     icm42688_sample_t sample{};
     bool has_sample = false;
@@ -261,7 +263,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
 
 }  // namespace robobaton_demo
 
-#ifndef RELEASE008_TESTING
+#if !defined(RELEASE008_TESTING) && !defined(SENSOR_DEMO_NO_MAIN)
 namespace {
 
 using robobaton_demo::ImuConsumerOptions;

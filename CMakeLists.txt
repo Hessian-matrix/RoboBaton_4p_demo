@@ -72,6 +72,15 @@ add_executable(cam_demo
   src/cam_demo_rtsp.cpp
 )
 
+add_executable(sensor_demo
+  src/sensor_demo.cpp
+  src/imu_reader_demo.cpp
+  src/cam_demo_common.cpp
+  src/cam_demo_config.cpp
+  src/cam_demo_pipeline.cpp
+  src/cam_demo_rtsp.cpp
+)
+
 target_compile_options(imu_reader_demo PRIVATE
   -Wall
   -Wextra
@@ -90,6 +99,13 @@ target_compile_options(cam_demo PRIVATE
   -Wpedantic
 )
 
+target_compile_options(sensor_demo PRIVATE
+  -Wall
+  -Wextra
+  -Wpedantic
+)
+target_compile_definitions(sensor_demo PRIVATE SENSOR_DEMO_NO_MAIN)
+
 target_link_libraries(imu_reader_demo PRIVATE icm42688_x5)
 target_link_options(imu_reader_demo PRIVATE
   -static-libstdc++
@@ -104,12 +120,23 @@ target_link_options(serial_port_demo PRIVATE
 target_include_directories(cam_demo PRIVATE
   ${SC132_INCLUDE_DIRS}
 )
+target_include_directories(sensor_demo PRIVATE
+  ${SC132_INCLUDE_DIRS}
+)
 if(X5_HOBOT_LIB_DIR)
   # rpath-link 仅供链接器解析 producer 的 vendor 依赖，不增加 consumer 的直接依赖或 RUNPATH。
   target_link_options(cam_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
+  target_link_options(sensor_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
 target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
+target_link_libraries(sensor_demo PRIVATE icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads)
 target_link_options(cam_demo PRIVATE
+  -static-libstdc++
+  -static-libgcc
+  "LINKER:--export-dynamic"
+  "LINKER:--no-allow-shlib-undefined"
+)
+target_link_options(sensor_demo PRIVATE
   -static-libstdc++
   -static-libgcc
   "LINKER:--export-dynamic"
@@ -128,7 +155,13 @@ set_target_properties(cam_demo PROPERTIES
   INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
 )
 
-install(TARGETS imu_reader_demo serial_port_demo cam_demo
+set_target_properties(sensor_demo PROPERTIES
+  BUILD_WITH_INSTALL_RPATH ON
+  BUILD_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
+  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
+)
+
+install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo
   RUNTIME DESTINATION .
   LIBRARY DESTINATION lib
 )

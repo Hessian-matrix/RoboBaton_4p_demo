@@ -15,6 +15,7 @@ MANIFEST_NAME = "manifest.sha256"
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
     "bin/imu_reader_demo": {"ICM42688_X5_2.0"},
+    "bin/sensor_demo": {"ICM42688_X5_2.0", "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
     "lib/libicm42688.so.2.0.0": "ICM42688_X5_2.0",
@@ -33,16 +34,19 @@ EXPECTED_LIBRARY_COPIES = {
 }
 EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
     "cam_demo",
     "imu_reader_demo",
+    "sensor_demo",
     "serial_port_demo",
     "env.sh",
     "bin/cam_demo",
     "bin/imu_reader_demo",
+    "bin/sensor_demo",
     "bin/serial_port_demo",
     *EXPECTED_VERSION_DEFINITIONS,
     *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
@@ -134,7 +138,7 @@ def verify_package(package_dir: Path) -> None:
     if missing:
         raise AssertionError(f"missing runtime files: {missing}")
 
-    for relative in ["cam_demo", "imu_reader_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
+    for relative in ["cam_demo", "imu_reader_demo", "sensor_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")

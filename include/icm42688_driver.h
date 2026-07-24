@@ -57,6 +57,7 @@ typedef struct icm42688_raw_sample {
 typedef struct icm42688_sample {
   uint32_t struct_size;
   uint32_t reserved0;
+  /* Direct INT1 mode uses CLOCK_MONOTONIC_RAW; FIFO mode uses the same host clock domain. */
   uint64_t host_timestamp_ns;
   double temperature_c;
   double accel_mps2[3];
@@ -66,11 +67,10 @@ typedef struct icm42688_sample {
 } icm42688_sample_t;
 
 /*
- * 回调线程与句柄生命周期约束如下：
- * 回调由驱动采集线程串行调用；sample 仅在回调期间有效。
- * set_callback 可与采集并发，返回后的后续样本使用新回调；不会等待已进入的旧回调结束。
- * C++ 调用者的 callback 必须 noexcept；库会隔离误抛异常并禁用该回调，但不得依赖该兜底。
- * stop/destroy 会等待采集线程退出，因此禁止在回调内调用；destroy 前必须确保其他线程不再使用句柄。
+ * The callback is invoked serially by the acquisition thread; sample is borrowed for the callback.
+ * set_callback may run concurrently; samples admitted after it returns use the new callback.
+ * C++ callbacks must catch their own exceptions. stop/destroy waits for the acquisition thread and
+ * therefore must not be called from the callback; user_data remains valid until stop returns.
  */
 typedef void (*icm42688_sample_callback_t)(const icm42688_sample_t *sample,
                                            void *user_data);
@@ -84,7 +84,7 @@ ICM42688_X5_API int icm42688_start(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_stop(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_is_running(const icm42688_handle_t *handle);
 ICM42688_X5_API void icm42688_destroy(icm42688_handle_t *handle);
-/* 返回进程静态只读字符串，指针在进程退出前有效，调用者不得释放。 */
+/* The returned pointer refers to process-static read-only storage and must not be freed. */
 ICM42688_X5_API const char *icm42688_status_message(int status);
 
 #ifdef __cplusplus

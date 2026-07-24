@@ -91,6 +91,7 @@ struct QueuedFrame {
 struct ImuConsumerOptions {
   uint32_t sample_rate_hz = 1000U;
   uint32_t count = 0U;
+  std::atomic<bool>* stop_requested = nullptr;
 };
 
 #ifdef RELEASE008_TESTING
