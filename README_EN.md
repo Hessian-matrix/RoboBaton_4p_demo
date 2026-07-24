@@ -3,7 +3,7 @@
 Chinese version: [README.md](README.md)
 ![alt text](image/4P_Cam.png)
 
-This is the minimal user-facing demo package. It includes the SC132 4-camera RTSP demo, IMU reader demo, UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
+This is the minimal user-facing demo package. It includes the joint `sensor_demo`, the SC132 4-camera RTSP demo, the standalone GPIO395 INT1 IMU reader demo, the UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
 
 ## 1. Directory Layout
 
@@ -12,7 +12,7 @@ open_source_demo/
 ├── CMakeLists.txt
 ├── README.md / README_EN.md
 ├── demo/                    # Runtime package deployable to X5 /root/demo
-│   ├── cam_demo / imu_reader_demo / serial_port_demo
+│   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── bin/                 # AArch64 executables
 │   └── lib/                 # Shared libraries matched to the runtime package
@@ -24,13 +24,14 @@ open_source_demo/
 ├── lib/                     # Delivered libraries used for source cross-builds
 ├── scripts/
 │   ├── build_cam_demo.sh
+│   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
-    ├── cam_demo.cpp
+    ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
@@ -64,6 +65,7 @@ You can also build one demo target at a time:
 
 ```bash
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_cam_demo.sh
+TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_sensor_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
 ```
@@ -71,6 +73,7 @@ TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_por
 
 Generated binaries:
 
+- `build_x5/sensor_demo`
 - `build_x5/imu_reader_demo`
 - `build_x5/serial_port_demo`
 - `build_x5/cam_demo`
@@ -78,6 +81,7 @@ Generated binaries:
 Check the target architecture:
 
 ```bash
+file build_x5/sensor_demo
 file build_x5/imu_reader_demo
 file build_x5/serial_port_demo
 file build_x5/cam_demo
@@ -94,7 +98,7 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
-> Current repository status: as of 2026-07-17, `demo/` has been regenerated from the current C ABI v2 sources and all three delivered shared libraries, and passes `scripts/verify_runtime_package.py` plus `manifest.sha256` package-integrity verification. The three real shared libraries under `lib/` and `demo/lib/` now match byte-for-byte, so the H.265 provider is included in the board runtime package. This proves that the AArch64 build, ABI, dependencies, and hashes are internally consistent; final delivery still requires X5 board `ldd`, `--help`, IMU, camera, H.264 RTSP, and H.265 RTSP smoke tests.
+> Current repository status: as of 2026-07-24, `demo/` was regenerated from the current C ABI v2 sources and the three delivered shared libraries. It passed `scripts/verify_runtime_package.py` and `manifest.sha256` verification; AArch64 builds passed for all four demo targets. The final `sensor_demo` board smoke passed with 12,424 valid IMU samples at 1002.63 Hz, zero invalid/duplicate/regressed timestamps, and exit code 0. The board restored GPIO395/397/417 and SPI ownership after exit.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -115,7 +119,7 @@ Deploy it to X5:
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
 tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
-ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
+ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
 
 Note: copy the contents of `demo/`, not the outer `demo/` directory itself; the board should not contain `/root/demo/demo/`.
@@ -125,11 +129,13 @@ Runtime layout on X5:
 ```text
 /root/demo/
 ├── cam_demo
+├── sensor_demo
 ├── imu_reader_demo
 ├── serial_port_demo
 ├── env.sh
 ├── bin/
 │   ├── cam_demo
+│   ├── sensor_demo
 │   ├── imu_reader_demo
 │   └── serial_port_demo
 └── lib/
@@ -142,12 +148,13 @@ Default run commands:
 
 ```bash
 cd /root/demo
+./sensor_demo
 ./cam_demo
 ./imu_reader_demo
 ./serial_port_demo
 ```
 
-The top-level `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set:
+The top-level `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set:
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
@@ -161,16 +168,50 @@ cd /root/demo
 ./bin/cam_demo
 ```
 
-All three demos provide default configurations. For normal bring-up, run the top-level launcher directly. Use command-line options only when changing FPS, bitrate, serial port, sample count, or other runtime parameters.
+All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, or other runtime parameters.
 
-## 4. SC132 4-Camera RTSP Demo
+## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
+
+Source: `src/sensor_demo.cpp`.
+
+`sensor_demo` starts the four-camera SC132 pipeline, PRRTSP v2, and the independent GPIO395 INT1 IMU direct path:
+
+```text
+SC132 GPIO417 trigger
+  -> frame-set.group_timestamp_ns
+  -> PRRTSP v2 timestamp_ns
+
+ICM GPIO395 INT1 rising edge
+  -> CLOCK_MONOTONIC_RAW host_timestamp_ns
+  -> 14-byte direct SPI read
+  -> icm42688 sample callback
+```
+
+Both `sensor_demo` and `imu_reader_demo` explicitly set `ICM42688_READ_MODE_DIRECT`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+
+Run it from the complete package:
+
+```bash
+cd /root/demo
+./sensor_demo
+```
+
+On exit it prints an IMU summary such as:
+
+```text
+SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
+```
+
+The joint entry keeps the existing `libprrtsp.so.2` and PRRTSP v2 ABI; it does not add a new PRRTSP API or SONAME.
+
+### 4.1 SC132 4-Camera RTSP Demo
 
 `cam_demo` demonstrates how to use:
 
 - `libsc132.so`: starts the SC132 4-camera pipeline and provides synchronized NV12 DMA frames through a frame-set callback
 - `libprrtsp.so`: sends the four NV12 streams to the X5 encoder and publishes RTSP streams
 
-The three demo executables are linked for the X5 runtime environment. Keep `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
+The four demo executables are linked for the X5 runtime environment. Keep `sensor_demo`, `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
 
 Default run:
 
@@ -344,9 +385,9 @@ Output fields:
 
 Notes:
 
-- The demo uses FIFO mode by default.
-- In FIFO mode, the driver expands sample timestamps by the configured ODR to provide stable `dt`.
-- The timestamp is not an external FSYNC timestamp.
+- The demo explicitly uses GPIO395 INT1 direct mode (`ICM42688_READ_MODE_DIRECT`).
+- Each rising edge is timestamped with `CLOCK_MONOTONIC_RAW` before the 14-byte direct SPI read; `host_timestamp_ns` is per-sample and is not copied from a FIFO batch.
+- The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`.
 - The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
 - CLI output uses one non-blocking write per line. If an SSH session, pipe, or log collector slows down or closes, CLI log lines are dropped while the owner continues consuming every IMU sample.
 - The 10 Hz default further reduces normal terminal traffic. Explicit `--print-rate-hz 1000` remains available for diagnostics, but log completeness is not guaranteed with a slow sink.
@@ -387,7 +428,7 @@ Common options:
 
 ## 7. Quick Verification After Deployment
 
-After deployment, first confirm all three demos can print their help text:
+After deployment, first confirm all four demos can print their help text:
 
 ```bash
 cd /root/demo

@@ -91,13 +91,13 @@ file lib/libprrtsp.so
 
 期望输出包含 `ARM aarch64`。
 
-如果没有交叉编译工具链，则不能重新编译 demo，只能使用已经编译好的 `imu_reader_demo`、`serial_port_demo`、`cam_demo` 和 `lib/` 下对应 `.so` 部署到板端运行。
+如果没有交叉编译工具链，则不能重新编译 demo，只能使用已经编译好的 `sensor_demo`、`imu_reader_demo`、`serial_port_demo`、`cam_demo` 和 `lib/` 下对应 `.so` 部署到板端运行。
 
 ## 3. 部署
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示：截至 2026-07-17，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；`lib/` 与 `demo/lib/` 中三套 real SO 已逐字节一致，H.265 provider 已进入板端运行包。该结果证明 AArch64 构建、ABI、依赖和哈希自洽；最终发布前仍需在目标 X5 上完成 `ldd/--help/IMU/相机/H.264/H.265 RTSP` smoke。
+> 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/397/417 和 SPI 资源恢复正常。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -117,7 +117,7 @@ scripts/package_runtime.sh
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
 tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
-ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
+ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
 
 注意：这里复制的是 `demo/` 目录里的内容，不是把外层 `demo/` 目录整体复制到板端；板端不应出现 `/root/demo/demo/`。
@@ -151,7 +151,7 @@ cd /root/demo
 ./serial_port_demo
 ```
 
-顶层 `cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
+顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
@@ -165,7 +165,7 @@ cd /root/demo
 ./bin/cam_demo
 ```
 
-三个 demo 都带有默认配置，普通功能验证时直接执行顶层脚本即可。需要修改帧率、码率、串口号或采样次数时，再通过命令行参数覆盖默认值。
+四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号或采样次数时，再通过命令行参数覆盖默认值。
 
 ## 4. sensor_demo 联合相机与IMU
 
@@ -191,7 +191,7 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 - `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
 - `libprrtsp.so`：把四路 NV12 帧送入 X5 编码器并输出 RTSP
 
-三个 demo 可执行文件已经按 X5 运行环境链接。请保持 `cam_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
+四个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
 
 默认运行：
 
@@ -365,9 +365,9 @@ avg_frame_rate=60/1
 
 说明：
 
-- demo 默认使用 FIFO 模式
-- FIFO 模式下，驱动按配置 ODR 展开连续时间戳，用于提供稳定 `dt`
-- 当前时间戳不是 FSYNC 外部同步时间戳
+- demo 显式使用 GPIO395 INT1 direct 模式（`ICM42688_READ_MODE_DIRECT`）
+- 每个 rising edge 在 14-byte direct SPI read 前使用 `CLOCK_MONOTONIC_RAW` 取时间；`host_timestamp_ns` 是逐 sample 时间戳，不复制 FIFO 批次时间
+- IMU 路径不使用 GPIO397、FSYNC 或 `icm42688_pulse_fsync()`
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
 - CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本
 - 默认 10Hz 进一步降低正常终端的文本量；`--print-rate-hz 1000` 可用于诊断，但慢 sink 下输出日志不保证完整
@@ -408,7 +408,7 @@ avg_frame_rate=60/1
 
 ## 7. 部署后快速验证
 
-部署完成后，建议先确认三个 demo 都能启动帮助信息：
+部署完成后，建议先确认四个 demo 都能启动帮助信息：
 
 ```bash
 cd /root/demo
