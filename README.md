@@ -12,7 +12,7 @@ open_source_demo/
 ├── CMakeLists.txt
 ├── README.md / README_EN.md
 ├── demo/                    # 可直接部署到 X5 /root/demo 的运行包
-│   ├── cam_demo / imu_reader_demo / serial_port_demo
+│   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── bin/                 # AArch64 可执行文件
 │   └── lib/                 # 与运行包匹配的三套动态库
@@ -24,13 +24,14 @@ open_source_demo/
 ├── lib/                     # 源码交叉构建时链接的交付库
 ├── scripts/
 │   ├── build_cam_demo.sh
+│   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
-    ├── cam_demo.cpp
+    ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
@@ -64,6 +65,7 @@ cmake --build build_x5 -j
 
 ```bash
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_cam_demo.sh
+TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_sensor_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
 ```
@@ -72,6 +74,7 @@ TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_por
 生成文件：
 
 - `build_x5/imu_reader_demo`
+- `build_x5/sensor_demo`
 - `build_x5/serial_port_demo`
 - `build_x5/cam_demo`
 
@@ -124,11 +127,13 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/imu_reader_demo /root/
 ```text
 /root/demo/
 ├── cam_demo
+├── sensor_demo
 ├── imu_reader_demo
 ├── serial_port_demo
 ├── env.sh
 ├── bin/
 │   ├── cam_demo
+│   ├── sensor_demo
 │   ├── imu_reader_demo
 │   └── serial_port_demo
 └── lib/
@@ -162,7 +167,24 @@ cd /root/demo
 
 三个 demo 都带有默认配置，普通功能验证时直接执行顶层脚本即可。需要修改帧率、码率、串口号或采样次数时，再通过命令行参数覆盖默认值。
 
-## 4. SC132 四目相机 RTSP Demo
+## 4. sensor_demo 联合相机与IMU
+
+`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 INT1 direct模式连续采集1000Hz数据。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
+
+```bash
+./sensor_demo
+```
+
+退出日志包含：
+
+```text
+SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
+```
+
+`host_timestamp_ns`使用`CLOCK_MONOTONIC_RAW`时间域。当前demo只分别记录相机和IMU时间线，不用最近邻时间差伪造物理TD；TD应在共同运动事件采集后单独估计。
+
+
+### SC132 四目相机 RTSP Demo
 
 `cam_demo` 演示如何同时使用：
 
