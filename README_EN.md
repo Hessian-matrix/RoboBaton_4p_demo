@@ -255,7 +255,7 @@ The board-side encoder and RTSP interface for `--codec h265` are complete and ca
 
 Check both sides when diagnosing playback:
 
-- If the board reports per-channel `fps` close to the target, keeps `full_waits=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
+- If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
 - Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain four 60fps streams.
 - If the client still cannot play in real time, reduce `--fps` to `30`, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
 - With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
@@ -337,7 +337,7 @@ Frame flow:
 1. `cam_demo` registers the synchronized four-camera callback through the `libsc132.so` frame-set API.
 2. `libsc132.so` synchronizes the four camera frames and emits a frame-set callback after grouping succeeds.
 3. The demo calls the user hook inside the frame-set callback, then retains each frame and pushes it into the corresponding RTSP queue.
-4. If a queue is full, the callback waits for a free slot instead of dropping older frames.
+4. If a queue is full, the callback neither waits nor overwrites older frames; it rejects the current frame and fails the entire pipeline closed.
 5. Worker threads pop frames, build `prrtsp_nv12_frame_v2`, and call `prrtsp_stream_send()`.
 6. Worker threads call `sc132_frame_release()` after processing.
 
@@ -350,7 +350,7 @@ Log fields:
 - `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
 - `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
 - `camera_ts_ns`: camera frame timestamp in `ns`; sensor/VIO timestamp first, system output timestamp as fallback
-- `full_waits`: number of times the callback waited for a full queue; this should remain `0` in stable streaming
+- `queue_full_rejects`: cumulative frames rejected because a per-channel queue was already full; this must remain `0` during stable streaming, and any nonzero value triggers fail-closed shutdown
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
 - `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
@@ -460,7 +460,7 @@ Basic pass criteria:
 - All four RTSP URLs connect and keep streaming.
 - All four images are visible, with no black screen, obvious mosaic, or obvious freeze.
 - The log reports per-camera `fps` close to the target frame rate.
-- The log keeps `full_waits` at `0`.
+- The log keeps `queue_full_rejects` at `0`.
 - No obvious error, crash, or repeated camera restart appears.
 
 The complete 30 fps regression script is not part of the `/root/demo` runtime package. It is an SSH-driven tool in the development-host source tree. First deploy the complete `demo/` directory to `/root/demo` on the board, then run this from the `4cam` repository root on the development host:
@@ -581,6 +581,6 @@ For timing diagnostics:
 
 Interpretation:
 
-- If `fps` is close to 60 and `full_waits=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
+- If `fps` is close to 60 and `queue_full_rejects=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
 - If `send_max_ms` stays unusually high, continue checking that RTSP or encoder path.
 - If `group_skew_ns` stays close to one frame period, continue checking external trigger stability, camera startup order, and board load.

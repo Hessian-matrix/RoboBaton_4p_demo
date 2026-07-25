@@ -235,7 +235,7 @@ killall -q cam_demo 2>/dev/null || true
 
 排查时应同时观察板端和客户端：
 
-- 如果板端日志中四路 `fps` 接近目标值、`full_waits=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
+- 如果板端日志中四路 `fps` 接近目标值、`queue_full_rejects=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
 - 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法稳定处理四路 60fps。
 - 如果客户端仍无法实时播放，可将 `--fps` 降为 `30`、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
 - H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
@@ -317,7 +317,7 @@ avg_frame_rate=60/1
 1. `cam_demo` 通过 `libsc132.so` 的 frame-set API 注册四目同步 callback。
 2. `libsc132.so` 对四路相机帧做同步配组，配组成功后回调给 demo。
 3. demo 在帧组回调里调用用户入口，并给每路 frame `retain` 后放入对应 RTSP 队列。
-4. 队列满时等待后台线程释放空槽，不丢弃旧帧。
+4. 队列满时回调不等待、不覆盖旧帧；当前帧拒收入队并触发整条流水线失败关闭。
 5. 后台线程从队列取帧，构造 `prrtsp_nv12_frame_v2` 并调用 `prrtsp_stream_send()` 推流。
 6. 后台线程处理完成后调用 `sc132_frame_release()` 归还帧。
 
@@ -331,7 +331,7 @@ avg_frame_rate=60/1
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
 - `camera_ts_ns`：相机帧时间戳，单位 `ns`；优先为 sensor/VIO 时间戳，fallback 为系统出帧时间
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
-- `full_waits`：队列满时回调等待空槽的次数，正常稳定推流时应长期为 `0`
+- `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
 - `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `prrtsp_stream_send()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
@@ -440,10 +440,10 @@ rtsp://<x5-ip>:557/PRR
 - 四个 RTSP 地址都能连接并持续出图。
 - 四路画面无黑屏、无明显花屏、无明显冻结。
 - 日志中四路 `fps` 长期接近目标帧率。
-- 日志中 `full_waits` 保持为 `0`。
+- 日志中 `queue_full_rejects` 保持为 `0`。
 - 不出现明显错误、崩溃或相机反复重启。
 
-完整 30fps 自动回归脚本不属于 `/root/demo` 运行包；它是开发机源码仓库中的 SSH 驱动工具。先把 `demo/` 完整部署到板端 `/root/demo`，再在开发机的 `4cam` 仓库根目录执行：
+30fps 自动运行回归脚本不属于 `/root/demo` 运行包；它是开发机源码仓库中的 SSH 驱动工具。脚本会从开发机向四个端口发送 RTSP `OPTIONS`，并检查四路编码初始化、帧率、同步指标和干净退出。先把 `demo/` 完整部署到板端 `/root/demo`，再在开发机的 `4cam` 仓库根目录执行：
 
 ```bash
 cd <4cam-repo-root>
@@ -456,6 +456,8 @@ sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
 ```
 
 不要在板端 `/root/demo` 中执行 `scripts/cam_demo_regression.sh`；运行包只包含 `bin/`、`lib/`、顶层启动脚本 `cam_demo`、`imu_reader_demo`、`serial_port_demo`，以及 `env.sh` 和 `manifest.sha256`。
+
+`OPTIONS` 只能证明 RTSP 控制面可达，不能替代码流解码验收。正式交付仍需按本节前述四个 URL 各连接一个实际客户端，确认四路都能持续解码出图；单个端口一次只连接一个客户端，避免探测客户端占用该端口的会话槽。
 
 ## 8. 运行约束
 
@@ -561,6 +563,6 @@ ldd ./bin/cam_demo
 
 判断依据：
 
-- 如果应用日志里的 `fps` 接近 60、`full_waits=0`，但播放器某一路明显慢，问题更可能在 RTSP 客户端缓冲或播放器显示链路。
+- 如果应用日志里的 `fps` 接近 60、`queue_full_rejects=0`，但播放器某一路明显慢，问题更可能在 RTSP 客户端缓冲或播放器显示链路。
 - 如果 `send_max_ms` 长时间异常升高，再继续排查对应 RTSP 或编码链路。
 - 如果 `group_skew_ns` 长期接近一个帧周期，继续检查外触发、相机启动顺序和板端负载。

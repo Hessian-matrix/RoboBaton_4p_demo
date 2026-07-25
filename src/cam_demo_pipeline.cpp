@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
+#include <cstdio>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -13,6 +15,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <unistd.h>
 
 #include "cam_demo_rtsp.h"
 
@@ -31,7 +34,11 @@ class FrameQueue {
 
   bool Push(QueuedFrame&& frame) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (stopped_ || frames_.size() >= kQueueCapacity) {
+    if (stopped_) {
+      return false;
+    }
+    if (frames_.size() >= kQueueCapacity) {
+      ++full_rejects_;
       return false;
     }
     frames_.emplace_back(std::move(frame));
@@ -50,6 +57,16 @@ class FrameQueue {
     return true;
   }
 
+  struct Snapshot {
+    size_t size = 0U;
+    uint64_t full_rejects = 0U;
+  };
+
+  Snapshot GetSnapshot() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Snapshot{frames_.size(), full_rejects_};
+  }
+
   void StopAndDrain() noexcept {
     std::deque<QueuedFrame> detached;
     {
@@ -63,9 +80,10 @@ class FrameQueue {
   }
 
  private:
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::condition_variable condition_;
   std::deque<QueuedFrame> frames_;
+  uint64_t full_rejects_ = 0U;
   bool stopped_ = false;
 };
 
@@ -155,6 +173,71 @@ class GroupSendBarrier {
   uint64_t current_group_ = 0U;
   bool stopped_ = false;
 };
+
+struct FrameSetDiagnosticItem {
+  uint32_t camera_id = 0U;
+  uint64_t sequence = 0U;
+  uint64_t frame_id = 0U;
+  uint64_t timestamp_ns = 0U;
+};
+
+struct FrameSetDiagnosticSnapshot {
+  bool valid = false;
+  uint32_t camera_count = 0U;
+  uint64_t group_id = 0U;
+  uint64_t group_timestamp_ns = 0U;
+  uint64_t group_max_skew_ns = 0U;
+  uint64_t calculated_skew_ns = 0U;
+  std::array<FrameSetDiagnosticItem, kMaxChannels> items{};
+};
+
+struct ChannelDiagnosticValues {
+  uint64_t interval_send_count = 0U;
+  uint64_t interval_send_duration_ns = 0U;
+  uint64_t interval_send_max_ns = 0U;
+  uint64_t last_sequence = 0U;
+  uint64_t last_group_id = 0U;
+  uint64_t last_group_skew_ns = 0U;
+  uint64_t last_camera_timestamp_ns = 0U;
+  uint64_t last_rtsp_timestamp_ns = 0U;
+  uint64_t last_pipeline_duration_ns = 0U;
+};
+
+struct ChannelDiagnosticState {
+  std::mutex mutex;
+  ChannelDiagnosticValues values;
+};
+
+template <typename... Args>
+bool AppendDiagnostic(std::array<char, 4096>* output, size_t* used,
+                      const char* format, Args... args) noexcept {
+  if (output == nullptr || used == nullptr || *used >= output->size()) {
+    return false;
+  }
+  const int count = std::snprintf(output->data() + *used, output->size() - *used,
+                                  format, args...);
+  if (count < 0 || static_cast<size_t>(count) >= output->size() - *used) {
+    return false;
+  }
+  *used += static_cast<size_t>(count);
+  return true;
+}
+
+bool WriteDiagnostic(const char* data, size_t size) noexcept {
+  while (size > 0U) {
+    const ssize_t written = ::write(STDOUT_FILENO, data, size);
+    if (written > 0) {
+      data += written;
+      size -= static_cast<size_t>(written);
+      continue;
+    }
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -283,6 +366,7 @@ class FramePipeline::Impl {
       throw std::runtime_error("SC frame-set mask mismatch");
     }
 
+    CaptureFrameSetDiagnostics(frame_set);
     if (hooks_.on_frame_set != nullptr) {
       hooks_.on_frame_set(frame_set, hooks_.user);
     }
@@ -420,6 +504,146 @@ class FramePipeline::Impl {
 #endif
 
  private:
+  void CaptureFrameSetDiagnostics(const sc132_frame_set_t& frame_set) noexcept {
+    FrameSetDiagnosticSnapshot snapshot;
+    snapshot.valid = true;
+    snapshot.camera_count = frame_set.camera_count;
+    snapshot.group_id = frame_set.group_id;
+    snapshot.group_timestamp_ns = frame_set.group_timestamp_ns;
+    snapshot.group_max_skew_ns = frame_set.max_skew_ns;
+
+    uint64_t oldest_timestamp_ns = std::numeric_limits<uint64_t>::max();
+    uint64_t newest_timestamp_ns = 0U;
+    for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
+      const sc132_frame_set_item_t& item = frame_set.items[index];
+      snapshot.items[index] =
+          FrameSetDiagnosticItem{item.camera_id, item.sequence, item.frame_id, item.timestamp_ns};
+      oldest_timestamp_ns = std::min(oldest_timestamp_ns, item.timestamp_ns);
+      newest_timestamp_ns = std::max(newest_timestamp_ns, item.timestamp_ns);
+    }
+    snapshot.calculated_skew_ns = newest_timestamp_ns - oldest_timestamp_ns;
+
+    std::lock_guard<std::mutex> lock(frame_set_diagnostics_mutex_);
+    frame_set_diagnostics_ = snapshot;
+  }
+
+  void RecordSuccessfulSend(int camera_id, const QueuedFrame& frame,
+                            uint64_t send_duration_ns,
+                            uint64_t pipeline_duration_ns) noexcept {
+    // 发送线程和诊断线程共用该锁，保证次数、耗时和末帧字段来自同一提交边界。
+    ChannelDiagnosticState& state = channel_diagnostics_[camera_id];
+    std::lock_guard<std::mutex> lock(state.mutex);
+    ChannelDiagnosticValues& values = state.values;
+    values.last_sequence = frame.sequence;
+    values.last_group_id = frame.group_id;
+    values.last_group_skew_ns = frame.group_max_skew_ns;
+    values.last_camera_timestamp_ns = frame.camera_timestamp_ns;
+    values.last_rtsp_timestamp_ns = frame.rtsp_timestamp_ns;
+    values.last_pipeline_duration_ns = pipeline_duration_ns;
+    ++values.interval_send_count;
+    values.interval_send_duration_ns += send_duration_ns;
+    if (send_duration_ns > values.interval_send_max_ns) {
+      values.interval_send_max_ns = send_duration_ns;
+    }
+    total_sent_[camera_id].fetch_add(1U, std::memory_order_relaxed);
+  }
+
+  bool EmitDiagnostics(double elapsed_seconds) noexcept {
+    std::array<char, 4096> output{};
+    size_t used = 0U;
+    FrameSetDiagnosticSnapshot frame_set_snapshot;
+    {
+      std::lock_guard<std::mutex> lock(frame_set_diagnostics_mutex_);
+      frame_set_snapshot = frame_set_diagnostics_;
+    }
+
+    if (frame_set_snapshot.valid) {
+      if (!AppendDiagnostic(&output, &used,
+                            "frameset group_id=%llu group_ts_ns=%llu "
+                            "group_skew_ns=%llu calc_skew_ns=%llu",
+                            static_cast<unsigned long long>(frame_set_snapshot.group_id),
+                            static_cast<unsigned long long>(
+                                frame_set_snapshot.group_timestamp_ns),
+                            static_cast<unsigned long long>(
+                                frame_set_snapshot.group_max_skew_ns),
+                            static_cast<unsigned long long>(
+                                frame_set_snapshot.calculated_skew_ns))) {
+        return false;
+      }
+      for (uint32_t index = 0U; index < frame_set_snapshot.camera_count; ++index) {
+        const FrameSetDiagnosticItem& item = frame_set_snapshot.items[index];
+        if (!AppendDiagnostic(
+                &output, &used,
+                " cam%u(seq=%llu,frame_id=%llu,camera_ts_ns=%llu)", item.camera_id,
+                static_cast<unsigned long long>(item.sequence),
+                static_cast<unsigned long long>(item.frame_id),
+                static_cast<unsigned long long>(item.timestamp_ns))) {
+          return false;
+        }
+      }
+      if (!AppendDiagnostic(&output, &used, "%s", "\n")) {
+        return false;
+      }
+    }
+
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      if (!CameraMaskContains(options_.camera_mask, camera_id)) {
+        continue;
+      }
+      ChannelDiagnosticValues diagnostic;
+      uint64_t total_sent = 0U;
+      // 锁内复制并清零区间字段，避免一次发送被拆分到两个统计周期。
+      {
+        ChannelDiagnosticState& state = channel_diagnostics_[camera_id];
+        std::lock_guard<std::mutex> lock(state.mutex);
+        diagnostic = state.values;
+        state.values.interval_send_count = 0U;
+        state.values.interval_send_duration_ns = 0U;
+        state.values.interval_send_max_ns = 0U;
+        total_sent = total_sent_[camera_id].load(std::memory_order_relaxed);
+      }
+      if (total_sent == 0U) {
+        continue;
+      }
+
+      const FrameQueue::Snapshot queue = queues_[camera_id].GetSnapshot();
+      const double fps = elapsed_seconds > 0.0
+                             ? static_cast<double>(diagnostic.interval_send_count) /
+                                   elapsed_seconds
+                             : 0.0;
+      const double send_average_ms =
+          diagnostic.interval_send_count > 0U
+              ? static_cast<double>(diagnostic.interval_send_duration_ns) /
+                    static_cast<double>(diagnostic.interval_send_count) / 1000000.0
+              : 0.0;
+      const double send_max_ms =
+          static_cast<double>(diagnostic.interval_send_max_ns) / 1000000.0;
+      const uint64_t pipeline_delay_ms =
+          diagnostic.last_pipeline_duration_ns / 1000000U;
+
+      if (!AppendDiagnostic(
+              &output, &used,
+              "cam%d fps=%.2f last_seq=%llu group_id=%llu group_skew_ns=%llu "
+              "queue=%zu/%zu queue_full_rejects=%llu pipeline_delay_ms=%llu "
+              "camera_ts_ns=%llu rtsp_ts_ns=%llu send_avg_ms=%.2f "
+              "send_max_ms=%.2f rtsp_endpoint=ch%d rtsp_port=%d\n",
+              camera_id, fps,
+              static_cast<unsigned long long>(diagnostic.last_sequence),
+              static_cast<unsigned long long>(diagnostic.last_group_id),
+              static_cast<unsigned long long>(diagnostic.last_group_skew_ns),
+              queue.size, kQueueCapacity,
+              static_cast<unsigned long long>(queue.full_rejects),
+              static_cast<unsigned long long>(pipeline_delay_ms),
+              static_cast<unsigned long long>(diagnostic.last_camera_timestamp_ns),
+              static_cast<unsigned long long>(diagnostic.last_rtsp_timestamp_ns),
+              send_average_ms, send_max_ms, camera_id + 1,
+              RtspPortForChannel(camera_id))) {
+        return false;
+      }
+    }
+    return used == 0U || WriteDiagnostic(output.data(), used);
+  }
+
   void WorkerEntry(int camera_id) noexcept {
     try {
       while (true) {
@@ -433,14 +657,17 @@ class FramePipeline::Impl {
         if (!group_barrier_.Wait(camera_id, frame.group_id)) {
           break;
         }
+        const uint64_t send_start_ns = SteadyClockNowNs();
         const int32_t send_result = rtsp_->Send(camera_id, frame);
+        const uint64_t send_complete_ns = SteadyClockNowNs();
         if (send_result != PRRTSP_OK) {
           // 保留原始 send status，失败帧 release 且不计成功。
           RequestFailure(send_result);
           break;
         }
         group_barrier_.MarkSent(camera_id, frame.group_id);
-        total_sent_[camera_id].fetch_add(1U, std::memory_order_acq_rel);
+        RecordSuccessfulSend(camera_id, frame, send_complete_ns - send_start_ns,
+                             send_complete_ns - frame.enqueue_timestamp_ns);
       }
     } catch (...) {
       RequestFailure(kErrorWorker);
@@ -449,11 +676,24 @@ class FramePipeline::Impl {
 
   void DiagnosticsEntry() noexcept {
     try {
+      auto previous_report = std::chrono::steady_clock::now();
       std::unique_lock<std::mutex> lock(diagnostics_mutex_);
       while (!shutdown_started_.load(std::memory_order_acquire)) {
-        diagnostics_condition_.wait_for(
+        const bool stopping = diagnostics_condition_.wait_for(
             lock, std::chrono::milliseconds(options_.diagnostic_interval_ms),
             [&] { return shutdown_started_.load(std::memory_order_acquire); });
+        if (stopping) {
+          break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed_seconds =
+            std::chrono::duration<double>(now - previous_report).count();
+        previous_report = now;
+        lock.unlock();
+        if (!EmitDiagnostics(elapsed_seconds)) {
+          return;
+        }
+        lock.lock();
       }
     } catch (...) {
       RequestFailure(kErrorWorker);
@@ -470,6 +710,9 @@ class FramePipeline::Impl {
   std::array<std::atomic<bool>, kMaxChannels> worker_owned_{};
   std::atomic<bool> diagnostics_owned_{false};
   std::array<std::atomic<uint64_t>, kMaxChannels> total_sent_{};
+  std::array<ChannelDiagnosticState, kMaxChannels> channel_diagnostics_;
+  std::mutex frame_set_diagnostics_mutex_;
+  FrameSetDiagnosticSnapshot frame_set_diagnostics_;
   std::atomic<bool> accepting_{true};
   std::atomic<bool> shutdown_started_{false};
   std::atomic<bool> sc_stop_requested_{false};

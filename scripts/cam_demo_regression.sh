@@ -104,6 +104,9 @@ if [[ -n "${PASSWORD}" ]] && ! command -v sshpass >/dev/null 2>&1; then
   echo "sshpass is required when --password or X5_PASS is used" >&2
   exit 2
 fi
+# 多地址开发机应复用 SSH 的 BindAddress，否则 RTSP 探测可能从不可达源网段发出。
+RTSP_PROBE_BIND_ADDRESS="$(ssh -G -l "${USER}" "${HOST}" 2>/dev/null \
+  | awk '$1 == "bindaddress" && $2 != "none" { print $2; exit }')"
 
 if [[ -z "${MIN_GROUP_ID}" ]]; then
   if (( RUN_SECONDS > 8 )); then
@@ -152,15 +155,35 @@ record_pass() {
   echo "PASS: $*"
 }
 
-check_tcp_port() {
+check_rtsp_endpoint() {
   local port="$1"
 
-  # 优先使用 nc；缺失时退回 bash /dev/tcp，便于开发机最小环境跑回归。
-  if command -v nc >/dev/null 2>&1; then
-    nc -z -w 2 "${HOST}" "${port}" >/dev/null 2>&1
-  else
-    timeout 2 bash -c "cat < /dev/null > /dev/tcp/${HOST}/${port}" >/dev/null 2>&1
-  fi
+  # 发布门禁必须从开发机完成 RTSP 请求；OPTIONS 会被服务端正常消费，不遗留裸 TCP 客户端槽。
+  python3 - "${HOST}" "${port}" "${URL_PATH}" "${RTSP_PROBE_BIND_ADDRESS}" <<'PY'
+import socket
+import sys
+
+host, port_text, path, bind_address = sys.argv[1:]
+port = int(port_text)
+request = (
+    f"OPTIONS rtsp://{host}:{port}{path} RTSP/1.0\r\n"
+    "CSeq: 1\r\n"
+    "User-Agent: robobaton-release-check\r\n\r\n"
+).encode("ascii")
+source_address = (bind_address, 0) if bind_address else None
+try:
+    with socket.create_connection(
+        (host, port), timeout=2.0, source_address=source_address
+    ) as client:
+        client.settimeout(2.0)
+        client.sendall(request)
+        response = client.recv(1024)
+except OSError:
+    raise SystemExit(1)
+status_line = response.split(b"\r\n", 1)[0]
+if not status_line.startswith(b"RTSP/1.0 200"):
+    raise SystemExit(1)
+PY
 }
 
 max_numeric_field() {
@@ -185,9 +208,9 @@ frame_set_max_numeric_field() {
 }
 
 valid_metric_lines() {
-  # cam_demo 多线程 stdout 可能字符级交错，只采纳字段完整的诊断行参与阈值判定。
+  # 诊断线程以单次原子写提交每行，只接纳字段完整的行参与阈值判定。
   awk '
-    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ full_waits=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+( rtsp_ts_ns=[0-9]+)? send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]$/ {
+    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ queue_full_rejects=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+( rtsp_ts_ns=[0-9]+)? send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]$/ {
       print
     }
   ' "${LOCAL_LOG}"
@@ -201,15 +224,20 @@ float_lt() {
   awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'
 }
 
+stop_remote_runner() {
+  # timeout 会建立独立进程组；按实际 runner PID 先 TERM、超时再 KILL，避免回归中断后遗留相机 owner。
+  ssh_remote "if [ -f '${REMOTE_PID}' ]; then pid=\$(cat '${REMOTE_PID}' 2>/dev/null || true); if [ -n \"\${pid}\" ]; then kill -TERM -\"\${pid}\" 2>/dev/null || kill -TERM \"\${pid}\" 2>/dev/null || true; remaining=3; while kill -0 \"\${pid}\" 2>/dev/null && [ \"\${remaining}\" -gt 0 ]; do sleep 1; remaining=\$((remaining - 1)); done; if kill -0 \"\${pid}\" 2>/dev/null; then kill -KILL -\"\${pid}\" 2>/dev/null || kill -KILL \"\${pid}\" 2>/dev/null || true; fi; fi; fi" >/dev/null 2>&1 || true
+}
+
 cleanup_remote() {
-  # 远端测试使用 setsid 独立进程组，清理时先按进程组发信号再兜底按 PID 发信号。
-  ssh_remote "if [ -f '${REMOTE_PID}' ]; then pid=\$(cat '${REMOTE_PID}' 2>/dev/null || true); if [ -n \"\${pid}\" ]; then kill -INT -\"\${pid}\" 2>/dev/null || kill -INT \"\${pid}\" 2>/dev/null || true; fi; fi; rm -f '${REMOTE_PID}' '${REMOTE_RC}' $([[ "${KEEP_REMOTE_LOG}" == "1" ]] && echo "" || echo "'${REMOTE_LOG}'")" >/dev/null 2>&1 || true
+  stop_remote_runner
+  ssh_remote "rm -f '${REMOTE_PID}' '${REMOTE_RC}' $([[ "${KEEP_REMOTE_LOG}" == "1" ]] && echo "" || echo "'${REMOTE_LOG}'")" >/dev/null 2>&1 || true
 }
 
 trap cleanup_remote EXIT
 
 echo "== X5 cam_demo regression =="
-echo "host=${HOST} remote_dir=${REMOTE_DIR} run_seconds=${RUN_SECONDS} fps=${FPS} trigger_mode=${TRIGGER_MODE}"
+echo "host=${HOST} remote_dir=${REMOTE_DIR} run_seconds=${RUN_SECONDS} fps=${FPS} trigger_mode=${TRIGGER_MODE} rtsp_probe_bind_address=${RTSP_PROBE_BIND_ADDRESS:-route-default}"
 
 existing_processes="$(ssh_remote "pgrep -a 'cam_demo' 2>/dev/null || true")"
 if [[ -n "${existing_processes}" ]]; then
@@ -229,23 +257,26 @@ record_pass "remote files exist"
 
 ldd_output="$(ssh_remote "cd '${REMOTE_DIR}' && cam_bin=./cam_demo; [ -x ./bin/cam_demo ] && cam_bin=./bin/cam_demo; LD_LIBRARY_PATH=\$PWD/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib ldd \${cam_bin} | egrep 'libsc132|libprrtsp|libstdc' || true")"
 echo "${ldd_output}"
-if grep -qE "libsc132\.so => ${REMOTE_DIR}/.*/lib/libsc132\.so|libsc132\.so => ${REMOTE_DIR}/lib/libsc132\.so" <<<"${ldd_output}"; then
-  record_pass "cam_demo loads local libsc132.so"
+if grep -Fq "libsc132.so.2 => ${REMOTE_DIR}/lib/libsc132.so.2" <<<"${ldd_output}"; then
+  record_pass "cam_demo loads local ABI-v2 libsc132.so.2"
 else
-  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libsc132.so"
+  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libsc132.so.2"
 fi
-if grep -qE "libprrtsp\.so => ${REMOTE_DIR}/.*/lib/libprrtsp\.so|libprrtsp\.so => ${REMOTE_DIR}/lib/libprrtsp\.so" <<<"${ldd_output}"; then
-  record_pass "cam_demo loads local libprrtsp.so"
+if grep -Fq "libprrtsp.so.2 => ${REMOTE_DIR}/lib/libprrtsp.so.2" <<<"${ldd_output}"; then
+  record_pass "cam_demo loads local ABI-v2 libprrtsp.so.2"
 else
-  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libprrtsp.so"
+  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libprrtsp.so.2"
 fi
 
 # 后台 cam_demo 必须关闭 stdin 并脱离 SSH 会话，否则 ssh 会等到 timeout 结束才返回，导致端口探测发生在进程退出之后。
 remote_env_cmd="export LD_LIBRARY_PATH='${REMOTE_DIR}/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib'"
 # 远端进程显式导出触发模式，确保本次回归验证的是指定同步触发路径。
 remote_env_cmd="${remote_env_cmd} && export SC132_TRIGGER_MODE='${TRIGGER_MODE}'"
-remote_run_cmd="cd '${REMOTE_DIR}' && ${remote_env_cmd} && timeout '${RUN_SECONDS}' ./cam_demo --channels '${CHANNELS}' --fps '${FPS}' --width '${WIDTH}' --height '${HEIGHT}' --bps '${BPS}' --rotate '${ROTATE}' --url '${URL_PATH}' --diagnostics --diag-interval-ms '${DIAG_INTERVAL_MS}' > '${REMOTE_LOG}' 2>&1; rc=\\\$?; echo \\\${rc} > '${REMOTE_RC}'"
-ssh_remote "rm -f '${REMOTE_LOG}' '${REMOTE_RC}' '${REMOTE_PID}'; nohup setsid sh -c \"${remote_run_cmd}\" </dev/null >/dev/null 2>&1 & echo \$! > '${REMOTE_PID}'"
+remote_run_cmd="cd '${REMOTE_DIR}' || exit 2; ${remote_env_cmd}; timeout '${RUN_SECONDS}' ./cam_demo --channels '${CHANNELS}' --fps '${FPS}' --width '${WIDTH}' --height '${HEIGHT}' --bps '${BPS}' --rotate '${ROTATE}' --url '${URL_PATH}' --diagnostics --diag-interval-ms '${DIAG_INTERVAL_MS}' > '${REMOTE_LOG}' 2>&1 & runner_pid=\\\$!; echo \\\${runner_pid} > '${REMOTE_PID}'; wait \\\${runner_pid}; rc=\\\$?; echo \\\${rc} > '${REMOTE_RC}'"
+if ! ssh_remote "rm -f '${REMOTE_LOG}' '${REMOTE_RC}' '${REMOTE_PID}'; nohup setsid sh -c \"${remote_run_cmd}\" </dev/null >/dev/null 2>&1 & wrapper_pid=\$!; attempts=0; while [ ! -s '${REMOTE_PID}' ] && kill -0 \"\${wrapper_pid}\" 2>/dev/null && [ \"\${attempts}\" -lt 5 ]; do sleep 1; attempts=\$((attempts + 1)); done; runner_pid=\$(cat '${REMOTE_PID}' 2>/dev/null || true); case \"\${runner_pid}\" in ''|*[!0-9]*) kill -TERM -\"\${wrapper_pid}\" 2>/dev/null || kill -TERM \"\${wrapper_pid}\" 2>/dev/null || true; exit 1 ;; esac"; then
+  record_fail "failed to start remote cam_demo or acquire runner PID"
+  exit 1
+fi
 run_start_seconds=${SECONDS}
 
 declare -A PORT_OK=()
@@ -257,9 +288,9 @@ deadline=$((SECONDS + STARTUP_TIMEOUT))
 while (( SECONDS < deadline )); do
   all_open=1
   for port in 554 555 556 557; do
-    if [[ "${PORT_OK[${port}]}" == "0" ]] && check_tcp_port "${port}"; then
+    if [[ "${PORT_OK[${port}]}" == "0" ]] && check_rtsp_endpoint "${port}"; then
       PORT_OK["${port}"]=1
-      echo "PASS: RTSP port ${port} opened"
+      echo "PASS: RTSP endpoint ${port}${URL_PATH} answered OPTIONS"
     fi
     if [[ "${PORT_OK[${port}]}" == "0" ]]; then
       all_open=0
@@ -271,7 +302,7 @@ done
 
 for port in 554 555 556 557; do
   if [[ "${PORT_OK[${port}]}" == "0" ]]; then
-    record_fail "RTSP port ${port} did not open within ${STARTUP_TIMEOUT}s"
+    record_fail "RTSP endpoint ${port}${URL_PATH} did not answer OPTIONS within ${STARTUP_TIMEOUT}s"
   fi
 done
 
@@ -286,7 +317,7 @@ done
 
 if [[ -z "${remote_rc}" ]]; then
   record_fail "cam_demo did not finish within expected time"
-  ssh_remote "if [ -f '${REMOTE_PID}' ]; then kill -INT \$(cat '${REMOTE_PID}') 2>/dev/null || true; fi"
+  stop_remote_runner
 else
   echo "remote timeout wrapper rc=${remote_rc}"
   if [[ "${remote_rc}" == "124" || "${remote_rc}" == "0" ]]; then
@@ -299,7 +330,7 @@ fi
 ssh_remote "cat '${REMOTE_LOG}' 2>/dev/null || true" > "${LOCAL_LOG}"
 echo "log=${LOCAL_LOG}"
 
-fatal_pattern='Segmentation fault|core dumped|symbol lookup error|GLIBCXX|undefined symbol|No Camera Sensor found|create_and_run_vflow failed|failed for sensor|ret[ =-]+-36|ret[ =-]+-10|init RTSP channel .* failed|invalid NV12 DMA|transform pool exhausted|queue_full=[1-9][0-9]*'
+fatal_pattern='Segmentation fault|core dumped|symbol lookup error|GLIBCXX|undefined symbol|No Camera Sensor found|create_and_run_vflow failed|failed for sensor|ret[ =-]+-36|ret[ =-]+-10|init RTSP channel .* failed|invalid NV12 DMA|transform pool exhausted|queue_full_rejects=[1-9][0-9]*|timestamp queue invalid|no valid GPIO417 trigger timestamp|SC frame queue closed or full'
 fatal_matches="$(grep -Ein "${fatal_pattern}" "${LOCAL_LOG}" || true)"
 if [[ -n "${fatal_matches}" ]]; then
   echo "${fatal_matches}" >&2
@@ -315,11 +346,11 @@ else
   record_fail "sensor detection count=${sensor_count}, expected >=${CHANNELS}"
 fi
 
-encoder_count="$(grep -Ec 'Encode idx: [0-3], init successful' "${LOCAL_LOG}" || true)"
-if (( encoder_count >= CHANNELS )); then
-  record_pass "RTSP encoder init count=${encoder_count}"
+server_count="$(grep -Ec 'rtsp server demo starting on port 55[4-7]$' "${LOCAL_LOG}" || true)"
+if (( server_count >= CHANNELS )); then
+  record_pass "RTSP server start count=${server_count}"
 else
-  record_fail "RTSP encoder init count=${encoder_count}, expected >=${CHANNELS}"
+  record_fail "RTSP server start count=${server_count}, expected >=${CHANNELS}"
 fi
 
 set +e
@@ -364,11 +395,11 @@ else
   record_fail "group_id progressed only to ${max_group_id}, expected >= ${MIN_GROUP_ID}"
 fi
 
-# 队列、延迟、skew 等门限只从完整诊断行取值，避免多线程日志交错造成误判。
-if valid_metric_lines | grep -qE 'full_waits=[1-9][0-9]*'; then
-  record_fail "queue full_waits occurred"
+# 队列、延迟、skew 等门限只从字段完整的诊断行取值。
+if valid_metric_lines | grep -qE 'queue_full_rejects=[1-9][0-9]*'; then
+  record_fail "queue_full_rejects occurred"
 else
-  record_pass "full_waits remained zero"
+  record_pass "queue_full_rejects remained zero"
 fi
 
 max_pipeline_delay_ms="$(max_numeric_field 'pipeline_delay_ms')"
@@ -538,7 +569,7 @@ if (( base_skew_drop_count > 0 )); then
   record_warn "base-skew cleanup reports=${base_skew_drop_count}; allowed during startup recovery"
 fi
 
-if grep -Eq 'SC132 (4-camera )?RTSP demo stopped' "${LOCAL_LOG}"; then
+if grep -q 'SC132 v2 RTSP demo stopped exit_code=0' "${LOCAL_LOG}"; then
   record_pass "cam_demo stopped cleanly"
 else
   record_warn "clean stop line not found; check timeout signal handling"
