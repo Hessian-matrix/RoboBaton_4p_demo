@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
-      consumer_quiescent = FinishSc132Shutdown(pipeline);
+      consumer_quiescent = FinishSc132Shutdown(pipeline, rtsp);
     } else {
       pipeline->BeginShutdown(false);
       consumer_quiescent = pipeline->Join();

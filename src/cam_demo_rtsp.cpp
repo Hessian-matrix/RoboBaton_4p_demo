@@ -12,6 +12,10 @@ bool ValidCameraId(int camera_id) {
   return camera_id >= 0 && camera_id < kMaxChannels;
 }
 
+void ReleaseSc132Frame(void* user) {
+  sc132_frame_release(static_cast<sc132_frame_t*>(user));
+}
+
 }  // namespace
 
 bool RtspChannels::ValidPath(const std::string& path) noexcept {
@@ -60,7 +64,7 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
 
   prrtsp_stream_config_v2 config{};
   config.struct_size = PRRTSP_STREAM_CONFIG_V2_1_SIZE;
-  config.flags = 0U;
+  config.flags = PRRTSP_STREAM_FLAG_EXTERNAL_NV12;
   config.width = static_cast<uint32_t>(output_width);
   config.height = static_cast<uint32_t>(output_height);
   config.fps_num = static_cast<uint32_t>(options.fps);
@@ -87,22 +91,24 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
                                    prrtsp_nv12_frame_v2* descriptor) const noexcept {
   if (!ValidCameraId(camera_id) || descriptor == nullptr ||
       handles_[camera_id] == nullptr || frame.frame == nullptr ||
-      frame.y_data == nullptr || frame.uv_data == nullptr || frame.width == 0U ||
-      frame.height == 0U || (frame.width & 1U) != 0U || (frame.height & 1U) != 0U ||
+      frame.y_data == nullptr || frame.uv_data == nullptr || frame.y_phys == 0U ||
+      frame.uv_phys == 0U || frame.width == 0U || frame.height == 0U ||
+      (frame.width & 1U) != 0U || (frame.height & 1U) != 0U ||
       frame.width != widths_[camera_id] || frame.height != heights_[camera_id] ||
-      frame.stride != frame.width || frame.vstride != frame.height) {
+      frame.stride < frame.width || frame.vstride < frame.height ||
+      (frame.vstride & 1U) != 0U) {
     return false;
   }
 
-  if (frame.width > std::numeric_limits<uint64_t>::max() / frame.height) {
+  if (frame.stride > std::numeric_limits<uint64_t>::max() / frame.vstride) {
     return false;
   }
-  const uint64_t y_required = static_cast<uint64_t>(frame.width) * frame.height;
-  const uint32_t uv_height = frame.height / 2U;
-  if (frame.width > std::numeric_limits<uint64_t>::max() / uv_height) {
+  const uint64_t y_required = static_cast<uint64_t>(frame.stride) * frame.vstride;
+  const uint32_t uv_vstride = frame.vstride / 2U;
+  if (frame.stride > std::numeric_limits<uint64_t>::max() / uv_vstride) {
     return false;
   }
-  const uint64_t uv_required = static_cast<uint64_t>(frame.width) * uv_height;
+  const uint64_t uv_required = static_cast<uint64_t>(frame.stride) * uv_vstride;
   const uintptr_t y_virtual = reinterpret_cast<uintptr_t>(frame.y_data);
   const uintptr_t uv_virtual = reinterpret_cast<uintptr_t>(frame.uv_data);
   if (y_virtual == 0U || uv_virtual == 0U || frame.y_size < y_required ||
@@ -115,14 +121,14 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
   value.flags = 0U;
   value.width = frame.width;
   value.height = frame.height;
-  value.y_stride = frame.width;
-  value.uv_stride = frame.width;
-  value.y_vstride = frame.height;
-  value.uv_vstride = uv_height;
+  value.y_stride = frame.stride;
+  value.uv_stride = frame.stride;
+  value.y_vstride = frame.vstride;
+  value.uv_vstride = frame.vstride / 2U;
   value.y_virtual_address = static_cast<uint64_t>(y_virtual);
   value.uv_virtual_address = static_cast<uint64_t>(uv_virtual);
-  value.y_physical_address = 0U;
-  value.uv_physical_address = 0U;
+  value.y_physical_address = frame.y_phys;
+  value.uv_physical_address = frame.uv_phys;
   value.y_size_bytes = frame.y_size;
   value.uv_size_bytes = frame.uv_size;
   value.timestamp_ns = frame.rtsp_timestamp_ns;
@@ -130,12 +136,14 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
   return true;
 }
 
-int32_t RtspChannels::Send(int camera_id, const QueuedFrame& frame) noexcept {
+int32_t RtspChannels::Send(int camera_id, QueuedFrame& frame) noexcept {
   prrtsp_nv12_frame_v2 descriptor{};
   if (!BuildDescriptor(camera_id, frame, &descriptor)) {
     return PRRTSP_E_INVALID_ARGUMENT;
   }
-  return prrtsp_stream_send(handles_[camera_id], &descriptor);
+  sc132_frame_t* owner = frame.ReleaseOwnership();
+  return prrtsp_stream_send_external(handles_[camera_id], &descriptor,
+                                     ReleaseSc132Frame, owner);
 }
 
 bool RtspChannels::CaptureStatuses() noexcept {

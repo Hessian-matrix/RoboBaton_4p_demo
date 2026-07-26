@@ -203,6 +203,15 @@ struct ChannelDiagnosticValues {
   uint64_t last_pipeline_duration_ns = 0U;
 };
 
+struct SendDiagnosticSample {
+  uint64_t sequence = 0U;
+  uint64_t group_id = 0U;
+  uint64_t group_max_skew_ns = 0U;
+  uint64_t camera_timestamp_ns = 0U;
+  uint64_t rtsp_timestamp_ns = 0U;
+  uint64_t enqueue_timestamp_ns = 0U;
+};
+
 struct ChannelDiagnosticState {
   std::mutex mutex;
   ChannelDiagnosticValues values;
@@ -355,6 +364,8 @@ class FramePipeline::Impl {
       job.enqueue_timestamp_ns = SteadyClockNowNs();
       job.y_data = info.y_data;
       job.uv_data = info.uv_data;
+      job.y_phys = info.y_phys;
+      job.uv_phys = info.uv_phys;
       job.y_size = info.y_size;
       job.uv_size = info.uv_size;
       job.width = info.width;
@@ -527,18 +538,18 @@ class FramePipeline::Impl {
     frame_set_diagnostics_ = snapshot;
   }
 
-  void RecordSuccessfulSend(int camera_id, const QueuedFrame& frame,
+  void RecordSuccessfulSend(int camera_id, const SendDiagnosticSample& sample,
                             uint64_t send_duration_ns,
                             uint64_t pipeline_duration_ns) noexcept {
     // 发送线程和诊断线程共用该锁，保证次数、耗时和末帧字段来自同一提交边界。
     ChannelDiagnosticState& state = channel_diagnostics_[camera_id];
     std::lock_guard<std::mutex> lock(state.mutex);
     ChannelDiagnosticValues& values = state.values;
-    values.last_sequence = frame.sequence;
-    values.last_group_id = frame.group_id;
-    values.last_group_skew_ns = frame.group_max_skew_ns;
-    values.last_camera_timestamp_ns = frame.camera_timestamp_ns;
-    values.last_rtsp_timestamp_ns = frame.rtsp_timestamp_ns;
+    values.last_sequence = sample.sequence;
+    values.last_group_id = sample.group_id;
+    values.last_group_skew_ns = sample.group_max_skew_ns;
+    values.last_camera_timestamp_ns = sample.camera_timestamp_ns;
+    values.last_rtsp_timestamp_ns = sample.rtsp_timestamp_ns;
     values.last_pipeline_duration_ns = pipeline_duration_ns;
     ++values.interval_send_count;
     values.interval_send_duration_ns += send_duration_ns;
@@ -657,6 +668,12 @@ class FramePipeline::Impl {
         if (!group_barrier_.Wait(camera_id, frame.group_id)) {
           break;
         }
+        const SendDiagnosticSample sample{frame.sequence,
+                                          frame.group_id,
+                                          frame.group_max_skew_ns,
+                                          frame.camera_timestamp_ns,
+                                          frame.rtsp_timestamp_ns,
+                                          frame.enqueue_timestamp_ns};
         const uint64_t send_start_ns = SteadyClockNowNs();
         const int32_t send_result = rtsp_->Send(camera_id, frame);
         const uint64_t send_complete_ns = SteadyClockNowNs();
@@ -665,9 +682,9 @@ class FramePipeline::Impl {
           RequestFailure(send_result);
           break;
         }
-        group_barrier_.MarkSent(camera_id, frame.group_id);
-        RecordSuccessfulSend(camera_id, frame, send_complete_ns - send_start_ns,
-                             send_complete_ns - frame.enqueue_timestamp_ns);
+        group_barrier_.MarkSent(camera_id, sample.group_id);
+        RecordSuccessfulSend(camera_id, sample, send_complete_ns - send_start_ns,
+                             send_complete_ns - sample.enqueue_timestamp_ns);
       }
     } catch (...) {
       RequestFailure(kErrorWorker);
@@ -770,8 +787,8 @@ void FramePipeline::FrameSetCallback(const sc132_frame_set_t* frame_set, void* u
   }
 }
 
-bool FinishSc132Shutdown(FramePipeline* pipeline) noexcept {
-  if (pipeline == nullptr) {
+bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept {
+  if (pipeline == nullptr || rtsp == nullptr) {
     return false;
   }
   pipeline->BeginShutdown(true);
@@ -779,9 +796,17 @@ bool FinishSc132Shutdown(FramePipeline* pipeline) noexcept {
     std::cerr << "fatal: consumer join failed; preserving producer ownership\n";
     return false;
   }
+  const bool status_captured = rtsp->CaptureStatuses();
+  // RTSP close 先归还 encoder 持有的最后一帧，再允许 SC132 等待 retained frame 归零。
+  if (!rtsp->CloseReverse()) {
+    std::cerr << "fatal: RTSP close failed; preserving SC132 producer ownership\n";
+    return false;
+  }
+  // 首次执行常规 cleanup；若底层 join 瞬时失败并保留 STOPPING，第二次按公共合同重试。
+  // 已完成时 sc132_stop 按 generation 状态幂等返回，不重复 teardown。
   sc132_stop();
   sc132_stop();
-  return true;
+  return status_captured;
 }
 
 }  // namespace robobaton_demo

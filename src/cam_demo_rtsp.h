@@ -19,7 +19,7 @@ class RtspChannels {
   RtspChannels& operator=(const RtspChannels&) = delete;
 
   int32_t Open(int camera_id, int port, const Options& options) noexcept;
-  int32_t Send(int camera_id, const QueuedFrame& frame) noexcept;
+  int32_t Send(int camera_id, QueuedFrame& frame) noexcept;
   bool CaptureStatuses() noexcept;
   bool CloseReverse() noexcept;
 

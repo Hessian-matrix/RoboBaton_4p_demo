@@ -66,6 +66,7 @@ struct QueuedFrame {
   QueuedFrame& operator=(QueuedFrame&& other) noexcept;
 
   void Reset() noexcept;
+  sc132_frame_t* ReleaseOwnership() noexcept;
   explicit operator bool() const noexcept { return frame != nullptr; }
 
   sc132_frame_t* frame = nullptr;
@@ -80,6 +81,8 @@ struct QueuedFrame {
   uint64_t enqueue_timestamp_ns = 0;
   const void* y_data = nullptr;
   const void* uv_data = nullptr;
+  uint64_t y_phys = 0;
+  uint64_t uv_phys = 0;
   uint64_t y_size = 0;
   uint64_t uv_size = 0;
   uint32_t width = 0;

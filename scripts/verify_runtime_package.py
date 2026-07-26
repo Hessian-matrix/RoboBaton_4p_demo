@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import re
 import stat
@@ -34,9 +35,14 @@ EXPECTED_LIBRARY_COPIES = {
 }
 EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
+}
+EXPECTED_LIBRARY_NEEDED = {
+    "lib/libicm42688.so.2.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
     "cam_demo",
@@ -60,7 +66,7 @@ def sha256(path: Path) -> str:
 def readelf(path: Path, *args: str) -> str:
     return subprocess.run(
         ["readelf", *args, str(path)], text=True, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, check=True
+        stderr=subprocess.PIPE, check=True, env={**os.environ, "LC_ALL": "C"}
     ).stdout
 
 
@@ -74,22 +80,19 @@ def soname(path: Path) -> str | None:
 
 
 def needed(path: Path) -> set[str]:
-    result = set(re.findall(r"Shared library: \[([^\]]+)\]", readelf(path, "-d")))
-    program = readelf(path, "-l")
-    interpreter = re.search(r"Requesting program interpreter:\s*([^\]]+)\]", program)
-    if interpreter:
-        result.add(Path(interpreter.group(1)).name)
-    return result
+    return set(re.findall(r"Shared library: \[([^\]]+)\]", readelf(path, "-d")))
 
 
 def verify_aarch64_executable(path: Path) -> None:
     header = readelf(path, "-h")
-    if "Class:                             ELF64" not in header or \
-            "Machine:                           AArch64" not in header:
+    elf_class = re.search(r"^\s*Class:\s+(\S+)\s*$", header, re.MULTILINE)
+    machine = re.search(r"^\s*Machine:\s+(\S+)\s*$", header, re.MULTILINE)
+    if not elf_class or elf_class.group(1) != "ELF64" or not machine or machine.group(1) != "AArch64":
         raise AssertionError(f"not an ELF64 AArch64 executable: {path}")
     program = readelf(path, "-l")
-    if "/lib/ld-linux-aarch64.so.1" not in program:
-        raise AssertionError(f"unexpected AArch64 interpreter: {path}")
+    interpreters = re.findall(r"Requesting program interpreter:\s*([^\]]+)\]", program)
+    if interpreters != ["/lib/ld-linux-aarch64.so.1"]:
+        raise AssertionError(f"unexpected AArch64 interpreter: {path}: {interpreters}")
     dynamic = readelf(path, "-d")
     for match in re.findall(r"Library (?:rpath|runpath): \[([^\]]+)\]", dynamic, re.I):
         if "/tmp/" in match or "/root/x5/" in match:
@@ -150,6 +153,14 @@ def verify_package(package_dir: Path) -> None:
         if actual_needed != expected_needed:
             raise AssertionError(
                 f"DT_NEEDED mismatch for {relative}: actual={sorted(actual_needed)} "
+                f"expected={sorted(expected_needed)}"
+            )
+
+    for relative, expected_needed in EXPECTED_LIBRARY_NEEDED.items():
+        actual_needed = needed(package_dir / relative)
+        if actual_needed != expected_needed:
+            raise AssertionError(
+                f"producer DT_NEEDED mismatch for {relative}: actual={sorted(actual_needed)} "
                 f"expected={sorted(expected_needed)}"
             )
 

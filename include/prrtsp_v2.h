@@ -37,11 +37,15 @@ extern "C" {
 #define PRRTSP_PATH_CAPACITY_BYTES ((uint32_t)128)
 #define PRRTSP_PATH_CONTENT_MAX_BYTES_V2_0 ((uint32_t)56)
 
+/* 外部 NV12 仅适用于 struct_size >= V2_1_SIZE。 */
+#define PRRTSP_STREAM_FLAG_EXTERNAL_NV12 ((uint32_t)1)
+
 #define PRRTSP_CODEC_DEFAULT ((uint32_t)0)
 #define PRRTSP_CODEC_H264 ((uint32_t)1)
 #define PRRTSP_CODEC_H265 ((uint32_t)2)
 
 typedef struct prrtsp_stream prrtsp_stream_t;
+typedef void (*prrtsp_frame_release_callback)(void *user);
 
 typedef struct prrtsp_stream_config_v2 {
     uint32_t struct_size;
@@ -94,6 +98,17 @@ PRRTSP_API int32_t prrtsp_stream_open(const prrtsp_stream_config_v2 *config,
                                       prrtsp_stream_t **out_stream);
 PRRTSP_API int32_t prrtsp_stream_send(prrtsp_stream_t *stream,
                                       const prrtsp_nv12_frame_v2 *frame);
+/*
+ * 外部 NV12 模式直接借用调用方的虚拟/物理地址。
+ * release_callback 非空时，本函数在所有返回路径都消费该帧租约并最终恰好回调一次；
+ * 回调可能在返回前执行，也可能延迟到输入槽回收或 stream 成功 close。
+ * 回调不得重入同一 stream。
+ */
+PRRTSP_API int32_t prrtsp_stream_send_external(
+    prrtsp_stream_t *stream,
+    const prrtsp_nv12_frame_v2 *frame,
+    prrtsp_frame_release_callback release_callback,
+    void *release_user);
 PRRTSP_API int32_t prrtsp_stream_get_status(prrtsp_stream_t *stream,
                                             prrtsp_stream_status_v2 *status);
 PRRTSP_API int32_t prrtsp_stream_close(prrtsp_stream_t **stream);

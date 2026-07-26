@@ -32,6 +32,8 @@ QueuedFrame& QueuedFrame::operator=(QueuedFrame&& other) noexcept {
   enqueue_timestamp_ns = other.enqueue_timestamp_ns;
   y_data = other.y_data;
   uv_data = other.uv_data;
+  y_phys = other.y_phys;
+  uv_phys = other.uv_phys;
   y_size = other.y_size;
   uv_size = other.uv_size;
   width = other.width;
@@ -47,6 +49,10 @@ void QueuedFrame::Reset() noexcept {
     sc132_frame_release(frame);
     frame = nullptr;
   }
+}
+
+sc132_frame_t* QueuedFrame::ReleaseOwnership() noexcept {
+  return std::exchange(frame, nullptr);
 }
 
 uint64_t SteadyClockNowNs() {

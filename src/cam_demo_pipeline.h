@@ -58,7 +58,7 @@ class FramePipeline {
   static void FrameSetCallback(const sc132_frame_set_t* frame_set, void* user) noexcept;
 };
 
-// 关闭顺序：admission-close、request、drain、join，quiescent 后 blocking stop。
-bool FinishSc132Shutdown(FramePipeline* pipeline) noexcept;
+// 关闭顺序：admission-close、request、drain、join、RTSP frame release、blocking stop。
+bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept;
 
 }  // namespace robobaton_demo

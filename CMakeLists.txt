@@ -136,9 +136,8 @@ target_link_options(cam_demo PRIVATE
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
 )
+# libicm42688 已依赖共享 C++ 运行库，sensor_demo 复用同一映射，避免静态和动态运行库同时驻留。
 target_link_options(sensor_demo PRIVATE
-  -static-libstdc++
-  -static-libgcc
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
 )
