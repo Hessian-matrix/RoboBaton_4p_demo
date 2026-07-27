@@ -195,7 +195,7 @@ max_numeric_field() {
 frame_set_metric_lines() {
   # frameset 行由单个回调线程一次性打印，可直接代表同一 frame-set 的四路时间戳。
   awk '
-    /^frameset group_id=[0-9]+ group_ts_ns=[0-9]+ group_skew_ns=[0-9]+ calc_skew_ns=[0-9]+ cam0\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam1\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam2\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam3\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\)$/ {
+    /^frameset group_id=[0-9]+ group_ts_ns=[0-9]+ group_ts_domain=[a-z_]+ group_skew_ns=[0-9]+ calc_skew_ns=[0-9]+ cam0\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+,camera_ts_domain=[a-z_]+\) cam1\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+,camera_ts_domain=[a-z_]+\) cam2\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+,camera_ts_domain=[a-z_]+\) cam3\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+,camera_ts_domain=[a-z_]+\)$/ {
       print
     }
   ' "${LOCAL_LOG}"
@@ -210,7 +210,7 @@ frame_set_max_numeric_field() {
 valid_metric_lines() {
   # 诊断线程以单次原子写提交每行，只接纳字段完整的行参与阈值判定。
   awk '
-    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ queue_full_rejects=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+( rtsp_ts_ns=[0-9]+)? send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]$/ {
+    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ queue_full_rejects=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+ camera_ts_domain=[a-z_]+ rtsp_ts_ns=[0-9]+ rtsp_ts_domain=[a-z_]+ send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]$/ {
       print
     }
   ' "${LOCAL_LOG}"

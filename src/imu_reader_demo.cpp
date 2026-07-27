@@ -160,6 +160,9 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     if (has_sample) {
       try {
         // observer 在 owner 线程运行，producer callback 不执行阻塞 I/O。
+        if (options.system_clock != nullptr) {
+          sample.host_timestamp_ns = options.system_clock->MapRawNs(sample.host_timestamp_ns);
+        }
         if (context.observer != nullptr) {
           context.observer(sample, context.observer_user);
         }
@@ -361,7 +364,10 @@ int main(int argc, char** argv) {
     // stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。
     signal(SIGPIPE, SIG_IGN);
     uint32_t print_rate_hz = 0U;
-    const ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
+    ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
+    robobaton_demo::FrozenSystemClock system_clock;
+    system_clock.PrintTimeBase(std::cout);
+    options.system_clock = &system_clock;
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
         robobaton_demo::ImuPrintEverySamples(options.sample_rate_hz, print_rate_hz);

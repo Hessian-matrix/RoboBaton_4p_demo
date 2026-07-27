@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "sc132camera.h"
+#include "frozen_system_clock.h"
 
 extern "C" {
 typedef struct icm42688_sample icm42688_sample_t;
@@ -37,7 +38,20 @@ enum class VideoCodec : uint32_t {
   kH265 = 1U,
 };
 
+enum class TimestampDomain : uint32_t {
+  kUnknown = 0U,
+  kMonotonicRaw = 1U,
+  kSystemRealtime = 2U,
+  kSc132Native = 3U,
+};
+
+struct Options;
+
 const char* VideoCodecName(VideoCodec codec) noexcept;
+const char* TimestampDomainName(TimestampDomain domain) noexcept;
+bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept;
+TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept;
+
 
 struct Options {
   int channels = kMaxChannels;
@@ -54,6 +68,7 @@ struct Options {
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
+  const FrozenSystemClock* system_clock = nullptr;
 };
 
 // retained SC frame 由可移动、不可复制的 RAII job 独占。
@@ -78,6 +93,9 @@ struct QueuedFrame {
   uint64_t group_max_skew_ns = 0;
   uint64_t camera_timestamp_ns = 0;
   uint64_t rtsp_timestamp_ns = 0;
+  TimestampDomain group_timestamp_domain = TimestampDomain::kUnknown;
+  TimestampDomain camera_timestamp_domain = TimestampDomain::kUnknown;
+  TimestampDomain rtsp_timestamp_domain = TimestampDomain::kUnknown;
   uint64_t enqueue_timestamp_ns = 0;
   const void* y_data = nullptr;
   const void* uv_data = nullptr;
@@ -95,6 +113,7 @@ struct ImuConsumerOptions {
   uint32_t sample_rate_hz = 1000U;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
+  const FrozenSystemClock* system_clock = nullptr;
 };
 
 #ifdef RELEASE008_TESTING

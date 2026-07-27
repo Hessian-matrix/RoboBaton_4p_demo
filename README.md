@@ -181,7 +181,7 @@ cd /root/demo
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
 
-`host_timestamp_ns`使用`CLOCK_MONOTONIC_RAW`时间域。当前demo只分别记录相机和IMU时间线，不用最近邻时间差伪造物理TD；TD应在共同运动事件采集后单独估计。
+`sensor_demo` 和独立 `imu_reader_demo` 启动时都会打印 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。IMU rising edge 原始采样时间来自 `CLOCK_MONOTONIC_RAW`，但对用户输出的 `host_timestamp_ns` 会经冻结 offset 映射到 `system_realtime` 时间域。当前 demo 只分别记录相机和 IMU 时间线，不用最近邻时间差伪造物理 TD；TD 应在共同运动事件采集后单独估计。
 
 
 ### SC132 四目相机 RTSP Demo
@@ -327,9 +327,12 @@ avg_frame_rate=60/1
 
 - `seq`：每个相机通道独立递增的软件序号
 - `group_id`：`libsc132.so` 生成的四目同步帧组序号
+- `group_ts_ns`：帧组时间戳，单位 `ns`；时间域由 `group_ts_domain` 明确标注
 - `group_skew_ns`：当前帧组四路 timestamp 最大差值，单位 `ns`，用于诊断链路相位差
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
-- `camera_ts_ns`：相机帧时间戳，单位 `ns`；优先为 sensor/VIO 时间戳，fallback 为系统出帧时间
+- `camera_ts_ns`：相机帧时间戳，单位 `ns`；`software_gpio`/`gpio` 模式经 `TIME_BASE` 冻结偏移映射为 `system_realtime`，其他触发模式保留 `libsc132.so` 原始 `sc132_native` 时间域
+- `group_ts_domain` / `camera_ts_domain` / `rtsp_ts_domain`：对应时间戳的时间域，取值为 `system_realtime`、`monotonic_raw` 或 `sc132_native`
+- `rtsp_ts_ns`：送入 PRRTSP 的帧时间戳；时间域由 `rtsp_ts_domain` 明确标注
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
@@ -356,7 +359,7 @@ avg_frame_rate=60/1
 
 输出字段：
 
-- `ts_ns`：host monotonic clock 时间戳，单位 `ns`
+- `ts_ns`：经 `TIME_BASE` 冻结 offset 映射后的 `system_realtime` 时间戳，单位 `ns`
 - `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，显式使用 `--print-rate-hz 1000` 时约为 `1ms`
 - `temp_c`：温度，单位 `degC`
 - `accel_mps2`：三轴加速度，单位 `m/s^2`
@@ -366,7 +369,7 @@ avg_frame_rate=60/1
 说明：
 
 - demo 显式使用 GPIO395 INT1 direct 模式（`ICM42688_READ_MODE_DIRECT`）
-- 每个 rising edge 在 14-byte direct SPI read 前使用 `CLOCK_MONOTONIC_RAW` 取时间；`host_timestamp_ns` 是逐 sample 时间戳，不复制 FIFO 批次时间
+- 每个 rising edge 在 14-byte direct SPI read 前使用 `CLOCK_MONOTONIC_RAW` 取原始时间；`imu_reader_demo` 通过启动时打印的 `TIME_BASE` 将其映射为逐 sample `system_realtime` `host_timestamp_ns`，不复制 FIFO 批次时间
 - IMU 路径不使用 GPIO397、FSYNC 或 `icm42688_pulse_fsync()`
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
 - CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本

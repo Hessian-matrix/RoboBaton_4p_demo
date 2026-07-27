@@ -53,13 +53,17 @@ int main(int argc, char** argv) {
   // 必须存活到进程结束，避免析构触发 restart/unload。
   auto* rtsp = new RtspChannels();
   FramePipeline* pipeline = nullptr;
+  std::unique_ptr<FrozenSystemClock> system_clock;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     g_stop_requested.store(false, std::memory_order_release);
 
-    const Options options = ParseCommandLine(argc, argv);
+    Options options = ParseCommandLine(argc, argv);
+    system_clock = std::make_unique<FrozenSystemClock>();
+    system_clock->PrintTimeBase(std::cout);
+    options.system_clock = system_clock.get();
     std::cout << "Starting SC132 v2 RTSP demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)

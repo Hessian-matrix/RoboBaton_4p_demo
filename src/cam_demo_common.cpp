@@ -1,6 +1,6 @@
 #include "cam_demo_common.h"
 
-#include <chrono>
+#include <stdexcept>
 #include <utility>
 
 extern "C" {
@@ -29,6 +29,9 @@ QueuedFrame& QueuedFrame::operator=(QueuedFrame&& other) noexcept {
   group_max_skew_ns = other.group_max_skew_ns;
   camera_timestamp_ns = other.camera_timestamp_ns;
   rtsp_timestamp_ns = other.rtsp_timestamp_ns;
+  group_timestamp_domain = other.group_timestamp_domain;
+  camera_timestamp_domain = other.camera_timestamp_domain;
+  rtsp_timestamp_domain = other.rtsp_timestamp_domain;
   enqueue_timestamp_ns = other.enqueue_timestamp_ns;
   y_data = other.y_data;
   uv_data = other.uv_data;
@@ -56,9 +59,12 @@ sc132_frame_t* QueuedFrame::ReleaseOwnership() noexcept {
 }
 
 uint64_t SteadyClockNowNs() {
-  const auto now = std::chrono::steady_clock::now().time_since_epoch();
-  return static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+  uint64_t timestamp_ns = 0U;
+  if (FrozenSystemClock::ReadSystemClock(FrozenClockId::kMonotonicRaw,
+                                         &timestamp_ns, nullptr) != 0) {
+    throw std::runtime_error("CLOCK_MONOTONIC_RAW read failed");
+  }
+  return timestamp_ns;
 }
 
 int RtspPortForChannel(int channel) { return kBaseRtspPort + channel; }
@@ -73,6 +79,32 @@ const char* VideoCodecName(VideoCodec codec) noexcept {
   }
   // 非法枚举统一输出 unknown，避免日志路径产生未定义行为。
   return "unknown";
+}
+
+const char* TimestampDomainName(TimestampDomain domain) noexcept {
+  switch (domain) {
+    case TimestampDomain::kMonotonicRaw:
+      return "monotonic_raw";
+    case TimestampDomain::kSystemRealtime:
+      return "system_realtime";
+    case TimestampDomain::kSc132Native:
+      return "sc132_native";
+    case TimestampDomain::kUnknown:
+      break;
+  }
+  return "unknown";
+}
+
+bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept {
+  return options.trigger_mode == "software_gpio" || options.trigger_mode == "gpio";
+}
+
+TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept {
+  if (!Sc132TimestampsAreMonotonicRaw(options)) {
+    return TimestampDomain::kSc132Native;
+  }
+  return options.system_clock != nullptr ? TimestampDomain::kSystemRealtime
+                                        : TimestampDomain::kMonotonicRaw;
 }
 
 uint32_t CameraMaskFromChannelCount(int channels) {

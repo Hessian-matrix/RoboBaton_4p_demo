@@ -112,13 +112,17 @@ int main(int argc, char** argv) {
   std::thread imu_thread;
   auto* rtsp = new RtspChannels();
   FramePipeline* pipeline = nullptr;
+  std::unique_ptr<FrozenSystemClock> system_clock;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     g_stop_requested.store(false, std::memory_order_release);
 
-    const Options options = ParseCommandLine(argc, argv);
+    Options options = ParseCommandLine(argc, argv);
+    system_clock = std::make_unique<FrozenSystemClock>();
+    system_clock->PrintTimeBase(std::cout);
+    options.system_clock = system_clock.get();
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
@@ -131,6 +135,7 @@ int main(int argc, char** argv) {
     imu_options.sample_rate_hz = 1000U;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
+    imu_options.system_clock = system_clock.get();
     imu_thread = std::thread([&imu_result, &imu_options, &imu_stats] {
       const int result = RunIcmConsumer(imu_options, ObserveImuSample, &imu_stats);
       imu_result.store(result, std::memory_order_release);
