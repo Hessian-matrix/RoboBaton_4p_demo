@@ -60,7 +60,7 @@ struct ImuStats {
       return;
     }
 
-    const uint64_t timestamp_ns = sample.host_timestamp_ns;
+    const uint64_t timestamp_ns = sample.sample_timestamp_ns;
     // 第一帧只建立时基，不产生采样间隔。
     if (samples == 0U) {
       first_timestamp_ns = timestamp_ns;
@@ -107,28 +107,30 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   bool sc_start_attempted = false;
   bool consumer_quiescent = false;
-  std::atomic<int> imu_result{-1};
+  // 0 同时表示参数错误等硬件前失败路径尚未启动 IMU 线程。
+  std::atomic<int> imu_result{0};
   ImuStats imu_stats;
   std::thread imu_thread;
-  auto* rtsp = new RtspChannels();
-  FramePipeline* pipeline = nullptr;
+  RtspChannels rtsp;
+  std::unique_ptr<FramePipeline> pipeline;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     g_stop_requested.store(false, std::memory_order_release);
 
-    const Options options = ParseCommandLine(argc, argv);
+    const Options options = ParseSensorDemoCommandLine(argc, argv);
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps << " rotate=" << options.rotate_degrees
               << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
-              << " path=" << options.url << " imu_rate_hz=1000 read_mode=INT1_DIRECT\n";
+              << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
+              << " imu_time=SENSOR_TIMESTAMP_FIFO\n";
 
-    // IMU starts first so its direct INT1 timeline is live before camera frames arrive.
+    // IMU starts first so its sensor-timestamp FIFO timeline is live before camera frames arrive.
     ImuConsumerOptions imu_options;
-    imu_options.sample_rate_hz = 1000U;
+    imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_thread = std::thread([&imu_result, &imu_options, &imu_stats] {
@@ -149,7 +151,7 @@ int main(int argc, char** argv) {
     ConfigureSc132TriggerMode(options);
     ConfigureSc132SensorProfile(options);
 
-    pipeline = new FramePipeline(options, rtsp, MainPipelineHooks());
+    pipeline = std::make_unique<FramePipeline>(options, &rtsp, MainPipelineHooks());
     pipeline->StartWorkers();
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
@@ -157,7 +159,7 @@ int main(int argc, char** argv) {
         continue;
       }
       const int32_t status =
-          rtsp->Open(camera_id, RtspPortForChannel(camera_id), options);
+          rtsp.Open(camera_id, RtspPortForChannel(camera_id), options);
       if (status != PRRTSP_OK) {
         throw std::runtime_error("prrtsp_stream_open failed for camera " +
                                  std::to_string(camera_id) + " status=" +
@@ -191,7 +193,7 @@ int main(int argc, char** argv) {
 
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
-      consumer_quiescent = FinishSc132Shutdown(pipeline, rtsp);
+      consumer_quiescent = FinishSc132Shutdown(pipeline.get(), &rtsp);
     } else {
       pipeline->BeginShutdown(false);
       consumer_quiescent = pipeline->Join();
@@ -209,11 +211,11 @@ int main(int argc, char** argv) {
     std::_Exit(1);
   }
 
-  if (!rtsp->CaptureStatuses()) {
+  if (!rtsp.CaptureStatuses()) {
     std::cerr << "fatal: prrtsp_stream_get_status failed\n";
     exit_code = 1;
   }
-  if (!rtsp->CloseReverse()) {
+  if (!rtsp.CloseReverse()) {
     std::cerr << "fatal: RTSP handle remains after three close attempts\n";
     exit_code = 1;
   }

@@ -31,21 +31,20 @@ typedef enum icm42688_status {
 } icm42688_status_t;
 
 typedef enum icm42688_read_mode {
-  ICM42688_READ_MODE_FIFO = 0,
-  ICM42688_READ_MODE_DIRECT = 1
+  ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO = 0
 } icm42688_read_mode_t;
 
 typedef struct icm42688_config {
   uint32_t struct_size;
   uint32_t sample_rate_hz;
   uint32_t fifo_watermark_samples;
-  /* 固定为 uint32_t；取值使用 icm42688_read_mode_t 常量，禁止 enum 编译选项改变结构布局。 */
+  /* C ABI 以 uint32_t 固定 read_mode 存储宽度；当前仅接受 ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO。 */
   uint32_t read_mode;
   uint32_t reserved[8];
 } icm42688_config_t;
 
 #define ICM42688_CONFIG_INIT \
-  { sizeof(icm42688_config_t), 1000U, 8U, ICM42688_READ_MODE_FIFO, {0U} }
+  { sizeof(icm42688_config_t), 1000U, 1U, ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO, {0U} }
 
 typedef struct icm42688_raw_sample {
   int16_t temperature;
@@ -56,14 +55,20 @@ typedef struct icm42688_raw_sample {
 
 typedef struct icm42688_sample {
   uint32_t struct_size;
+  /* reserved0 复用为诊断字段，表示 driver 实际观测到的 20-bit TMST low rollover 累计数。 */
   uint32_t reserved0;
-  /* Direct INT1 mode uses CLOCK_MONOTONIC_RAW; FIFO mode uses the same host clock domain. */
+  /* host_timestamp_ns 是 GPIO395 DRDY 边沿时间，输出前转换到 CLOCK_MONOTONIC_RAW 时间域。 */
   uint64_t host_timestamp_ns;
   double temperature_c;
   double accel_mps2[3];
   double gyro_rps[3];
   icm42688_raw_sample_t raw;
-  uint32_t reserved[8];
+  uint64_t sample_timestamp_ns;
+  uint64_t sample_sequence;
+  uint32_t timestamp_uncertainty_us;
+  uint32_t gpio_event_gap_count;
+  uint32_t fifo_overflow_count;
+  uint32_t mapper_failure_count;
 } icm42688_sample_t;
 
 /*

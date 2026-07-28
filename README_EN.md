@@ -98,7 +98,7 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
-> Current repository status: as of 2026-07-24, `demo/` was regenerated from the current C ABI v2 sources and the three delivered shared libraries. It passed `scripts/verify_runtime_package.py` and `manifest.sha256` verification; AArch64 builds passed for all four demo targets. The final `sensor_demo` board smoke passed with 12,424 valid IMU samples at 1002.63 Hz, zero invalid/duplicate/regressed timestamps, and exit code 0. The board restored GPIO395/397/417 and SPI ownership after exit.
+> Current repository status: as of 2026-07-24, `demo/` was regenerated from the current C ABI v2 sources and the three delivered shared libraries. It passed `scripts/verify_runtime_package.py` and `manifest.sha256` verification; AArch64 builds passed for all four demo targets. The final `sensor_demo` board smoke passed with 12,424 valid IMU samples at 1002.63 Hz, zero invalid/duplicate/regressed timestamps, and exit code 0. The board restored GPIO395/417 and SPI ownership after exit.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -168,32 +168,36 @@ cd /root/demo
 ./bin/cam_demo
 ```
 
-All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, or other runtime parameters.
+All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, IMU sample rate, or other runtime parameters.
 
 ## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
 
 Source: `src/sensor_demo.cpp`.
 
-`sensor_demo` starts the four-camera SC132 pipeline, PRRTSP v2, and the independent GPIO395 INT1 IMU direct path:
+`sensor_demo` starts the four-camera SC132 pipeline, PRRTSP v2, and the independent GPIO395 DRDY + sensor-timestamp FIFO IMU path:
 
 ```text
 SC132 GPIO417 trigger
   -> frame-set.group_timestamp_ns
   -> PRRTSP v2 timestamp_ns
 
-ICM GPIO395 INT1 rising edge
-  -> CLOCK_MONOTONIC_RAW host_timestamp_ns
-  -> 14-byte direct SPI read
-  -> icm42688 sample callback
+ICM GPIO395 DRDY rising edge
+  -> host edge timestamp anchor
+ICM FIFO TMST
+  -> sample_timestamp_ns / icm42688 sample callback
 ```
 
-Both `sensor_demo` and `imu_reader_demo` explicitly set `ICM42688_READ_MODE_DIRECT`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
 
 Run it from the complete package:
 
 ```bash
 cd /root/demo
 ./sensor_demo
+```
+
+```bash
+./sensor_demo --sample-rate-hz 2000
 ```
 
 On exit it prints an IMU summary such as:
@@ -366,8 +370,10 @@ Default run:
 Example:
 
 ```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10000
+./imu_reader_demo --sample-rate-hz 2000 --count 10000
 ```
+
+Supported IMU sample rates are `25/50/100/200/500/1000/2000 Hz`; the default remains `1000 Hz`.
 
 Terminal output defaults to `10 Hz` while the program still consumes and counts every
 IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
@@ -377,7 +383,7 @@ exceed `--sample-rate-hz`. Set it to `0` to disable terminal output without chan
 Output fields:
 
 - `ts_ns`: host monotonic clock timestamp in `ns`
-- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or about `1 ms` with explicit `--print-rate-hz 1000`
+- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
 - `temp_c`: temperature in `degC`
 - `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
@@ -385,12 +391,12 @@ Output fields:
 
 Notes:
 
-- The demo explicitly uses GPIO395 INT1 direct mode (`ICM42688_READ_MODE_DIRECT`).
-- Each rising edge is timestamped with `CLOCK_MONOTONIC_RAW` before the 14-byte direct SPI read; `host_timestamp_ns` is per-sample and is not copied from a FIFO batch.
+- The demo uses GPIO395 DRDY + sensor-timestamp FIFO mode (`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`).
+- `host_timestamp_ns` records the GPIO395 rising-edge anchor; `sample_timestamp_ns` is the per-sample timestamp mapped from FIFO TMST.
 - The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`.
 - The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
 - CLI output uses one non-blocking write per line. If an SSH session, pipe, or log collector slows down or closes, CLI log lines are dropped while the owner continues consuming every IMU sample.
-- The 10 Hz default further reduces normal terminal traffic. Explicit `--print-rate-hz 1000` remains available for diagnostics, but log completeness is not guaranteed with a slow sink.
+- The 10 Hz default further reduces normal terminal traffic. Increase `--print-rate-hz` explicitly for diagnostics, but log completeness is not guaranteed with a slow sink.
 - If a custom observer or other owner-side computation remains slower than the sample period, the bounded 64-slot FIFO still fails closed rather than silently dropping IMU samples.
 
 ## 6. UART Communication Demo
@@ -484,7 +490,7 @@ The IMU demo uses the current X5 mainboard connection by default:
 - SPI device node: `/dev/spidev2.0`
 - SPI mode: `0`
 - SPI speed: `4 MHz`
-- Default read mode: FIFO
+- Default read mode: sensor-timestamp FIFO
 
 The UART demo does not assume fixed wiring. Select `/dev/ttyS1`, `/dev/ttyS7`, or another serial device according to the actual hardware connection.
 
@@ -515,7 +521,7 @@ The top-level launchers set `LD_LIBRARY_PATH` automatically. If you run a `bin/`
 ```bash
 cd /root/demo
 . ./env.sh
-./bin/imu_reader_demo --sample-rate-hz 1000 --count 10
+./bin/imu_reader_demo --sample-rate-hz 2000 --count 10
 ```
 
 ### 9.2 IMU Startup Failure

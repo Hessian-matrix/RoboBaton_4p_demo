@@ -108,8 +108,8 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
 
   icm42688_config_t config = ICM42688_CONFIG_INIT;
   config.sample_rate_hz = options.sample_rate_hz;
-  config.fifo_watermark_samples = 8U;
-  config.read_mode = ICM42688_READ_MODE_DIRECT;
+  config.fifo_watermark_samples = 1U;
+  config.read_mode = ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO;
 
   IcmCallbackContext context;
   context.observer = observer;
@@ -220,10 +220,10 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
     return;
   }
 
+  const uint64_t timestamp_ns = sample.sample_timestamp_ns;
   const double dt_ms = state->last_timestamp_ns == 0U
                            ? 0.0
-                           : static_cast<double>(sample.host_timestamp_ns -
-                                                 state->last_timestamp_ns) /
+                           : static_cast<double>(timestamp_ns - state->last_timestamp_ns) /
                                  1000000.0;
   const double accel_norm =
       std::sqrt(sample.accel_mps2[0] * sample.accel_mps2[0] +
@@ -235,9 +235,15 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
   std::array<char, PIPE_BUF> line;
   const int line_length = std::snprintf(
       line.data(), line.size(),
-      "ts_ns=%llu dt_ms=%.6f temp_c=%.6f accel_mps2=[%.6f, %.6f, %.6f] "
+      "ts_ns=%llu host_ts_ns=%llu sample_seq=%llu uncertainty_us=%u "
+      "gpio_gap_count=%u fifo_overflow_count=%u mapper_failure_count=%u "
+      "dt_ms=%.6f temp_c=%.6f accel_mps2=[%.6f, %.6f, %.6f] "
       "accel_norm_mps2=%.6f gyro_rps=[%.6f, %.6f, %.6f]\n",
-      static_cast<unsigned long long>(sample.host_timestamp_ns), dt_ms,
+      static_cast<unsigned long long>(timestamp_ns),
+      static_cast<unsigned long long>(sample.host_timestamp_ns),
+      static_cast<unsigned long long>(sample.sample_sequence),
+      sample.timestamp_uncertainty_us, sample.gpio_event_gap_count,
+      sample.fifo_overflow_count, sample.mapper_failure_count, dt_ms,
       sample.temperature_c, sample.accel_mps2[0], sample.accel_mps2[1],
       sample.accel_mps2[2], accel_norm, sample.gyro_rps[0], sample.gyro_rps[1],
       sample.gyro_rps[2]);
@@ -249,7 +255,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
   const ssize_t written =
       ::write(state->output_fd, line.data(), static_cast<size_t>(line_length));
   if (written == line_length) {
-    state->last_timestamp_ns = sample.host_timestamp_ns;
+    state->last_timestamp_ns = timestamp_ns;
     return;
   }
 

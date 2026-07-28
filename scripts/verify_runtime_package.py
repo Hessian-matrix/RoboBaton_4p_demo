@@ -40,7 +40,7 @@ EXPECTED_NEEDED = {
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42688.so.2.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42688.so.2.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }

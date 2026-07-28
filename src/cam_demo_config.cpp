@@ -13,10 +13,10 @@ constexpr const char* kSc132TriggerModeEnv = "SC132_TRIGGER_MODE";
 constexpr const char* kSc132Single60FpsProfile =
     "sc132gs_linear_1088x1280_raw10_60fps_1lane";
 
-// 功能：打印 cam_demo 支持的命令行参数。
-// 输入：program 为可执行文件名。
+// 功能：打印 demo 支持的命令行参数。
+// 输入：program 为可执行文件名；include_imu_options 表示是否显示 sensor_demo 专属 IMU 参数。
 // 输出：帮助文本写入 stdout。
-void PrintUsage(const char* program) {
+void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
             << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
             << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
@@ -31,8 +31,12 @@ void PrintUsage(const char* program) {
             << kDefaultFrameSetMaxSkewNs << "\n"
             << "  --frame-timeout-ms <ms> Frame-set pending timeout, default 100\n"
             << "  --trigger-mode <software_gpio|vin_lpwm|none> SC132 trigger output mode, default "
-            << kDefaultSc132TriggerMode << "\n"
-            << "  -h, --help        Show this help\n";
+            << kDefaultSc132TriggerMode << "\n";
+  if (include_imu_options) {
+    std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+              << kDefaultImuSampleRateHz << "\n";
+  }
+  std::cout << "  -h, --help        Show this help\n";
 }
 
 // 功能：读取当前参数后面的取值。
@@ -98,6 +102,24 @@ VideoCodec ParseVideoCodec(const std::string& text) {
   throw std::invalid_argument("--codec must be h264 or h265");
 }
 
+// 功能：按 libicm42688 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
+// 输入：sample_rate_hz 为用户命令行值。
+// 输出：支持则 true，否则 false。
+bool IsSupportedImuSampleRateHz(uint32_t sample_rate_hz) {
+  switch (sample_rate_hz) {
+    case 25U:
+    case 50U:
+    case 100U:
+    case 200U:
+    case 500U:
+    case 1000U:
+    case 2000U:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // 功能：检查运行参数是否处于 demo 支持范围。
 // 输入：已解析的 Options。
 // 输出：无。
@@ -150,6 +172,10 @@ void ValidateOptions(const Options& options) {
   if (options.frame_set_timeout_ms == 0) {
     throw std::invalid_argument("--frame-timeout-ms must be positive");
   }
+  if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
+    throw std::invalid_argument(
+        "--sample-rate-hz must be one of 25, 50, 100, 200, 500, 1000, or 2000");
+  }
   if (options.trigger_mode != "software_gpio" && options.trigger_mode != "gpio" &&
       options.trigger_mode != "vin_lpwm" && options.trigger_mode != "lpwm" &&
       options.trigger_mode != "none" && options.trigger_mode != "off") {
@@ -159,11 +185,11 @@ void ValidateOptions(const Options& options) {
 
 }  // namespace
 
-// 功能：解析 cam_demo 命令行。
-// 输入：main 函数传入的 argc/argv。
+// 功能：解析相机/RTSP命令行；sensor_demo 可额外启用 IMU 采样率参数。
+// 输入：main 函数传入的 argc/argv；accept_imu_options 控制是否接受 --sample-rate-hz。
 // 输出：Options；--help 会打印帮助并退出进程。
 // 异常：未知参数或参数值非法时抛出 std::invalid_argument。
-Options ParseCommandLine(int argc, char** argv) {
+Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
   Options options;
   int requested_channels = options.channels;
   bool channels_set = false;
@@ -223,8 +249,11 @@ Options ParseCommandLine(int argc, char** argv) {
           ParseInt(RequireValue(argc, argv, &i, "--frame-timeout-ms"), "--frame-timeout-ms"));
     } else if (arg == "--trigger-mode") {
       options.trigger_mode = RequireValue(argc, argv, &i, "--trigger-mode");
+    } else if (accept_imu_options && arg == "--sample-rate-hz") {
+      options.imu_sample_rate_hz =
+          ParseUint32(RequireValue(argc, argv, &i, "--sample-rate-hz"), "--sample-rate-hz");
     } else if (arg == "--help" || arg == "-h") {
-      PrintUsage(argv[0]);
+      PrintUsage(argv[0], accept_imu_options);
       std::exit(0);
     } else {
       throw std::invalid_argument("unknown argument: " + arg);
@@ -241,6 +270,14 @@ Options ParseCommandLine(int argc, char** argv) {
 
   ValidateOptions(options);
   return options;
+}
+
+Options ParseCommandLine(int argc, char** argv) {
+  return ParseCommandLineImpl(argc, argv, false);
+}
+
+Options ParseSensorDemoCommandLine(int argc, char** argv) {
+  return ParseCommandLineImpl(argc, argv, true);
 }
 
 // 功能：把命令行选择的触发模式写入 libsc132 使用的环境变量。

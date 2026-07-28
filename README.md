@@ -97,7 +97,7 @@ file lib/libprrtsp.so
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/397/417 和 SPI 资源恢复正常。
+> 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/417 和 SPI 资源恢复正常。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -165,14 +165,18 @@ cd /root/demo
 ./bin/cam_demo
 ```
 
-四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号或采样次数时，再通过命令行参数覆盖默认值。
+四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
 ## 4. sensor_demo 联合相机与IMU
 
-`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 INT1 direct模式连续采集1000Hz数据。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
+`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`1000Hz`，可通过`--sample-rate-hz`切换到`25/50/100/200/500/1000/2000Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
 
 ```bash
 ./sensor_demo
+```
+
+```bash
+./sensor_demo --sample-rate-hz 2000
 ```
 
 退出日志包含：
@@ -181,7 +185,7 @@ cd /root/demo
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
 
-`host_timestamp_ns`使用`CLOCK_MONOTONIC_RAW`时间域。当前demo只分别记录相机和IMU时间线，不用最近邻时间差伪造物理TD；TD应在共同运动事件采集后单独估计。
+`host_timestamp_ns`使用`CLOCK_MONOTONIC_RAW`时间域并表示GPIO395边沿锚点；`sample_timestamp_ns`来自IMU FIFO TMST映射。当前demo只分别记录相机和IMU时间线，不用最近邻时间差伪造物理TD；TD应在共同运动事件采集后单独估计。
 
 
 ### SC132 四目相机 RTSP Demo
@@ -347,8 +351,10 @@ avg_frame_rate=60/1
 示例：
 
 ```bash
-./imu_reader_demo --sample-rate-hz 1000 --count 10000
+./imu_reader_demo --sample-rate-hz 2000 --count 10000
 ```
+
+支持的IMU采样率为 `25/50/100/200/500/1000/2000Hz`；默认仍为 `1000Hz`。
 
 终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置
 `--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0`
@@ -357,7 +363,7 @@ avg_frame_rate=60/1
 输出字段：
 
 - `ts_ns`：host monotonic clock 时间戳，单位 `ns`
-- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，显式使用 `--print-rate-hz 1000` 时约为 `1ms`
+- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，非零显式输出频率下约为 `1000 / --print-rate-hz` ms；`--print-rate-hz 0` 不产生逐帧 `dt_ms`
 - `temp_c`：温度，单位 `degC`
 - `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
@@ -365,12 +371,12 @@ avg_frame_rate=60/1
 
 说明：
 
-- demo 显式使用 GPIO395 INT1 direct 模式（`ICM42688_READ_MODE_DIRECT`）
-- 每个 rising edge 在 14-byte direct SPI read 前使用 `CLOCK_MONOTONIC_RAW` 取时间；`host_timestamp_ns` 是逐 sample 时间戳，不复制 FIFO 批次时间
+- demo 使用GPIO395 DRDY + sensor timestamp FIFO模式（`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`）
+- `host_timestamp_ns`记录GPIO395 rising edge锚点，`sample_timestamp_ns`由FIFO内TMST映射得到逐sample时间戳
 - IMU 路径不使用 GPIO397、FSYNC 或 `icm42688_pulse_fsync()`
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
 - CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本
-- 默认 10Hz 进一步降低正常终端的文本量；`--print-rate-hz 1000` 可用于诊断，但慢 sink 下输出日志不保证完整
+- 默认 10Hz 进一步降低正常终端的文本量；可显式提高 `--print-rate-hz` 做诊断，但慢 sink 下输出日志不保证完整
 - 若自定义 observer 的平均处理时间超过采样周期等 owner 计算路径持续变慢，64 槽 FIFO 仍按设计 fail-closed，禁止静默丢 IMU 样本
 
 ## 6. 串口通信 Demo
@@ -466,7 +472,7 @@ IMU demo 默认使用当前 X5 主板连接：
 - SPI 设备节点：`/dev/spidev2.0`
 - SPI mode：`0`
 - SPI speed：`4 MHz`
-- 默认读取模式：FIFO
+- 默认读取模式：sensor-timestamp FIFO
 
 串口 demo 不固定硬件连线，用户需要根据现场接线选择 `/dev/ttyS1`、`/dev/ttyS7` 或其他串口设备。
 

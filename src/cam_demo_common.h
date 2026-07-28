@@ -30,6 +30,7 @@ constexpr int kDefaultDiagnosticIntervalMs = 1000;
 constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
+constexpr uint32_t kDefaultImuSampleRateHz = 1000U;
 
 extern std::atomic<bool> g_stop_requested;
 enum class VideoCodec : uint32_t {
@@ -54,6 +55,7 @@ struct Options {
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
+  uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
 };
 
 // retained SC frame 由可移动、不可复制的 RAII job 独占。
@@ -92,7 +94,7 @@ struct QueuedFrame {
 };
 
 struct ImuConsumerOptions {
-  uint32_t sample_rate_hz = 1000U;
+  uint32_t sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
 };
