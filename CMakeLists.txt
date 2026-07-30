@@ -58,6 +58,7 @@ set_target_properties(prrtsp_v2 PROPERTIES
 
 add_executable(imu_reader_demo
   src/imu_reader_demo.cpp
+  src/frozen_system_clock.cpp
 )
 
 add_executable(serial_port_demo
@@ -70,6 +71,7 @@ add_executable(cam_demo
   src/cam_demo_config.cpp
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
+  src/frozen_system_clock.cpp
 )
 
 add_executable(sensor_demo
@@ -79,6 +81,7 @@ add_executable(sensor_demo
   src/cam_demo_config.cpp
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
+  src/frozen_system_clock.cpp
 )
 
 target_compile_options(imu_reader_demo PRIVATE

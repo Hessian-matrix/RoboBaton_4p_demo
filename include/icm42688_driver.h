@@ -34,6 +34,13 @@ typedef enum icm42688_read_mode {
   ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO = 0
 } icm42688_read_mode_t;
 
+typedef enum icm42688_sample_drop_policy {
+  ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED = 0,
+  ICM42688_SAMPLE_DROP_POLICY_STRICT = 1
+} icm42688_sample_drop_policy_t;
+
+#define ICM42688_CONFIG_SAMPLE_DROP_POLICY_INDEX 0U
+
 typedef struct icm42688_config {
   uint32_t struct_size;
   uint32_t sample_rate_hz;

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -19,6 +20,16 @@ extern "C" {
 #include "cam_demo_config.h"
 #include "cam_demo_pipeline.h"
 #include "cam_demo_rtsp.h"
+
+#ifdef RELEASE008_TESTING
+namespace robobaton_demo {
+struct SensorDemoImuStatsTestResult {
+  uint32_t timing_sample_drops = 0U;
+  uint32_t max_consecutive_drops = 0U;
+  bool max_consecutive_drops_valid = false;
+};
+}  // namespace robobaton_demo
+#endif
 
 namespace {
 
@@ -53,6 +64,26 @@ struct ImuStats {
   uint64_t min_dt_ns = 0U;
   uint64_t max_dt_ns = 0U;
   uint64_t dt_sum_ns = 0U;
+  uint32_t timing_sample_drops = 0U;
+  uint32_t max_consecutive_drops = 0U;
+  uint32_t max_timestamp_uncertainty_us = 0U;
+  uint32_t previous_mapper_failure_count = 0U;
+  bool max_consecutive_drops_valid = true;
+
+  void ObserveMapperFailureCount(uint32_t mapper_failure_count) noexcept {
+    if (mapper_failure_count < previous_mapper_failure_count) {
+      max_consecutive_drops_valid = false;
+    } else {
+      const uint32_t delta = mapper_failure_count - previous_mapper_failure_count;
+      if (delta > max_consecutive_drops) {
+        max_consecutive_drops = delta;
+      }
+    }
+    previous_mapper_failure_count = mapper_failure_count;
+    if (mapper_failure_count > timing_sample_drops) {
+      timing_sample_drops = mapper_failure_count;
+    }
+  }
 
   void Observe(const icm42688_sample_t& sample) noexcept {
     if (sample.struct_size != sizeof(sample)) {
@@ -60,6 +91,10 @@ struct ImuStats {
       return;
     }
 
+    ObserveMapperFailureCount(sample.mapper_failure_count);
+    if (sample.timestamp_uncertainty_us > max_timestamp_uncertainty_us) {
+      max_timestamp_uncertainty_us = sample.timestamp_uncertainty_us;
+    }
     const uint64_t timestamp_ns = sample.sample_timestamp_ns;
     // 第一帧只建立时基，不产生采样间隔。
     if (samples == 0U) {
@@ -101,6 +136,27 @@ void ObserveImuSample(const icm42688_sample_t& sample, void* user) {
 
 }  // namespace
 
+#ifdef RELEASE008_TESTING
+namespace robobaton_demo {
+SensorDemoImuStatsTestResult ObserveSensorDemoImuStatsForTest(
+    const uint32_t* mapper_failure_counts, std::size_t count) {
+  ImuStats stats;
+  for (std::size_t index = 0; index < count; ++index) {
+    icm42688_sample_t sample{};
+    sample.struct_size = sizeof(sample);
+    sample.sample_timestamp_ns = static_cast<uint64_t>(index + 1U) * 1'000'000ULL;
+    sample.mapper_failure_count = mapper_failure_counts[index];
+    stats.Observe(sample);
+  }
+  SensorDemoImuStatsTestResult result;
+  result.timing_sample_drops = stats.timing_sample_drops;
+  result.max_consecutive_drops = stats.max_consecutive_drops;
+  result.max_consecutive_drops_valid = stats.max_consecutive_drops_valid;
+  return result;
+}
+}  // namespace robobaton_demo
+#endif
+
 int main(int argc, char** argv) {
   using namespace robobaton_demo;
 
@@ -110,36 +166,57 @@ int main(int argc, char** argv) {
   // 0 同时表示参数错误等硬件前失败路径尚未启动 IMU 线程。
   std::atomic<int> imu_result{0};
   ImuStats imu_stats;
+  ImuConsumerOptions imu_options;
   std::thread imu_thread;
   RtspChannels rtsp;
   std::unique_ptr<FramePipeline> pipeline;
+  std::unique_ptr<FrozenSystemClock> system_clock;
+  uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     g_stop_requested.store(false, std::memory_order_release);
 
-    const Options options = ParseSensorDemoCommandLine(argc, argv);
+    Options options = ParseSensorDemoCommandLine(argc, argv);
+    imu_sample_drop_policy = options.imu_sample_drop_policy;
+    system_clock = std::make_unique<FrozenSystemClock>();
+    system_clock->PrintTimeBase(std::cout);
+    options.system_clock = system_clock.get();
+    imu_options.sample_rate_hz = options.imu_sample_rate_hz;
+    imu_options.sample_drop_policy = options.imu_sample_drop_policy;
+    imu_options.count = 0U;
+    imu_options.stop_requested = &g_stop_requested;
+    imu_options.system_clock = system_clock.get();
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps << " rotate=" << options.rotate_degrees
               << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
               << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
+              << " imu_sample_drop_policy="
+              << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
+              << " imu_start_order="
+              << (options.imu_start_order == ImuStartOrder::kCameraFirst
+                      ? "camera-first"
+                      : "imu-first")
               << " imu_time=SENSOR_TIMESTAMP_FIFO\n";
 
-    // IMU starts first so its sensor-timestamp FIFO timeline is live before camera frames arrive.
-    ImuConsumerOptions imu_options;
-    imu_options.sample_rate_hz = options.imu_sample_rate_hz;
-    imu_options.count = 0U;
-    imu_options.stop_requested = &g_stop_requested;
-    imu_thread = std::thread([&imu_result, &imu_options, &imu_stats] {
-      const int result = RunIcmConsumer(imu_options, ObserveImuSample, &imu_stats);
-      imu_result.store(result, std::memory_order_release);
-      if (result != 0) {
-        g_stop_requested.store(true, std::memory_order_release);
-      }
-    });
+    // 两种顺序复用同一线程入口；imu_options 的生命周期覆盖统一清理和 join。
+    const auto start_imu = [&imu_result, &imu_options, &imu_stats, &imu_thread] {
+      imu_thread = std::thread([&imu_result, &imu_options, &imu_stats] {
+        const int result = RunIcmConsumer(imu_options, ObserveImuSample, &imu_stats);
+        imu_result.store(result, std::memory_order_release);
+        if (result != 0) {
+          g_stop_requested.store(true, std::memory_order_release);
+        }
+      });
+    };
+
+    // 显式 imu-first 回滚路径在任何相机配置副作用之前启动 IMU。
+    if (options.imu_start_order == ImuStartOrder::kImuFirst) {
+      start_imu();
+    }
 
     if (sc132_set_fps(static_cast<uint32_t>(options.fps)) != SC132_STATUS_OK) {
       throw std::runtime_error("sc132_set_fps failed");
@@ -174,6 +251,11 @@ int main(int argc, char** argv) {
     if (start_status != SC132_STATUS_OK) {
       throw std::runtime_error("sc132_start_frame_set failed status=" +
                                std::to_string(start_status));
+    }
+
+    // camera-first 只在所选 frame-set 启动成功后建立 IMU final producer epoch。
+    if (options.imu_start_order == ImuStartOrder::kCameraFirst) {
+      start_imu();
     }
 
     while (g_signal_stop == 0 &&
@@ -229,6 +311,11 @@ int main(int argc, char** argv) {
     std::cerr << "fatal: IMU INT1 producer failed\n";
     exit_code = 1;
   }
+  if (!imu_stats.max_consecutive_drops_valid) {
+    std::cerr
+        << "fatal: IMU mapper_failure_count regressed; max_consecutive_drops evidence invalid\n";
+    exit_code = 1;
+  }
 
   std::cout << "SENSOR_IMU_RESULT samples=" << imu_stats.samples
             << " invalid=" << imu_stats.invalid_samples
@@ -236,7 +323,12 @@ int main(int argc, char** argv) {
             << " timestamp_regressions=" << imu_stats.timestamp_regressions
             << " effective_hz=" << imu_stats.EffectiveHz()
             << " min_dt_ns=" << imu_stats.min_dt_ns
-            << " max_dt_ns=" << imu_stats.max_dt_ns << "\n";
+            << " max_dt_ns=" << imu_stats.max_dt_ns
+            << " timing_sample_drops=" << imu_stats.timing_sample_drops
+            << " max_uncertainty_us=" << imu_stats.max_timestamp_uncertainty_us
+            << " max_consecutive_drops=" << imu_stats.max_consecutive_drops
+            << " imu_sample_drop_policy="
+            << ImuSampleDropPolicyName(imu_sample_drop_policy) << "\n";
   std::cout << "sensor_demo stopped exit_code=" << exit_code << "\n";
   return exit_code;
 }

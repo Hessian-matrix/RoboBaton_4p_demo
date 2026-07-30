@@ -179,6 +179,7 @@ struct FrameSetDiagnosticItem {
   uint64_t sequence = 0U;
   uint64_t frame_id = 0U;
   uint64_t timestamp_ns = 0U;
+  TimestampDomain timestamp_domain = TimestampDomain::kUnknown;
 };
 
 struct FrameSetDiagnosticSnapshot {
@@ -186,6 +187,7 @@ struct FrameSetDiagnosticSnapshot {
   uint32_t camera_count = 0U;
   uint64_t group_id = 0U;
   uint64_t group_timestamp_ns = 0U;
+  TimestampDomain group_timestamp_domain = TimestampDomain::kUnknown;
   uint64_t group_max_skew_ns = 0U;
   uint64_t calculated_skew_ns = 0U;
   std::array<FrameSetDiagnosticItem, kMaxChannels> items{};
@@ -200,6 +202,8 @@ struct ChannelDiagnosticValues {
   uint64_t last_group_skew_ns = 0U;
   uint64_t last_camera_timestamp_ns = 0U;
   uint64_t last_rtsp_timestamp_ns = 0U;
+  TimestampDomain last_camera_timestamp_domain = TimestampDomain::kUnknown;
+  TimestampDomain last_rtsp_timestamp_domain = TimestampDomain::kUnknown;
   uint64_t last_pipeline_duration_ns = 0U;
 };
 
@@ -209,6 +213,8 @@ struct SendDiagnosticSample {
   uint64_t group_max_skew_ns = 0U;
   uint64_t camera_timestamp_ns = 0U;
   uint64_t rtsp_timestamp_ns = 0U;
+  TimestampDomain camera_timestamp_domain = TimestampDomain::kUnknown;
+  TimestampDomain rtsp_timestamp_domain = TimestampDomain::kUnknown;
   uint64_t enqueue_timestamp_ns = 0U;
 };
 
@@ -323,6 +329,11 @@ class FramePipeline::Impl {
       throw std::runtime_error("invalid SC frame-set header");
     }
 
+    sc132_frame_set_t mapped_frame_set = frame_set;
+    const TimestampDomain sc132_timestamp_domain = Sc132OutputTimestampDomain(options_);
+    const uint64_t output_group_timestamp_ns =
+        MapSc132TimestampNs(frame_set.group_timestamp_ns);
+    mapped_frame_set.group_timestamp_ns = output_group_timestamp_ns;
     uint32_t observed_mask = 0U;
     std::array<QueuedFrame, kMaxChannels> jobs{};
     for (uint32_t index = 0; index < frame_set.camera_count; ++index) {
@@ -346,6 +357,8 @@ class FramePipeline::Impl {
           info.height != item.height || info.y_data == nullptr || info.uv_data == nullptr) {
         throw std::runtime_error("SC frame info mismatch");
       }
+      const uint64_t output_camera_timestamp_ns = MapSc132TimestampNs(info.timestamp_ns);
+      mapped_frame_set.items[index].timestamp_ns = output_camera_timestamp_ns;
       if (sc132_frame_retain(item.frame) != SC132_STATUS_OK) {
         throw std::runtime_error("SC frame retain failed");
       }
@@ -357,11 +370,14 @@ class FramePipeline::Impl {
       job.sequence = info.sequence;
       job.frame_id = info.frame_id;
       job.group_id = frame_set.group_id;
-      job.group_timestamp_ns = frame_set.group_timestamp_ns;
+      job.group_timestamp_ns = output_group_timestamp_ns;
       job.group_max_skew_ns = frame_set.max_skew_ns;
-      job.camera_timestamp_ns = info.timestamp_ns;
-      job.rtsp_timestamp_ns = frame_set.group_timestamp_ns;
-      job.enqueue_timestamp_ns = SteadyClockNowNs();
+      job.camera_timestamp_ns = output_camera_timestamp_ns;
+      job.rtsp_timestamp_ns = output_group_timestamp_ns;
+      job.group_timestamp_domain = sc132_timestamp_domain;
+      job.camera_timestamp_domain = sc132_timestamp_domain;
+      job.rtsp_timestamp_domain = sc132_timestamp_domain;
+      job.enqueue_timestamp_ns = PipelineNowNs();
       job.y_data = info.y_data;
       job.uv_data = info.uv_data;
       job.y_phys = info.y_phys;
@@ -377,9 +393,9 @@ class FramePipeline::Impl {
       throw std::runtime_error("SC frame-set mask mismatch");
     }
 
-    CaptureFrameSetDiagnostics(frame_set);
+    CaptureFrameSetDiagnostics(mapped_frame_set);
     if (hooks_.on_frame_set != nullptr) {
-      hooks_.on_frame_set(frame_set, hooks_.user);
+      hooks_.on_frame_set(mapped_frame_set, hooks_.user);
     }
     for (uint32_t index = 0; index < frame_set.camera_count; ++index) {
       if (hooks_.before_queue_insert != nullptr) {
@@ -515,20 +531,34 @@ class FramePipeline::Impl {
 #endif
 
  private:
+  uint64_t MapRawTimestampNs(uint64_t raw_timestamp_ns) const {
+    return options_.system_clock != nullptr ? options_.system_clock->MapRawNs(raw_timestamp_ns)
+                                            : raw_timestamp_ns;
+  }
+
+  uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
+    return Sc132TimestampsAreMonotonicRaw(options_) ? MapRawTimestampNs(timestamp_ns)
+                                                   : timestamp_ns;
+  }
+
+  uint64_t PipelineNowNs() const { return MapRawTimestampNs(SteadyClockNowNs()); }
+
   void CaptureFrameSetDiagnostics(const sc132_frame_set_t& frame_set) noexcept {
     FrameSetDiagnosticSnapshot snapshot;
     snapshot.valid = true;
     snapshot.camera_count = frame_set.camera_count;
     snapshot.group_id = frame_set.group_id;
     snapshot.group_timestamp_ns = frame_set.group_timestamp_ns;
+    snapshot.group_timestamp_domain = Sc132OutputTimestampDomain(options_);
     snapshot.group_max_skew_ns = frame_set.max_skew_ns;
 
     uint64_t oldest_timestamp_ns = std::numeric_limits<uint64_t>::max();
     uint64_t newest_timestamp_ns = 0U;
     for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
       const sc132_frame_set_item_t& item = frame_set.items[index];
-      snapshot.items[index] =
-          FrameSetDiagnosticItem{item.camera_id, item.sequence, item.frame_id, item.timestamp_ns};
+      snapshot.items[index] = FrameSetDiagnosticItem{item.camera_id, item.sequence,
+                                                     item.frame_id, item.timestamp_ns,
+                                                     snapshot.group_timestamp_domain};
       oldest_timestamp_ns = std::min(oldest_timestamp_ns, item.timestamp_ns);
       newest_timestamp_ns = std::max(newest_timestamp_ns, item.timestamp_ns);
     }
@@ -550,6 +580,8 @@ class FramePipeline::Impl {
     values.last_group_skew_ns = sample.group_max_skew_ns;
     values.last_camera_timestamp_ns = sample.camera_timestamp_ns;
     values.last_rtsp_timestamp_ns = sample.rtsp_timestamp_ns;
+    values.last_camera_timestamp_domain = sample.camera_timestamp_domain;
+    values.last_rtsp_timestamp_domain = sample.rtsp_timestamp_domain;
     values.last_pipeline_duration_ns = pipeline_duration_ns;
     ++values.interval_send_count;
     values.interval_send_duration_ns += send_duration_ns;
@@ -571,10 +603,11 @@ class FramePipeline::Impl {
     if (frame_set_snapshot.valid) {
       if (!AppendDiagnostic(&output, &used,
                             "frameset group_id=%llu group_ts_ns=%llu "
-                            "group_skew_ns=%llu calc_skew_ns=%llu",
+                            "group_ts_domain=%s group_skew_ns=%llu calc_skew_ns=%llu",
                             static_cast<unsigned long long>(frame_set_snapshot.group_id),
                             static_cast<unsigned long long>(
                                 frame_set_snapshot.group_timestamp_ns),
+                            TimestampDomainName(frame_set_snapshot.group_timestamp_domain),
                             static_cast<unsigned long long>(
                                 frame_set_snapshot.group_max_skew_ns),
                             static_cast<unsigned long long>(
@@ -583,12 +616,14 @@ class FramePipeline::Impl {
       }
       for (uint32_t index = 0U; index < frame_set_snapshot.camera_count; ++index) {
         const FrameSetDiagnosticItem& item = frame_set_snapshot.items[index];
-        if (!AppendDiagnostic(
-                &output, &used,
-                " cam%u(seq=%llu,frame_id=%llu,camera_ts_ns=%llu)", item.camera_id,
-                static_cast<unsigned long long>(item.sequence),
-                static_cast<unsigned long long>(item.frame_id),
-                static_cast<unsigned long long>(item.timestamp_ns))) {
+        if (!AppendDiagnostic(&output, &used,
+                              " cam%u(seq=%llu,frame_id=%llu,camera_ts_ns=%llu,"
+                              "camera_ts_domain=%s)",
+                              item.camera_id,
+                              static_cast<unsigned long long>(item.sequence),
+                              static_cast<unsigned long long>(item.frame_id),
+                              static_cast<unsigned long long>(item.timestamp_ns),
+                              TimestampDomainName(item.timestamp_domain))) {
           return false;
         }
       }
@@ -636,8 +671,9 @@ class FramePipeline::Impl {
               &output, &used,
               "cam%d fps=%.2f last_seq=%llu group_id=%llu group_skew_ns=%llu "
               "queue=%zu/%zu queue_full_rejects=%llu pipeline_delay_ms=%llu "
-              "camera_ts_ns=%llu rtsp_ts_ns=%llu send_avg_ms=%.2f "
-              "send_max_ms=%.2f rtsp_endpoint=ch%d rtsp_port=%d\n",
+              "camera_ts_ns=%llu camera_ts_domain=%s rtsp_ts_ns=%llu "
+              "rtsp_ts_domain=%s send_avg_ms=%.2f send_max_ms=%.2f "
+              "rtsp_endpoint=ch%d rtsp_port=%d\n",
               camera_id, fps,
               static_cast<unsigned long long>(diagnostic.last_sequence),
               static_cast<unsigned long long>(diagnostic.last_group_id),
@@ -646,7 +682,9 @@ class FramePipeline::Impl {
               static_cast<unsigned long long>(queue.full_rejects),
               static_cast<unsigned long long>(pipeline_delay_ms),
               static_cast<unsigned long long>(diagnostic.last_camera_timestamp_ns),
+              TimestampDomainName(diagnostic.last_camera_timestamp_domain),
               static_cast<unsigned long long>(diagnostic.last_rtsp_timestamp_ns),
+              TimestampDomainName(diagnostic.last_rtsp_timestamp_domain),
               send_average_ms, send_max_ms, camera_id + 1,
               RtspPortForChannel(camera_id))) {
         return false;
@@ -673,10 +711,12 @@ class FramePipeline::Impl {
                                           frame.group_max_skew_ns,
                                           frame.camera_timestamp_ns,
                                           frame.rtsp_timestamp_ns,
+                                          frame.camera_timestamp_domain,
+                                          frame.rtsp_timestamp_domain,
                                           frame.enqueue_timestamp_ns};
-        const uint64_t send_start_ns = SteadyClockNowNs();
+        const uint64_t send_start_ns = PipelineNowNs();
         const int32_t send_result = rtsp_->Send(camera_id, frame);
-        const uint64_t send_complete_ns = SteadyClockNowNs();
+        const uint64_t send_complete_ns = PipelineNowNs();
         if (send_result != PRRTSP_OK) {
           // 保留原始 send status，失败帧 release 且不计成功。
           RequestFailure(send_result);
@@ -693,7 +733,7 @@ class FramePipeline::Impl {
 
   void DiagnosticsEntry() noexcept {
     try {
-      auto previous_report = std::chrono::steady_clock::now();
+      uint64_t previous_report_ns = SteadyClockNowNs();
       std::unique_lock<std::mutex> lock(diagnostics_mutex_);
       while (!shutdown_started_.load(std::memory_order_acquire)) {
         const bool stopping = diagnostics_condition_.wait_for(
@@ -702,10 +742,12 @@ class FramePipeline::Impl {
         if (stopping) {
           break;
         }
-        const auto now = std::chrono::steady_clock::now();
-        const double elapsed_seconds =
-            std::chrono::duration<double>(now - previous_report).count();
-        previous_report = now;
+        const uint64_t now_ns = SteadyClockNowNs();
+        const double elapsed_seconds = now_ns > previous_report_ns
+                                           ? static_cast<double>(now_ns - previous_report_ns) /
+                                                 1000000000.0
+                                           : 0.0;
+        previous_report_ns = now_ns;
         lock.unlock();
         if (!EmitDiagnostics(elapsed_seconds)) {
           return;

@@ -48,9 +48,36 @@ open_source_demo/
 
 构建前需要准备：
 
-- X5 aarch64 交叉编译工具链
-- CMake
-- X5 SDK 提供的 toolchain file
+- X5 aarch64 交叉编译工具链（已包含在配套压缩包中）
+- CMake（主机侧工具，**不包含在该压缩包中**，需要单独安装）
+- X5 SDK 提供的 toolchain file（已包含在配套压缩包中）
+
+配套编译工具压缩包：https://www.hessian-matrix.com/wp-content/uploads/2026/automaticupdates/x5_4cam_cross_toolchain_20260708.tar.gz
+
+压缩包内已确认包含：
+
+```text
+cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake
+cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
+cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-strip
+X5 SDK platform_samples、sysroot 和相关头文件/库
+```
+
+压缩包不包含主机侧 `cmake` 命令；其中出现的 `cmake/` 目录是 SDK/ROS 包的 CMake 元数据，不是可执行的 CMake 安装。解压后可这样设置 toolchain：
+
+```bash
+tar -xzf cross_compile_toolchain/x5_4cam_cross_toolchain_20260708.tar.gz \
+  -C cross_compile_toolchain
+
+export X5_TOOLCHAIN_ROOT="$PWD/cross_compile_toolchain/x5_4cam_cross_toolchain_20260708"
+export TOOLCHAIN_FILE="$X5_TOOLCHAIN_ROOT/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake"
+```
+
+然后确认主机另行安装了 CMake：
+
+```bash
+cmake --version
+```
 
 下面命令中的 toolchain file 路径仅为本机示例，用户需要替换成自己环境里的实际路径：
 
@@ -98,6 +125,8 @@ file lib/libprrtsp.so
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
 > 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/417 和 SPI 资源恢复正常。
+>
+> 2026-07-28新增的frozen `CLOCK_REALTIME-CLOCK_MONOTONIC_RAW` offset、相机/IMU共享`system_realtime` epoch和运行中REALTIME跳变免疫，已完成non-ROS T1/T2/T3/T3.1/T4/T5验收；最终报告见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_FINAL_ACCEPTANCE_REPORT.md`，可复用流程见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_TEST_RUNBOOK.md`。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -106,9 +135,7 @@ cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` 是完整发布入口：先从顶层权威源码干净重编译
-`libicm42688`、`libsc132`、`libprrtsp` 并同步到 `./lib`，然后删除并重建
-`./build_x5`、编译仓库 CMake 声明的全部 demo target，最终原子发布并验证 `./demo`。
+`scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的四个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
 
 运行包包含顶层启动脚本、`env.sh`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件或单个 `.so`。
 
@@ -185,7 +212,55 @@ cd /root/demo
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
 
-`host_timestamp_ns`使用`CLOCK_MONOTONIC_RAW`时间域并表示GPIO395边沿锚点；`sample_timestamp_ns`来自IMU FIFO TMST映射。当前demo只分别记录相机和IMU时间线，不用最近邻时间差伪造物理TD；TD应在共同运动事件采集后单独估计。
+启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 `software_gpio`/`gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域；其他触发模式保留 SC132 原生时间域。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
+
+### `sensor_demo` 的 `[FRAME_SET] trigger_sync` 诊断日志
+
+使用 `sensor_demo --diagnostics` 时，SC132 frame-set matcher 可能周期性输出：
+
+```text
+[FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
+```
+
+字段含义：
+
+| 字段 | 含义 |
+|---|---|
+| `matched_total` | 当前 frame-set sync 状态 reset 后，成功完成 GPIO trigger/frame-set 匹配的累计次数。 |
+| `discarded_total` | 匹配时累计丢弃的过旧或不再使用的 trigger queue entry 数量；不是 RTSP 丢帧计数，也不是 retryable frame-set drop 计数。非零本身不表示失败。 |
+| `trigger_seq` | 最新匹配 GPIO417 软件上升沿序号；不是 sensor 硬件 frame ID。 |
+| `lag_ns` | 当前 frame-set 最早 frame timestamp 减匹配 GPIO trigger timestamp：`frame_timestamp_ns - trigger_timestamp_ns`。 |
+| `interval_max_lag_ns` | 从上一条 `trigger_sync` 报告以来观测到的最大 lag；打印后清零，当前报告周期约 1 秒，不是整个长测的历史最大值。 |
+| `limit_ns` | 当前允许的最大 trigger lag。60Hz 默认是 `16666666 ns`，约一个 frame period。 |
+
+上面示例表示：
+
+```text
+当前 lag       = 9.728000 ms
+区间最大 lag   = 9.738583 ms
+允许上限       = 16.666666 ms
+当前安全余量   = 6.938666 ms
+```
+
+并且本例中：
+
+```text
+matched_total + discarded_total = trigger_seq
+6961 + 28 = 6989
+```
+
+因此这条日志本身表示 matcher 仍在持续工作，lag 也低于一帧门限。判断异常时必须同时检查：
+
+```text
+trigger_retryable
+no valid GPIO417 trigger timestamp
+worker fatal
+四路 camera last_seq/fps
+四路 RTSP frame count
+queue_full_rejects
+```
+
+`trigger_sync` 是诊断进度行，不是单独的 PASS/FAIL 结论。只有当它伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
 
 
 ### SC132 四目相机 RTSP Demo
@@ -333,12 +408,18 @@ avg_frame_rate=60/1
 - `group_id`：`libsc132.so` 生成的四目同步帧组序号
 - `group_skew_ns`：当前帧组四路 timestamp 最大差值，单位 `ns`，用于诊断链路相位差
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
-- `camera_ts_ns`：相机帧时间戳，单位 `ns`；优先为 sensor/VIO 时间戳，fallback 为系统出帧时间
+- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；在其他触发模式下，优先为 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间。
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
 - `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `prrtsp_stream_send()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
+
+### ICM ABI v2边界
+
+ICM发布身份继续保持ABI v2、`libicm42688.so.2`和`ICM42688_X5_2.0`。当前只支持`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0`、watermark 1和文档列出的ODR；旧`DIRECT=1`、旧`FIFO`枚举名、DIRECT寄存器读取路径及watermark 8已删除，不提供兼容shim。保持v2只表示导出函数、结构布局和ELF身份保持，不表示旧DIRECT配置可继续运行。当前header、SO和non-ROS demo必须成套部署，不要把该SO单独替换到未迁移程序；ROS2不在本轮范围。
+
+完整决策见顶层`docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`。
 
 ## 5. IMU 读取 Demo
 
@@ -362,8 +443,9 @@ avg_frame_rate=60/1
 
 输出字段：
 
-- `ts_ns`：host monotonic clock 时间戳，单位 `ns`
-- `dt_ms`：相邻两个已输出样本的时间戳差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，非零显式输出频率下约为 `1000 / --print-rate-hz` ms；`--print-rate-hz 0` 不产生逐帧 `dt_ms`
+- `ts_ns`：映射到 `system_realtime` epoch 的 IMU sample 时间戳，单位 `ns`；它由 `CLOCK_MONOTONIC_RAW` 域 FIFO TMST 时间加启动冻结 offset 得到
+- `host_ts_ns`：映射到 `system_realtime` epoch 的 GPIO395 DRDY 边沿锚点，单位 `ns`
+- `dt_ms`：相邻两个已输出样本的 `ts_ns` 差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，非零显式输出频率下约为 `1000 / --print-rate-hz` ms；`--print-rate-hz 0` 不产生逐帧 `dt_ms`
 - `temp_c`：温度，单位 `degC`
 - `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
@@ -372,7 +454,7 @@ avg_frame_rate=60/1
 说明：
 
 - demo 使用GPIO395 DRDY + sensor timestamp FIFO模式（`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`）
-- `host_timestamp_ns`记录GPIO395 rising edge锚点，`sample_timestamp_ns`由FIFO内TMST映射得到逐sample时间戳
+- `host_timestamp_ns` 记录 GPIO395 rising edge 锚点，`sample_timestamp_ns` 由 FIFO 内 TMST 映射得到逐 sample 时间戳；demo 对外打印前用同一个 `TIME_BASE` 冻结 offset 将二者转换为 `system_realtime`
 - IMU 路径不使用 GPIO397、FSYNC 或 `icm42688_pulse_fsync()`
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
 - CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本
@@ -421,6 +503,7 @@ cd /root/demo
 ./cam_demo --help
 ./imu_reader_demo --help
 ./serial_port_demo --help
+./sensor_demo --help
 ```
 
 相机 demo 验证流程：

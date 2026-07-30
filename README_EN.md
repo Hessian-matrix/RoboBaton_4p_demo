@@ -48,10 +48,47 @@ This demo is intended to be cross-compiled on a development host and only run on
 
 Build prerequisites:
 
-- X5 aarch64 cross-compilation toolchain
-- CMake
-- Toolchain file from the X5 SDK
+- X5 aarch64 cross-compilation toolchain (included in the companion archive)
+- CMake (a host-side tool; **not included in the archive**, install it separately)
+- Toolchain file from the X5 SDK (included in the companion archive)
 
+Companion archive:
+
+```text
+<4cam-repo-root>/cross_compile_toolchain/x5_4cam_cross_toolchain_20260708.tar.gz
+```
+
+Download URL:
+
+```text
+https://www.hessian-matrix.com/wp-content/uploads/2026/automaticupdates/x5_4cam_cross_toolchain_20260708.tar.gz
+```
+
+The archive was checked to contain:
+
+```text
+cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake
+cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
+cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-strip
+X5 SDK platform_samples, sysroot, headers, and libraries
+```
+
+The archive does not contain the host `cmake` executable. Its `cmake/` directories are SDK/ROS CMake metadata, not a CMake installation. After extraction, set the toolchain as follows:
+
+```bash
+cd <4cam-repo-root>
+tar -xzf cross_compile_toolchain/x5_4cam_cross_toolchain_20260708.tar.gz \
+  -C cross_compile_toolchain
+
+export X5_TOOLCHAIN_ROOT="$PWD/cross_compile_toolchain/x5_4cam_cross_toolchain_20260708"
+export TOOLCHAIN_FILE="$X5_TOOLCHAIN_ROOT/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake"
+```
+
+Confirm that CMake is installed separately on the host:
+
+```bash
+cmake --version
+```
 The toolchain file path below is only an example. Replace it with the actual path in your environment:
 
 ```bash
@@ -99,6 +136,8 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
 > Current repository status: as of 2026-07-24, `demo/` was regenerated from the current C ABI v2 sources and the three delivered shared libraries. It passed `scripts/verify_runtime_package.py` and `manifest.sha256` verification; AArch64 builds passed for all four demo targets. The final `sensor_demo` board smoke passed with 12,424 valid IMU samples at 1002.63 Hz, zero invalid/duplicate/regressed timestamps, and exit code 0. The board restored GPIO395/417 and SPI ownership after exit.
+>
+> The frozen `CLOCK_REALTIME-CLOCK_MONOTONIC_RAW` offset, shared camera/IMU `system_realtime` epoch, and runtime REALTIME-jump immunity added on 2026-07-28 have completed non-ROS T1/T2/T3/T3.1/T4/T5 acceptance. See the top-level `docs/test/FROZEN_SYSTEM_TIMESTAMP_FINAL_ACCEPTANCE_REPORT.md` and reusable `docs/test/FROZEN_SYSTEM_TIMESTAMP_TEST_RUNBOOK.md`.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -107,10 +146,7 @@ cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` is the complete release entry point. It first clean-builds
-`libicm42688`, `libsc132`, and `libprrtsp` from their canonical top-level sources and
-synchronizes them into `./lib`; it then recreates `./build_x5`, builds every demo target
-declared by this repository's CMake project, and atomically publishes and verifies `./demo`.
+`scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's four demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
 
 The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable or one `.so` file.
 
@@ -188,6 +224,56 @@ ICM FIFO TMST
 ```
 
 Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+
+At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`/`gpio` trigger modes, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch; other trigger modes preserve the SC132 native timestamp domain. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
+
+### `sensor_demo` `[FRAME_SET] trigger_sync` diagnostic log
+
+With `sensor_demo --diagnostics`, the SC132 frame-set matcher may periodically print:
+
+```text
+[FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
+```
+
+Field definitions:
+
+| Field | Meaning |
+|---|---|
+| `matched_total` | Cumulative number of successful GPIO trigger/frame-set matches since the current frame-set sync state was reset. |
+| `discarded_total` | Cumulative number of stale or no-longer-used trigger queue entries discarded during matching. It is not an RTSP frame-drop counter or a retryable frame-set-drop counter; a nonzero value alone is not a failure. |
+| `trigger_seq` | Sequence number of the latest matched GPIO417 software rising edge; it is not a sensor hardware frame ID. |
+| `lag_ns` | The earliest frame timestamp in the current frame-set minus the matched GPIO trigger timestamp: `frame_timestamp_ns - trigger_timestamp_ns`. |
+| `interval_max_lag_ns` | Maximum lag observed since the previous `trigger_sync` report. It is cleared after printing; the report window is approximately 1 second, so this is not the historical maximum for the entire soak. |
+| `limit_ns` | Maximum permitted trigger lag. At the default 60 Hz camera rate it is `16666666 ns`, approximately one frame period. |
+
+The example means:
+
+```text
+current lag       = 9.728000 ms
+interval max lag  = 9.738583 ms
+allowed limit     = 16.666666 ms
+current margin    = 6.938666 ms
+```
+
+In this example:
+
+```text
+matched_total + discarded_total = trigger_seq
+6961 + 28 = 6989
+```
+
+This line therefore indicates that the matcher is still progressing and the lag is below one frame period. For anomaly diagnosis, also inspect:
+
+```text
+trigger_retryable
+no valid GPIO417 trigger timestamp
+worker fatal
+four camera last_seq/fps
+four RTSP frame counts
+queue_full_rejects
+```
+
+`trigger_sync` is a diagnostic progress line, not an independent PASS/FAIL result. Continue with the T3/T4/T5 runbook only when it accompanies a stopped frame-set producer, all four RTSP streams stopping, a retryable burst limit, a structural fatal, or a timestamp mismatch.
 
 Run it from the complete package:
 
@@ -353,11 +439,17 @@ Log fields:
 - `group_id`: synchronized frame-set sequence generated by `libsc132.so`
 - `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
 - `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
-- `camera_ts_ns`: camera frame timestamp in `ns`; sensor/VIO timestamp first, system output timestamp as fallback
+- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode it is the matched GPIO trigger timestamp mapped into the `system_realtime` epoch by the frozen offset; in other trigger modes, the sensor/VIO per-frame timestamp is preferred and the system output timestamp is the fallback
 - `queue_full_rejects`: cumulative frames rejected because a per-channel queue was already full; this must remain `0` during stable streaming, and any nonzero value triggers fail-closed shutdown
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
 - `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
+
+### ICM ABI v2 Boundary
+
+The ICM delivery keeps ABI major 2, `libicm42688.so.2`, and `ICM42688_X5_2.0`. The only supported mode is `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0` with watermark 1 and a documented ODR. Legacy `DIRECT=1`, the old `FIFO` enum name, the direct-register path, and watermark 8 are retired without a compatibility shim. Keeping v2 means the exported functions, struct layout, and ELF identity remain stable; it does not mean legacy DIRECT configurations remain drop-in compatible. Ship the current header, SO, and non-ROS demos as one generation. ROS2 is outside this change.
+
+See the top-level decision `docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`.
 
 ## 5. IMU Reader Demo
 
@@ -382,8 +474,9 @@ exceed `--sample-rate-hz`. Set it to `0` to disable terminal output without chan
 
 Output fields:
 
-- `ts_ns`: host monotonic clock timestamp in `ns`
-- `dt_ms`: timestamp delta between adjacent printed samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
+- `ts_ns`: IMU sample timestamp in the `system_realtime` epoch, in `ns`; it is derived from the `CLOCK_MONOTONIC_RAW` FIFO TMST timeline plus the startup frozen offset
+- `host_ts_ns`: GPIO395 DRDY edge anchor mapped to the `system_realtime` epoch, in `ns`
+- `dt_ms`: timestamp delta between adjacent printed `ts_ns` samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
 - `temp_c`: temperature in `degC`
 - `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
@@ -392,7 +485,7 @@ Output fields:
 Notes:
 
 - The demo uses GPIO395 DRDY + sensor-timestamp FIFO mode (`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`).
-- `host_timestamp_ns` records the GPIO395 rising-edge anchor; `sample_timestamp_ns` is the per-sample timestamp mapped from FIFO TMST.
+- `host_timestamp_ns` records the GPIO395 rising-edge anchor; `sample_timestamp_ns` is the per-sample timestamp mapped from FIFO TMST. Before the demo prints or forwards them, the same `TIME_BASE` frozen offset converts both values to `system_realtime`.
 - The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`.
 - The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
 - CLI output uses one non-blocking write per line. If an SSH session, pipe, or log collector slows down or closes, CLI log lines are dropped while the owner continues consuming every IMU sample.
@@ -441,6 +534,7 @@ cd /root/demo
 ./cam_demo --help
 ./imu_reader_demo --help
 ./serial_port_demo --help
+./sensor_demo --help
 ```
 
 Camera demo check:

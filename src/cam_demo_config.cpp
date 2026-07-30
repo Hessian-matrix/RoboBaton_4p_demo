@@ -35,6 +35,8 @@ void PrintUsage(const char* program, bool include_imu_options) {
   if (include_imu_options) {
     std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
+    std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
+    std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
   }
   std::cout << "  -h, --help        Show this help\n";
 }
@@ -100,6 +102,29 @@ VideoCodec ParseVideoCodec(const std::string& text) {
     return VideoCodec::kH265;
   }
   throw std::invalid_argument("--codec must be h264 or h265");
+}
+
+// 将 sensor_demo 的策略文本映射到 ABI v2 reserved[0] 允许的公开枚举。
+uint32_t ParseImuSampleDropPolicy(const std::string& text) {
+  if (text == "allow-counted") {
+    return ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  }
+  if (text == "strict") {
+    return ICM42688_SAMPLE_DROP_POLICY_STRICT;
+  }
+  throw std::invalid_argument(
+      "--imu-sample-drop-policy must be allow-counted or strict");
+}
+
+// 将 sensor_demo 的启动顺序文本收敛为内部强类型枚举。
+ImuStartOrder ParseImuStartOrder(const std::string& text) {
+  if (text == "imu-first") {
+    return ImuStartOrder::kImuFirst;
+  }
+  if (text == "camera-first") {
+    return ImuStartOrder::kCameraFirst;
+  }
+  throw std::invalid_argument("--imu-start-order must be imu-first or camera-first");
 }
 
 // 功能：按 libicm42688 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
@@ -175,6 +200,10 @@ void ValidateOptions(const Options& options) {
   if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
     throw std::invalid_argument(
         "--sample-rate-hz must be one of 25, 50, 100, 200, 500, 1000, or 2000");
+  }
+  if (options.imu_sample_drop_policy > ICM42688_SAMPLE_DROP_POLICY_STRICT) {
+    throw std::invalid_argument(
+        "--imu-sample-drop-policy must be allow-counted or strict");
   }
   if (options.trigger_mode != "software_gpio" && options.trigger_mode != "gpio" &&
       options.trigger_mode != "vin_lpwm" && options.trigger_mode != "lpwm" &&
@@ -252,6 +281,12 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
     } else if (accept_imu_options && arg == "--sample-rate-hz") {
       options.imu_sample_rate_hz =
           ParseUint32(RequireValue(argc, argv, &i, "--sample-rate-hz"), "--sample-rate-hz");
+    } else if (accept_imu_options && arg == "--imu-sample-drop-policy") {
+      options.imu_sample_drop_policy =
+          ParseImuSampleDropPolicy(RequireValue(argc, argv, &i, "--imu-sample-drop-policy"));
+    } else if (accept_imu_options && arg == "--imu-start-order") {
+      options.imu_start_order =
+          ParseImuStartOrder(RequireValue(argc, argv, &i, "--imu-start-order"));
     } else if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0], accept_imu_options);
       std::exit(0);

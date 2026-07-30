@@ -5,9 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build_x5}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/demo}"
-PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR:-${PROJECT_DIR}/lib}"
+PACKAGE_LIB_DIR="${PROJECT_DIR}/lib"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake}"
-WORKSPACE_DIR="${WORKSPACE_DIR:-$(cd "${PROJECT_DIR}/../.." && pwd)}"
 STRIP_TOOL="${STRIP_TOOL:-}"
 WORK_ROOT=""
 BACKUP_ACTIVE=0
@@ -17,18 +16,20 @@ usage() {
 Usage:
   scripts/package_runtime.sh [options]
 
-Default behavior:
-  Recreate the CMake build directory, build every repository target from source,
-  then publish a verified runtime package to ./demo.
-  This rebuilds ICM42688, SC132, PRRTSP, and every non-ROS consumer target.
+Behavior:
+  Build the four non-ROS consumer demos from this release repository, using the
+  prebuilt runtime libraries already present in ./lib, then publish a verified
+  runtime package to ./demo.
+
+  This script does not build ICM42688, SC132, or PRRTSP producer sources.
+  Producer libraries and the public ICM header must already be present in this
+  release repository before this script is run.
 
 Options:
   --build-dir <path>       CMake build directory, default ./build_x5
   --output-dir <path>      Runtime package output directory, default ./demo
-  --package-lib-dir <path> Runtime shared library source directory, default ./lib
-  --toolchain-file <path>  CMake toolchain selecting the producer/consumer compiler
-  --strip-tool <path>      Optional strip override for final staged executables only
-  --workspace-dir <path>   Top-level workspace containing producer sources/scripts
+  --toolchain-file <path>  CMake toolchain for the consumer demos
+  --strip-tool <path>      Optional strip override for staged executables
   -h, --help               Show this help
 USAGE
 }
@@ -54,19 +55,9 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_DIR="$2"
       shift 2
       ;;
-    --package-lib-dir|--runtime-lib-dir)
-      require_option_value "$1" "${2:-}"
-      PACKAGE_LIB_DIR="$2"
-      shift 2
-      ;;
     --toolchain-file)
       require_option_value "$1" "${2:-}"
       TOOLCHAIN_FILE="$2"
-      shift 2
-      ;;
-    --workspace-dir)
-      require_option_value "$1" "${2:-}"
-      WORKSPACE_DIR="$2"
       shift 2
       ;;
     --strip-tool)
@@ -95,15 +86,14 @@ resolve_project_path() {
   fi
 }
 
-# 从 CMake 编译器元数据读取实际编译器，避免猜测 toolchain 文件中的条件分支。
 read_configured_c_compiler() {
-  local metadata_files=("${ICM_BUILD_DIR}"/CMakeFiles/*/CMakeCCompiler.cmake)
+  local metadata_files=("${BUILD_DIR}"/CMakeFiles/*/CMakeCCompiler.cmake)
   local metadata_file=""
   local line=""
   local compiler=""
 
   if [[ "${#metadata_files[@]}" -ne 1 || ! -f "${metadata_files[0]}" ]]; then
-    echo "Unable to locate unique CMake C compiler metadata under ${ICM_BUILD_DIR}" >&2
+    echo "Unable to locate unique CMake C compiler metadata under ${BUILD_DIR}" >&2
     exit 1
   fi
   metadata_file="${metadata_files[0]}"
@@ -127,70 +117,14 @@ read_configured_c_compiler() {
   printf '%s\n' "${compiler}"
 }
 
-# 将 producer 输出以普通文件发布，避免把构建目录中的 SONAME 符号链接暴露到交付仓。
-publish_regular_file() {
-  local source_path="$1"
-  local destination_path="$2"
-  local mode="$3"
-
-  if [[ ! -f "${source_path}" ]]; then
-    echo "Missing required producer artifact: ${source_path}" >&2
-    exit 1
-  fi
-  rm -f "${destination_path}"
-  install -m "${mode}" "${source_path}" "${destination_path}"
-}
-
-# 发布到子仓的头文件保留接口语义，但移除主仓注释中的变更历史标记。
-publish_release_header() {
-  local source_path="$1"
-  local destination_path="$2"
-
-  if [[ ! -f "${source_path}" ]]; then
-    echo "Missing required producer header: ${source_path}" >&2
-    exit 1
-  fi
-  rm -f "${destination_path}"
-  SOURCE_PATH="${source_path}" DESTINATION_PATH="${destination_path}" python3 - <<'PY'
-from pathlib import Path
-import os
-import re
-
-source = Path(os.environ["SOURCE_PATH"])
-destination = Path(os.environ["DESTINATION_PATH"])
-text = source.read_text(encoding="utf-8")
-text = re.sub(r"20\d{2}-\d{2}-\d{2}\s*", "", text)
-for marker in ("修改原因：", "修改原因:", "修改说明：", "修改说明:", "新增原因：", "新增原因:", "变更原因：", "变更原因:"):
-    text = text.replace(marker, "")
-destination.parent.mkdir(parents=True, exist_ok=True)
-destination.write_text(text, encoding="utf-8")
-PY
-  chmod 644 "${destination_path}"
-}
-
-
-# ICM producer 构建完成后由本脚本显式发布库和公共头，保证 consumer 使用本次构建产物。
-sync_icm_artifacts() {
-  local public_header="${WORKSPACE_DIR}/include/icm42688_x5/icm42688_driver.h"
-  local library=""
-
-  mkdir -p "${PACKAGE_LIB_DIR}" "${PROJECT_DIR}/include"
-  for library in libicm42688.so.2.0.0 libicm42688.so.2 libicm42688.so; do
-    publish_regular_file "${ICM_BUILD_DIR}/${library}" "${PACKAGE_LIB_DIR}/${library}" 755
-  done
-  publish_release_header "${public_header}" "${PROJECT_DIR}/include/icm42688_driver.h"
-}
-
-
-# 规范化路径后删除并重建 build 目录，确保发布不复用旧对象或旧 CMake 缓存。
 BUILD_DIR="$(resolve_project_path "${BUILD_DIR}")"
 OUTPUT_DIR="$(resolve_project_path "${OUTPUT_DIR}")"
-PACKAGE_LIB_DIR="$(resolve_project_path "${PACKAGE_LIB_DIR}")"
 TOOLCHAIN_FILE="$(resolve_project_path "${TOOLCHAIN_FILE}")"
-WORKSPACE_DIR="$(resolve_project_path "${WORKSPACE_DIR}")"
-mkdir -p "$(dirname "${BUILD_DIR}")" "$(dirname "${OUTPUT_DIR}")" "${PACKAGE_LIB_DIR}"
+
+mkdir -p "$(dirname "${BUILD_DIR}")" "$(dirname "${OUTPUT_DIR}")"
 BUILD_DIR="$(cd "$(dirname "${BUILD_DIR}")" && pwd)/$(basename "${BUILD_DIR}")"
 OUTPUT_DIR="$(cd "$(dirname "${OUTPUT_DIR}")" && pwd)/$(basename "${OUTPUT_DIR}")"
+
 case "${BUILD_DIR}" in
   "${PROJECT_DIR}"/*) ;;
   *)
@@ -202,47 +136,45 @@ if [[ "${BUILD_DIR}" == "${PROJECT_DIR}" || "${BUILD_DIR}" == "/" || -L "${BUILD
   echo "Refusing unsafe build directory: ${BUILD_DIR}" >&2
   exit 1
 fi
-
-if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" ]]; then
+if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUTPUT_DIR}" ]]; then
   echo "Refusing unsafe output directory: ${OUTPUT_DIR}" >&2
   exit 1
 fi
-if [[ -L "${OUTPUT_DIR}" ]]; then
-  echo "Refusing symlink output directory: ${OUTPUT_DIR}" >&2
+
+for library in \
+  libicm42688.so.2.0.0 libicm42688.so.2 libicm42688.so \
+  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
+  if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
+    echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "${PROJECT_DIR}/include/icm42688_driver.h" ]]; then
+  echo "Missing release public header: ${PROJECT_DIR}/include/icm42688_driver.h" >&2
   exit 1
 fi
-if [[ ! -f "${WORKSPACE_DIR}/CMakeLists.txt" || ! -x "${WORKSPACE_DIR}/scripts/build_sc132.sh" ||
-      ! -x "${WORKSPACE_DIR}/scripts/build_rtsp_so_mp4.sh" ]]; then
-  echo "Missing canonical producer workspace: ${WORKSPACE_DIR}" >&2
+if [[ ! -f "${TOOLCHAIN_FILE}" ]]; then
+  echo "Missing consumer toolchain file: ${TOOLCHAIN_FILE}" >&2
   exit 1
 fi
 
-# 先从权威源码干净构建三套 producer，并同步 SO/公共头到当前非 ROS 仓库。
-ICM_BUILD_DIR="${PROJECT_DIR}/.package-build-icm42688"
-rm -rf "${ICM_BUILD_DIR}"
-# 发布脚本负责独立同步 ICM artifacts；顶层 CMake 内置同步保持关闭，避免触发保护门禁。
-cmake -S "${WORKSPACE_DIR}" -B "${ICM_BUILD_DIR}" \
-  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-  -DROBOBATON_SYNC_BUILT_SHARED_LIBS=OFF
-# 使用 CMake 实际选中的 C 编译器 triplet 统一 SC132 与 RTSP 的工具链。
+# Configure only this release repository. The imported producer libraries come from ./lib.
+rm -rf "${BUILD_DIR}"
+cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+
 PRODUCER_GCC="$(read_configured_c_compiler)"
 if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then
   echo "Configured C compiler does not support -dumpmachine: ${PRODUCER_GCC}" >&2
   exit 1
 fi
-# 拒绝空值、路径或含空白的伪 triplet，避免拼接出仓库外或错误的工具路径。
 if [[ -z "${TARGET_TRIPLET}" || "${TARGET_TRIPLET}" == */* || "${TARGET_TRIPLET}" == *[[:space:]]* ]]; then
   echo "Configured C compiler returned invalid target triplet: ${TARGET_TRIPLET:-<empty>}" >&2
   exit 1
 fi
 TOOLCHAIN_BIN_DIR="$(cd "$(dirname "${PRODUCER_GCC}")" && pwd)"
-PRODUCER_CROSS_COMPILE="${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-"
-DERIVED_STRIP_TOOL="${PRODUCER_CROSS_COMPILE}strip"
-# strip 必须与编译器位于同一目录并使用同一 triplet，保证 producer 和最终可执行文件使用同一工具链族。
-if [[ ! -x "${DERIVED_STRIP_TOOL}" ]]; then
-  echo "Missing companion strip for configured C compiler: ${DERIVED_STRIP_TOOL}" >&2
-  exit 1
-fi
+DERIVED_STRIP_TOOL="${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-strip"
 if [[ -z "${STRIP_TOOL}" ]]; then
   STRIP_TOOL="${DERIVED_STRIP_TOOL}"
 fi
@@ -251,47 +183,21 @@ if [[ ! -x "${STRIP_TOOL}" ]]; then
   exit 1
 fi
 
-cmake --build "${ICM_BUILD_DIR}" --target icm42688_x5 --clean-first -j
-sync_icm_artifacts
-
-PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR}" \
-  "${WORKSPACE_DIR}/scripts/build_sc132.sh" \
-  --gcc "${PRODUCER_GCC}" --strip "${DERIVED_STRIP_TOOL}" --clean-first
-PACKAGE_LIB_DIR="${PACKAGE_LIB_DIR}" PRRTSP_DEBUG=0 \
-  "${WORKSPACE_DIR}/scripts/build_rtsp_so_mp4.sh" \
-  --cross-compile "${PRODUCER_CROSS_COMPILE}" --clean-first
-
-
-# 单次 configure 后构建默认 all 目标，覆盖仓库 CMakeLists 声明的全部可执行文件。
-rm -rf "${BUILD_DIR}"
-cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
-  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
 cmake --build "${BUILD_DIR}" --clean-first -j
 
 for path in \
   "${BUILD_DIR}/cam_demo" \
   "${BUILD_DIR}/imu_reader_demo" \
   "${BUILD_DIR}/sensor_demo" \
-  "${BUILD_DIR}/serial_port_demo" \
-  "${PACKAGE_LIB_DIR}/libicm42688.so.2.0.0" \
-  "${PACKAGE_LIB_DIR}/libicm42688.so.2" \
-  "${PACKAGE_LIB_DIR}/libicm42688.so" \
-  "${PACKAGE_LIB_DIR}/libsc132.so.2.0.0" \
-  "${PACKAGE_LIB_DIR}/libsc132.so.2" \
-  "${PACKAGE_LIB_DIR}/libsc132.so" \
-  "${PACKAGE_LIB_DIR}/libprrtsp.so.2.0.0" \
-  "${PACKAGE_LIB_DIR}/libprrtsp.so.2" \
-  "${PACKAGE_LIB_DIR}/libprrtsp.so"; do
+  "${BUILD_DIR}/serial_port_demo"; do
   if [[ ! -f "${path}" ]]; then
-    echo "Missing required file: ${path}" >&2
+    echo "Missing required consumer executable: ${path}" >&2
     exit 1
   fi
 done
 
-
 cleanup() {
   local rc=$?
-  # 发布异常退出时恢复同一文件系统中的上一版。
   if [[ "${BACKUP_ACTIVE}" -eq 1 && ! -e "${OUTPUT_DIR}" && -e "${WORK_ROOT}/previous" ]]; then
     mv "${WORK_ROOT}/previous" "${OUTPUT_DIR}" || true
   fi
@@ -302,7 +208,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# stage 完成 strip、manifest 和验证后再原子发布。
 WORK_ROOT="$(mktemp -d "$(dirname "${OUTPUT_DIR}")/.package-runtime.XXXXXX")"
 STAGE_DIR="${WORK_ROOT}/stage"
 mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/lib"
@@ -318,12 +223,9 @@ for library in \
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
 
-if [[ -n "${STRIP_TOOL}" ]]; then
-  "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/cam_demo"
-  "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/imu_reader_demo"
-  "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/sensor_demo"
-  "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/serial_port_demo"
-fi
+for executable in cam_demo imu_reader_demo sensor_demo serial_port_demo; do
+  "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
+done
 
 cat > "${STAGE_DIR}/env.sh" <<'EOF'
 #!/bin/sh

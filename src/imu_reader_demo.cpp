@@ -110,6 +110,8 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   config.sample_rate_hz = options.sample_rate_hz;
   config.fifo_watermark_samples = 1U;
   config.read_mode = ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO;
+  // 策略通过 ABI v2 reserved[0] 传递，不能扩展公开 config 布局。
+  config.reserved[ICM42688_CONFIG_SAMPLE_DROP_POLICY_INDEX] = options.sample_drop_policy;
 
   IcmCallbackContext context;
   context.observer = observer;
@@ -159,6 +161,10 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     // 队列有积压时立即继续 drain，仅空队列进入短等待。
     if (has_sample) {
       try {
+        if (options.system_clock != nullptr) {
+          sample.host_timestamp_ns = options.system_clock->MapRawNs(sample.host_timestamp_ns);
+          sample.sample_timestamp_ns = options.system_clock->MapRawNs(sample.sample_timestamp_ns);
+        }
         // observer 在 owner 线程运行，producer callback 不执行阻塞 I/O。
         if (context.observer != nullptr) {
           context.observer(sample, context.observer_user);
@@ -174,6 +180,16 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
         break;
       }
       continue;
+    }
+    const bool owner_stop_requested =
+        g_imu_signal_stop != 0 ||
+        (options.stop_requested != nullptr &&
+         options.stop_requested->load(std::memory_order_acquire));
+    if (!owner_stop_requested && icm42688_is_running(handle) == 0) {
+      // producer 在未达 count 且未收到 owner 停止请求前退出，只能在空队列边界确认已 drain 后 fail-closed。
+      context.callback_failed.store(true, std::memory_order_release);
+      context.accepting.store(false, std::memory_order_release);
+      break;
     }
 #ifdef RELEASE008_TESTING
     // 测试计数只位于空队列分支，用于验证积压期间不等待。
@@ -284,6 +300,20 @@ std::string RequireValue(int argc, char** argv, int* index, const char* name) {
   return std::string(argv[*index]);
 }
 
+// 解析十进制 CLI 参数并拒绝 uint32 范围外输入，避免大整数截断成有效采样率或计数。
+uint32_t ParseUint32Argument(const std::string& text, const char* name) {
+  size_t parsed = 0U;
+  const unsigned long value = std::stoul(text, &parsed, 10);
+  if (parsed != text.size()) {
+    throw std::invalid_argument(std::string("invalid unsigned integer for ") + name);
+  }
+  constexpr unsigned long kMaxUint32 = 0xffffffffUL;
+  if (value > kMaxUint32) {
+    throw std::out_of_range(std::string("out of range for ") + name);
+  }
+  return static_cast<uint32_t>(value);
+}
+
 class ScopedNonblockingFd final {
  public:
   explicit ScopedNonblockingFd(int fd) : fd_(fd), original_flags_(fcntl(fd, F_GETFL, 0)) {
@@ -326,17 +356,19 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
   for (int index = 1; index < argc; ++index) {
     const std::string argument(argv[index]);
     if (argument == "--sample-rate-hz") {
-      options.sample_rate_hz = static_cast<uint32_t>(
-          std::stoul(RequireValue(argc, argv, &index, "--sample-rate-hz")));
+      options.sample_rate_hz =
+          ParseUint32Argument(RequireValue(argc, argv, &index, "--sample-rate-hz"),
+                              "--sample-rate-hz");
       if (options.sample_rate_hz == 0U) {
         throw std::invalid_argument("--sample-rate-hz must be positive");
       }
     } else if (argument == "--count") {
       options.count =
-          static_cast<uint32_t>(std::stoul(RequireValue(argc, argv, &index, "--count")));
+          ParseUint32Argument(RequireValue(argc, argv, &index, "--count"), "--count");
     } else if (argument == "--print-rate-hz") {
-      requested_print_rate_hz = static_cast<uint32_t>(
-          std::stoul(RequireValue(argc, argv, &index, "--print-rate-hz")));
+      requested_print_rate_hz =
+          ParseUint32Argument(RequireValue(argc, argv, &index, "--print-rate-hz"),
+                              "--print-rate-hz");
       print_rate_was_set = true;
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: imu_reader_demo [--sample-rate-hz HZ] [--count N] "
@@ -367,7 +399,10 @@ int main(int argc, char** argv) {
     // stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。
     signal(SIGPIPE, SIG_IGN);
     uint32_t print_rate_hz = 0U;
-    const ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
+    ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
+    robobaton_demo::FrozenSystemClock system_clock;
+    system_clock.PrintTimeBase(std::cout);
+    options.system_clock = &system_clock;
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
         robobaton_demo::ImuPrintEverySamples(options.sample_rate_hz, print_rate_hz);
