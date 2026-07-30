@@ -326,9 +326,9 @@ Common options:
 ```text
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
---fps <30|60>      Camera and encoder fps, default 60
+--fps <25|30|40|50|60> Camera and encoder fps, default 60
 --codec <h264|h265> Video codec, default h264
---rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 60fps
+--rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25/40/50/60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
 --url <path>       RTSP path, default /PRR
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
@@ -337,7 +337,7 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses fixed four-camera, 60fps, H.264, upright `1280x1088` output. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 60fps.
+Limit: default `./cam_demo` uses fixed four-camera, 60fps, H.264, upright `1280x1088` output. `--fps` supports `25/30/40/50/60`; `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 25/40/50/60fps.
 
 ### H.265 Client Playback Notes
 
@@ -347,7 +347,7 @@ Check both sides when diagnosing playback:
 
 - If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
 - Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain four 60fps streams.
-- If the client still cannot play in real time, reduce `--fps` to `30`, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
+- If the client still cannot play in real time, reduce `--fps` to a lower `25/30/40/50` mode, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
 - With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
 
 H.265 acceptance must therefore verify both that the board continuously publishes a valid bitstream and that the target client can decode and render it in real time. Do not use one player's visual smoothness as the sole indicator of board-side interface health.

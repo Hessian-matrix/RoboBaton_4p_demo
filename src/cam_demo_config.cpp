@@ -20,8 +20,8 @@ void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
             << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
             << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
-            << "  --fps <30|60>     Camera and encoder fps, default 60\n"
-            << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps\n"
+            << "  --fps <25|30|40|50|60> Camera and encoder fps, default 60\n"
+            << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --codec <h264|h265> Encoder format, default h264\n"
             << "  --url <path>      RTSP URL path, default /PRR\n"
@@ -145,6 +145,21 @@ bool IsSupportedImuSampleRateHz(uint32_t sample_rate_hz) {
   }
 }
 
+// 功能：按 libsc132 当前公开的离散帧率表校验相机帧率。
+bool IsSupportedCameraFps(int fps) {
+  switch (fps) {
+    case 25:
+    case 30:
+    case 40:
+    case 50:
+    case 60:
+      return true;
+    default:
+      return false;
+  }
+}
+
+
 // 功能：检查运行参数是否处于 demo 支持范围。
 // 输入：已解析的 Options。
 // 输出：无。
@@ -162,8 +177,8 @@ void ValidateOptions(const Options& options) {
       (OutputWidth(options) & 1) != 0 || (OutputHeight(options) & 1) != 0) {
     throw std::invalid_argument("--width and --height must produce positive even NV12 dimensions");
   }
-  if (options.fps != 30 && options.fps != 60) {
-    throw std::invalid_argument("--fps must be 30 or 60");
+  if (!IsSupportedCameraFps(options.fps)) {
+    throw std::invalid_argument("--fps must be one of 25, 30, 40, 50, or 60");
   }
   if (options.bps <= 0 ||
       static_cast<unsigned long long>(options.bps) >
@@ -184,9 +199,9 @@ void ValidateOptions(const Options& options) {
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
   }
-  // 对外 180 度进入底层 270 度慢路径，四路 60fps 不支持。
-  if (InternalRotateDegrees(options) == 270 && options.fps == 60) {
-    throw std::invalid_argument("--rotate 180 is not supported at 60fps; use --fps 30 or --rotate 0");
+  // 对外 180 度进入底层 270 度慢路径，只保留 30fps 作为已验证组合。
+  if (InternalRotateDegrees(options) == 270 && options.fps != 30) {
+    throw std::invalid_argument("--rotate 180 is supported only at 30fps");
   }
   if (options.diagnostic_interval_ms < 100) {
     throw std::invalid_argument("--diag-interval-ms must be >= 100");

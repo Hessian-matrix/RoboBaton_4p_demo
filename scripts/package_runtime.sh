@@ -179,7 +179,11 @@ if [[ -z "${STRIP_TOOL}" ]]; then
   STRIP_TOOL="${DERIVED_STRIP_TOOL}"
 fi
 if [[ ! -x "${STRIP_TOOL}" ]]; then
-  echo "Strip tool is not executable: ${STRIP_TOOL}" >&2
+  if [[ "${STRIP_TOOL}" == "${DERIVED_STRIP_TOOL}" ]]; then
+    echo "Missing companion strip for configured C compiler: ${STRIP_TOOL}" >&2
+  else
+    echo "Strip tool is not executable: ${STRIP_TOOL}" >&2
+  fi
   exit 1
 fi
 
