@@ -7,7 +7,6 @@
 namespace robobaton_demo {
 
 struct SensorDemoYamlConfigState {
-  bool camera_mask_was_set = false;
   bool imu_print_rate_was_set = false;
 };
 

@@ -1,8 +1,10 @@
 # sensor_demo YAML config. Command-line options override this file.
-# camera.camera_mask selects the four-camera path (0xf) or one diagnostic sensor (0x1/0x2/0x4/0x8).
+# width/height are fixed at 1280x1088; changing them is not supported.
 camera:
-  camera_mask: 0xf
+  width: 1280
+  height: 1088
   fps: 60
+  rotate: 0
 rtsp:
   bps: 4000
   codec: h264

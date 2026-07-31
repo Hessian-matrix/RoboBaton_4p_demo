@@ -199,7 +199,7 @@ cd /root/demo
 
 四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
-`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu` 三个 section，支持 `camera.camera_mask`、`camera.fps`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz` 和 `imu.print_metrics`；等价的点号前缀键也可写成 `camera.camera_mask: 0xf`。命令行参数优先，只覆盖显式项；`camera_id`、`width`、`height`、`rotate`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
+`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu` 三个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz` 和 `imu.print_metrics`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
 
 ## 4. sensor_demo 联合相机与IMU
 

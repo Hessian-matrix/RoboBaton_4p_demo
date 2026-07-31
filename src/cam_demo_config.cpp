@@ -328,10 +328,6 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
                              SensorDemoYamlConfigState sensor_config_state) {
   ParseState config_parse_state;
   config_parse_state.requested_channels = options.channels;
-  if (accept_imu_options && sensor_config_state.camera_mask_was_set) {
-    config_parse_state.camera_selector_set = true;
-    config_parse_state.requested_channels = options.channels;
-  }
 
   ParseState cli_parse_state;
   cli_parse_state.requested_channels = options.channels;
