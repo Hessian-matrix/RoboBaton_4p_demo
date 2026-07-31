@@ -1,6 +1,5 @@
 #include "cam_demo_common.h"
 
-#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <unistd.h>
@@ -237,40 +236,68 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
   }
 
   const uint64_t timestamp_ns = sample.sample_timestamp_ns;
-  const double dt_ms = state->last_timestamp_ns == 0U
-                           ? 0.0
-                           : static_cast<double>(timestamp_ns - state->last_timestamp_ns) /
-                                 1000000.0;
   const double accel_norm =
       std::sqrt(sample.accel_mps2[0] * sample.accel_mps2[0] +
                 sample.accel_mps2[1] * sample.accel_mps2[1] +
                 sample.accel_mps2[2] * sample.accel_mps2[2]);
 
-  // 固定栈缓冲保证单行小于 PIPE_BUF，一次 write 对 pipe 保持原子性，
-  // 且避免 iostream 在 O_NONBLOCK fd 上产生不可控的缓冲、重试或部分写行为。
+  // 每条终端记录保持在 PIPE_BUF 内，并通过一次 write 写出完整多行块；
+  // 慢 sink 或关闭的输出端只影响日志记录，不阻塞采集 owner。
   std::array<char, PIPE_BUF> line;
-  const int line_length = std::snprintf(
-      line.data(), line.size(),
-      "ts_ns=%llu host_ts_ns=%llu sample_seq=%llu uncertainty_us=%u "
-      "gpio_gap_count=%u fifo_overflow_count=%u mapper_failure_count=%u "
-      "dt_ms=%.6f temp_c=%.6f accel_mps2=[%.6f, %.6f, %.6f] "
-      "accel_norm_mps2=%.6f gyro_rps=[%.6f, %.6f, %.6f]\n",
-      static_cast<unsigned long long>(timestamp_ns),
-      static_cast<unsigned long long>(sample.host_timestamp_ns),
-      static_cast<unsigned long long>(sample.sample_sequence),
-      sample.timestamp_uncertainty_us, sample.gpio_event_gap_count,
-      sample.fifo_overflow_count, sample.mapper_failure_count, dt_ms,
-      sample.temperature_c, sample.accel_mps2[0], sample.accel_mps2[1],
-      sample.accel_mps2[2], accel_norm, sample.gyro_rps[0], sample.gyro_rps[1],
-      sample.gyro_rps[2]);
-  if (line_length < 0 || static_cast<size_t>(line_length) >= line.size()) {
+  const unsigned long long ts_ns = static_cast<unsigned long long>(timestamp_ns);
+  std::size_t line_length = 0U;
+  const auto append_to_line = [&](const char* format, auto... args) -> bool {
+    const std::size_t remaining = line.size() - line_length;
+    const int appended = std::snprintf(line.data() + line_length, remaining, format,
+                                       args...);
+    if (appended < 0 || static_cast<std::size_t>(appended) >= remaining) {
+      return false;
+    }
+    line_length += static_cast<std::size_t>(appended);
+    return true;
+  };
+
+  // 必选 data 段先写入；metrics 诊断段只在 CLI 开关打开时追加，最终分割符始终追加。
+  bool formatted = append_to_line(
+      "*******************************IMU*******************************\n"
+      "imu data:\n"
+      "sample_seq=%llu\n"
+      "ts_ns=%llu\n"
+      "temp_c=%.6f accel_norm_mps2=%.6f\n"
+      "accel_mps2=[%.6f, %.6f, %.6f]\n"
+      "gyro_rps  =[%.6f, %.6f, %.6f]\n",
+      static_cast<unsigned long long>(sample.sample_sequence), ts_ns,
+      sample.temperature_c, accel_norm,
+      sample.accel_mps2[0], sample.accel_mps2[1], sample.accel_mps2[2],
+      sample.gyro_rps[0], sample.gyro_rps[1], sample.gyro_rps[2]);
+  if (formatted && state->print_metrics) {
+    const unsigned long long host_ns =
+        static_cast<unsigned long long>(sample.host_timestamp_ns);
+    const double dt_ms = state->last_timestamp_ns == 0U
+                             ? 0.0
+                             : static_cast<double>(timestamp_ns - state->last_timestamp_ns) /
+                                   1000000.0;
+    const double host_ts_gap_ms = host_ns >= ts_ns
+                                      ? static_cast<double>(host_ns - ts_ns) / 1000000.0
+                                      : -static_cast<double>(ts_ns - host_ns) / 1000000.0;
+    formatted = append_to_line(
+        "metrics:\n"
+        "host_ts_ns=%llu\n"
+        "host_ts_gap_ms=%.6f dt_ms=%.6f uncertainty_us=%u\n"
+        "gpio_gap_count=%u fifo_overflow_count=%u mapper_failure_count=%u\n",
+        host_ns, host_ts_gap_ms, dt_ms,
+        sample.timestamp_uncertainty_us, sample.gpio_event_gap_count,
+        sample.fifo_overflow_count, sample.mapper_failure_count);
+  }
+  formatted = formatted && append_to_line(
+      "%s", "*****************************************************************\n");
+  if (!formatted) {
     ++state->dropped_output_lines;
     return;
   }
 
-  const ssize_t written =
-      ::write(state->output_fd, line.data(), static_cast<size_t>(line_length));
-  if (written == line_length) {
+  const ssize_t written = ::write(state->output_fd, line.data(), line_length);
+  if (written >= 0 && static_cast<std::size_t>(written) == line_length) {
     state->last_timestamp_ns = timestamp_ns;
     return;
   }
@@ -289,6 +316,7 @@ void PrintImuSample(const icm42688_sample_t& sample, void* user) {
 namespace {
 
 using robobaton_demo::ImuConsumerOptions;
+using robobaton_demo::ScopedNonblockingFd;
 
 void SignalHandler(int) { robobaton_demo::g_imu_signal_stop = 1; }
 
@@ -314,44 +342,15 @@ uint32_t ParseUint32Argument(const std::string& text, const char* name) {
   return static_cast<uint32_t>(value);
 }
 
-class ScopedNonblockingFd final {
- public:
-  explicit ScopedNonblockingFd(int fd) : fd_(fd), original_flags_(fcntl(fd, F_GETFL, 0)) {
-    // 仅成功设置非阻塞位后才 armed；失败时调用方必须禁用输出。
-    if (original_flags_ >= 0 &&
-        fcntl(fd_, F_SETFL, original_flags_ | O_NONBLOCK) == 0) {
-      armed_ = true;
-    }
-  }
 
-  ScopedNonblockingFd(const ScopedNonblockingFd&) = delete;
-  ScopedNonblockingFd& operator=(const ScopedNonblockingFd&) = delete;
-
-  ~ScopedNonblockingFd() {
-    if (armed_ && fcntl(fd_, F_SETFL, original_flags_) < 0) {
-      // 析构路径不得抛异常，但恢复失败必须留下明确诊断。
-      constexpr char kWarning[] =
-          "warning: failed to restore stdout file status flags\n";
-      const ssize_t warning_result =
-          ::write(STDERR_FILENO, kWarning, sizeof(kWarning) - 1U);
-      static_cast<void>(warning_result);
-    }
-  }
-
-  bool active() const { return armed_; }
-
- private:
-  int fd_ = -1;
-  int original_flags_ = -1;
-  bool armed_ = false;
-};
-
-ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_hz) {
-  if (print_rate_hz == nullptr) {
-    throw std::invalid_argument("print_rate_hz output is null");
+ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_hz,
+                                    bool* print_metrics) {
+  if (print_rate_hz == nullptr || print_metrics == nullptr) {
+    throw std::invalid_argument("CLI output pointer is null");
   }
   uint32_t requested_print_rate_hz = 0U;
   bool print_rate_was_set = false;
+  bool print_metrics_enabled = false;
   ImuConsumerOptions options;
   for (int index = 1; index < argc; ++index) {
     const std::string argument(argv[index]);
@@ -370,23 +369,30 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
           ParseUint32Argument(RequireValue(argc, argv, &index, "--print-rate-hz"),
                               "--print-rate-hz");
       print_rate_was_set = true;
+    } else if (argument == "--print-metrics") {
+      print_metrics_enabled = true;
     } else if (argument == "--help" || argument == "-h") {
-      std::cout << "Usage: imu_reader_demo [--sample-rate-hz HZ] [--count N] "
-                   "[--print-rate-hz HZ]\n";
+      std::cout << "Usage: imu_reader_demo [options]:\n"
+                << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+                << robobaton_demo::kDefaultImuSampleRateHz << "\n"
+                << "  --count N Number of IMU samples to consume before exit, default 0 (run until signal)\n"
+                << "  --print-rate-hz HZ Terminal output rate, default min(sample-rate-hz, 10); 0 disables output\n"
+                << "  --print-metrics Include metrics diagnostics section in each output record, default off\n";
       std::exit(0);
     } else {
       throw std::invalid_argument("unknown argument: " + argument);
     }
   }
   // 默认 10Hz 只限制终端日志，owner 仍消费全部 IMU 样本。
-  constexpr uint32_t kDefaultPrintRateHz = 10U;
   *print_rate_hz = print_rate_was_set
                        ? requested_print_rate_hz
-                       : std::min(options.sample_rate_hz, kDefaultPrintRateHz);
+                       : std::min(options.sample_rate_hz,
+                                  robobaton_demo::kDefaultImuPrintRateHz);
   // 完整解析后校验最终值，使参数顺序不影响结果。
   if (*print_rate_hz > options.sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
   }
+  *print_metrics = print_metrics_enabled;
   return options;
 }
 
@@ -399,13 +405,15 @@ int main(int argc, char** argv) {
     // stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。
     signal(SIGPIPE, SIG_IGN);
     uint32_t print_rate_hz = 0U;
-    ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz);
+    bool print_metrics = false;
+    ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz, &print_metrics);
     robobaton_demo::FrozenSystemClock system_clock;
     system_clock.PrintTimeBase(std::cout);
     options.system_clock = &system_clock;
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
         robobaton_demo::ImuPrintEverySamples(options.sample_rate_hz, print_rate_hz);
+    state.print_metrics = print_metrics;
     // 非阻塞标志属于共享 OFD；RAII 将修改严格限制在采集窗口，
     // 设置失败时禁用 CLI 输出，析构覆盖正常返回和异常路径并恢复调用方状态。
     ScopedNonblockingFd output_mode(state.output_fd);

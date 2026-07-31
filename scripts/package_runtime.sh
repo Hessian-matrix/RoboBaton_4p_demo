@@ -154,6 +154,10 @@ if [[ ! -f "${PROJECT_DIR}/include/icm42688_driver.h" ]]; then
   echo "Missing release public header: ${PROJECT_DIR}/include/icm42688_driver.h" >&2
   exit 1
 fi
+if [[ ! -f "${PROJECT_DIR}/config/sensor_config.yaml" ]]; then
+  echo "Missing release sensor config: ${PROJECT_DIR}/config/sensor_config.yaml" >&2
+  exit 1
+fi
 if [[ ! -f "${TOOLCHAIN_FILE}" ]]; then
   echo "Missing consumer toolchain file: ${TOOLCHAIN_FILE}" >&2
   exit 1
@@ -226,6 +230,8 @@ for library in \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
+mkdir -p "${STAGE_DIR}/config"
+cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
 
 for executable in cam_demo imu_reader_demo sensor_demo serial_port_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
@@ -254,10 +260,10 @@ exec "\${DEMO_DIR}/bin/${name}" "\$@"
 EOF
 done
 
-chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib"
+chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo"
-chmod 644 "${STAGE_DIR}/env.sh" "${STAGE_DIR}/lib/"*.so
+chmod 644 "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" --write-manifest "${STAGE_DIR}"
 chmod 644 "${STAGE_DIR}/manifest.sha256"

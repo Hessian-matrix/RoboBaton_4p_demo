@@ -14,9 +14,12 @@ open_source_demo/
 ├── demo/                    # 可直接部署到 X5 /root/demo 的运行包
 │   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
+│   ├── config/              # sensor_demo YAML 配置
 │   ├── bin/                 # AArch64 可执行文件
 │   └── lib/                 # 与运行包匹配的三套动态库
 ├── image/                   # README 接线图片
+├── config/                  # sensor_demo 默认 YAML 配置
+│   └── sensor_config.yaml
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
@@ -137,7 +140,7 @@ scripts/package_runtime.sh
 
 `scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的四个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
 
-运行包包含顶层启动脚本、`env.sh`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件或单个 `.so`。
+运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
 
 部署到 X5：
 
@@ -158,6 +161,8 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 ├── imu_reader_demo
 ├── serial_port_demo
 ├── env.sh
+├── config/
+│   └── sensor_config.yaml
 ├── bin/
 │   ├── cam_demo
 │   ├── sensor_demo
@@ -194,9 +199,13 @@ cd /root/demo
 
 四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
+`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu` 三个 section，支持 `camera.camera_mask`、`camera.fps`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz` 和 `imu.print_metrics`；等价的点号前缀键也可写成 `camera.camera_mask: 0xf`。命令行参数优先，只覆盖显式项；`camera_id`、`width`、`height`、`rotate`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
+
 ## 4. sensor_demo 联合相机与IMU
 
 `sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`1000Hz`，可通过`--sample-rate-hz`切换到`25/50/100/200/500/1000/2000Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
+
+`sensor_demo` 的 IMU 终端记录与 `imu_reader_demo` 使用同一格式：默认按 `min(sample-rate-hz, 10)` 抽样输出 `imu data:` 多行块，`--print-rate-hz HZ` 可调整输出频率，`--print-rate-hz 0` 只保留启动/退出摘要，`--print-metrics` 才追加 `metrics:` 诊断段。
 
 ```bash
 ./sensor_demo
@@ -204,6 +213,10 @@ cd /root/demo
 
 ```bash
 ./sensor_demo --sample-rate-hz 2000
+```
+
+```bash
+./sensor_demo --print-rate-hz 50 --print-metrics
 ```
 
 退出日志包含：
@@ -439,17 +452,47 @@ ICM发布身份继续保持ABI v2、`libicm42688.so.2`和`ICM42688_X5_2.0`。当
 
 终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置
 `--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0`
-时禁用终端输出，`--count` 语义不变。
+时禁用终端输出，`--count` 语义不变。默认只输出 `imu data:` 数据段；加
+`--print-metrics` 后才输出 `metrics:` 指标段。
 
-输出字段：
+每个已抽样 IMU 样本输出一个带边界的多行记录。分割符
+`*****************************************************************` 始终输出；默认格式为：
 
+```text
+*******************************IMU*******************************
+imu data:
+sample_seq=20400
+ts_ns=1785426031483224328
+temp_c=40.942029 accel_norm_mps2=9.513199
+accel_mps2=[-0.100556, 3.586514, -8.810662]
+gyro_rps  =[-0.003193, 0.009578, -0.013835]
+*****************************************************************
+```
+
+数据段字段：
+
+- `sample_seq`：IMU 样本序号
 - `ts_ns`：映射到 `system_realtime` epoch 的 IMU sample 时间戳，单位 `ns`；它由 `CLOCK_MONOTONIC_RAW` 域 FIFO TMST 时间加启动冻结 offset 得到
-- `host_ts_ns`：映射到 `system_realtime` epoch 的 GPIO395 DRDY 边沿锚点，单位 `ns`
-- `dt_ms`：相邻两个已输出样本的 `ts_ns` 差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，非零显式输出频率下约为 `1000 / --print-rate-hz` ms；`--print-rate-hz 0` 不产生逐帧 `dt_ms`
 - `temp_c`：温度，单位 `degC`
-- `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `accel_norm_mps2`：三轴加速度模长，静止时通常接近 `9.81`
+- `accel_mps2`：三轴加速度，单位 `m/s^2`
 - `gyro_rps`：三轴角速度，单位 `rad/s`
+
+加 `--print-metrics` 后，每条记录会在最终分割符前追加指标段：
+
+```text
+metrics:
+host_ts_ns=1785426031488200044
+host_ts_gap_ms=4.975716 dt_ms=99.700735 uncertainty_us=65
+gpio_gap_count=0 fifo_overflow_count=0 mapper_failure_count=0
+```
+
+指标段字段：
+
+- `host_ts_ns`：映射到 `system_realtime` epoch 的 GPIO395 DRDY 边沿锚点，单位 `ns`
+- `host_ts_gap_ms`：`host_ts_ns - ts_ns`，单位 `ms`，用于观察 GPIO 边沿锚点和 sample 时间戳的映射间隔
+- `dt_ms`：相邻两个已输出样本的 `ts_ns` 差，单位 `ms`；默认 10Hz 输出时通常约为 `100ms`，非零显式输出频率下约为 `1000 / --print-rate-hz` ms；`--print-rate-hz 0` 不产生逐帧 `dt_ms`
+- `uncertainty_us` / `gpio_gap_count` / `fifo_overflow_count` / `mapper_failure_count`：时间戳映射、GPIO 事件间隔、FIFO 溢出和 mapper 失败计数诊断
 
 说明：
 
@@ -457,7 +500,7 @@ ICM发布身份继续保持ABI v2、`libicm42688.so.2`和`ICM42688_X5_2.0`。当
 - `host_timestamp_ns` 记录 GPIO395 rising edge 锚点，`sample_timestamp_ns` 由 FIFO 内 TMST 映射得到逐 sample 时间戳；demo 对外打印前用同一个 `TIME_BASE` 冻结 offset 将二者转换为 `system_realtime`
 - IMU 路径不使用 GPIO397、FSYNC 或 `icm42688_pulse_fsync()`
 - 驱动 callback 运行在采集线程且只负责将样本送入 64 槽有界 FIFO；自定义 observer 与 CLI 输出均在 owner 线程执行
-- CLI 输出使用非阻塞单次写；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 日志，owner 仍持续消费全部 IMU 样本
+- CLI 输出对每条多行记录执行一次非阻塞 write；SSH、pipe 或日志收集器变慢/关闭时只丢弃 CLI 记录，owner 仍持续消费全部 IMU 样本
 - 默认 10Hz 进一步降低正常终端的文本量；可显式提高 `--print-rate-hz` 做诊断，但慢 sink 下输出日志不保证完整
 - 若自定义 observer 的平均处理时间超过采样周期等 owner 计算路径持续变慢，64 槽 FIFO 仍按设计 fail-closed，禁止静默丢 IMU 样本
 
@@ -544,7 +587,7 @@ sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
   --kill-existing
 ```
 
-不要在板端 `/root/demo` 中执行 `scripts/cam_demo_regression.sh`；运行包只包含 `bin/`、`lib/`、顶层启动脚本 `cam_demo`、`imu_reader_demo`、`serial_port_demo`，以及 `env.sh` 和 `manifest.sha256`。
+不要在板端 `/root/demo` 中执行 `scripts/cam_demo_regression.sh`；运行包只包含 `bin/`、`lib/`、`config/sensor_config.yaml`、顶层启动脚本 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo`，以及 `env.sh` 和 `manifest.sha256`。
 
 `OPTIONS` 只能证明 RTSP 控制面可达，不能替代码流解码验收。正式交付仍需按本节前述四个 URL 各连接一个实际客户端，确认四路都能持续解码出图；单个端口一次只连接一个客户端，避免探测客户端占用该端口的会话槽。
 
@@ -569,12 +612,15 @@ SC132 相机 demo 依赖 X5 板端 camera/vpf/hbmem/multimedia/FFmpeg/OpenSSL �
 
 ```text
 /root/demo/
-├── imu_reader_demo / serial_port_demo / cam_demo
+├── sensor_demo / cam_demo / imu_reader_demo / serial_port_demo
 ├── env.sh
+├── config/
+│   └── sensor_config.yaml
 ├── bin/
+│   ├── sensor_demo
+│   ├── cam_demo
 │   ├── imu_reader_demo
-│   ├── serial_port_demo
-│   └── cam_demo
+│   └── serial_port_demo
 └── lib/
     ├── libicm42688.so
     ├── libsc132.so

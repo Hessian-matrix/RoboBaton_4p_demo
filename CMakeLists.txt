@@ -79,6 +79,7 @@ add_executable(sensor_demo
   src/imu_reader_demo.cpp
   src/cam_demo_common.cpp
   src/cam_demo_config.cpp
+  src/sensor_demo_yaml_config.cpp
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
   src/frozen_system_clock.cpp
@@ -177,4 +178,7 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/include/sc132camera.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/prrtsp_v2.h"
   DESTINATION include
+)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/sensor_config.yaml"
+  DESTINATION config
 )

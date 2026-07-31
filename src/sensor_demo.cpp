@@ -127,10 +127,21 @@ struct ImuStats {
   }
 };
 
-void ObserveImuSample(const icm42688_sample_t& sample, void* user) {
-  auto* stats = static_cast<ImuStats*>(user);
-  if (stats != nullptr) {
-    stats->Observe(sample);
+struct SensorImuObserverState {
+  ImuStats* stats = nullptr;
+  robobaton_demo::ImuPrintState* print_state = nullptr;
+};
+
+void ObserveSensorImuSample(const icm42688_sample_t& sample, void* user) {
+  auto* state = static_cast<SensorImuObserverState*>(user);
+  if (state == nullptr) {
+    return;
+  }
+  if (state->stats != nullptr) {
+    state->stats->Observe(sample);
+  }
+  if (state->print_state != nullptr) {
+    robobaton_demo::PrintImuSample(sample, state->print_state);
   }
 }
 
@@ -166,16 +177,20 @@ int main(int argc, char** argv) {
   // 0 同时表示参数错误等硬件前失败路径尚未启动 IMU 线程。
   std::atomic<int> imu_result{0};
   ImuStats imu_stats;
+  ImuPrintState imu_print_state;
+  SensorImuObserverState imu_observer;
   ImuConsumerOptions imu_options;
   std::thread imu_thread;
   RtspChannels rtsp;
   std::unique_ptr<FramePipeline> pipeline;
   std::unique_ptr<FrozenSystemClock> system_clock;
+  std::unique_ptr<ScopedNonblockingFd> output_mode;
   uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
 
   try {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
+    signal(SIGPIPE, SIG_IGN);
     g_stop_requested.store(false, std::memory_order_release);
 
     Options options = ParseSensorDemoCommandLine(argc, argv);
@@ -188,6 +203,13 @@ int main(int argc, char** argv) {
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.system_clock = system_clock.get();
+    imu_print_state.print_every_samples =
+        ImuPrintEverySamples(options.imu_sample_rate_hz, options.imu_print_rate_hz);
+    imu_print_state.print_metrics = options.imu_print_metrics;
+    output_mode = std::make_unique<ScopedNonblockingFd>(imu_print_state.output_fd);
+    imu_print_state.output_available = output_mode->active();
+    imu_observer.stats = &imu_stats;
+    imu_observer.print_state = &imu_print_state;
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
@@ -200,12 +222,14 @@ int main(int argc, char** argv) {
               << (options.imu_start_order == ImuStartOrder::kCameraFirst
                       ? "camera-first"
                       : "imu-first")
-              << " imu_time=SENSOR_TIMESTAMP_FIFO\n";
+              << " imu_print_rate_hz=" << options.imu_print_rate_hz
+              << " imu_print_metrics=" << (options.imu_print_metrics ? "on" : "off")
+              << " imu_time=SENSOR_TIMESTAMP_FIFO\n" << std::flush;
 
-    // 两种顺序复用同一线程入口；imu_options 的生命周期覆盖统一清理和 join。
-    const auto start_imu = [&imu_result, &imu_options, &imu_stats, &imu_thread] {
-      imu_thread = std::thread([&imu_result, &imu_options, &imu_stats] {
-        const int result = RunIcmConsumer(imu_options, ObserveImuSample, &imu_stats);
+    // 两种顺序复用同一线程入口；imu_options 和 observer 状态的生命周期覆盖统一清理和 join。
+    const auto start_imu = [&imu_result, &imu_options, &imu_observer, &imu_thread] {
+      imu_thread = std::thread([&imu_result, &imu_options, &imu_observer] {
+        const int result = RunIcmConsumer(imu_options, ObserveSensorImuSample, &imu_observer);
         imu_result.store(result, std::memory_order_release);
         if (result != 0) {
           g_stop_requested.store(true, std::memory_order_release);
@@ -307,6 +331,8 @@ int main(int argc, char** argv) {
   if (imu_thread.joinable()) {
     imu_thread.join();
   }
+  // IMU 高速终端输出已结束，最终摘要恢复普通 stdout flags，便于脚本稳定读取。
+  output_mode.reset();
   if (imu_result.load(std::memory_order_acquire) != 0) {
     std::cerr << "fatal: IMU INT1 producer failed\n";
     exit_code = 1;

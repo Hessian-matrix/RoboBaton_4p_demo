@@ -9,7 +9,7 @@ namespace robobaton_demo {
 // 输出：完整 Options；参数非法时抛出 std::invalid_argument。
 Options ParseCommandLine(int argc, char** argv);
 
-// 功能：解析 sensor_demo 命令行参数，包含 IMU 采样率。
+// 功能：解析 sensor_demo 命令行参数，优先读取 DEMO_DIR/config/sensor_config.yaml，再用 CLI 覆盖。
 // 输入：main 函数收到的 argc/argv。
 // 输出：完整 Options；参数非法时抛出 std::invalid_argument。
 Options ParseSensorDemoCommandLine(int argc, char** argv);

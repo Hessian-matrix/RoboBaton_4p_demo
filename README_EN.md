@@ -14,9 +14,12 @@ open_source_demo/
 ├── demo/                    # Runtime package deployable to X5 /root/demo
 │   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
+│   ├── config/              # sensor_demo YAML config
 │   ├── bin/                 # AArch64 executables
 │   └── lib/                 # Shared libraries matched to the runtime package
 ├── image/                   # Wiring images used by the README files
+├── config/                  # Default sensor_demo YAML config
+│   └── sensor_config.yaml
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
@@ -148,7 +151,7 @@ scripts/package_runtime.sh
 
 `scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's four demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
 
-The runtime package contains the top-level launchers, `env.sh`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable or one `.so` file.
+The runtime package contains the top-level launchers, `env.sh`, `config/sensor_config.yaml`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable, one `.so` file, or omit the config file.
 
 Deploy it to X5:
 
@@ -169,6 +172,8 @@ Runtime layout on X5:
 ├── imu_reader_demo
 ├── serial_port_demo
 ├── env.sh
+├── config/
+│   └── sensor_config.yaml
 ├── bin/
 │   ├── cam_demo
 │   ├── sensor_demo
@@ -206,6 +211,8 @@ cd /root/demo
 
 All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, IMU sample rate, or other runtime parameters.
 
+`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, and `imu` sections and supports `camera.camera_mask`, `camera.fps`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, and `imu.print_metrics`; the same contract also accepts dotted keys such as `camera.camera_mask: 0xf`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `width`, `height`, `rotate`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only settings. `cam_demo` does not read this YAML.
+
 ## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
 
 Source: `src/sensor_demo.cpp`.
@@ -224,6 +231,8 @@ ICM FIFO TMST
 ```
 
 Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+
+`sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
 
 At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`/`gpio` trigger modes, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch; other trigger modes preserve the SC132 native timestamp domain. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
 
@@ -470,17 +479,47 @@ Supported IMU sample rates are `25/50/100/200/500/1000/2000 Hz`; the default rem
 Terminal output defaults to `10 Hz` while the program still consumes and counts every
 IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
 exceed `--sample-rate-hz`. Set it to `0` to disable terminal output without changing
-`--count` semantics.
+`--count` semantics. By default, records include only the `imu data:` data section;
+add `--print-metrics` to include the `metrics:` diagnostics section.
 
-Output fields:
+Each sampled IMU record is printed as one bounded multi-line block. The
+`*****************************************************************` separator is always printed. The default format is:
 
+```text
+*******************************IMU*******************************
+imu data:
+sample_seq=20400
+ts_ns=1785426031483224328
+temp_c=40.942029 accel_norm_mps2=9.513199
+accel_mps2=[-0.100556, 3.586514, -8.810662]
+gyro_rps  =[-0.003193, 0.009578, -0.013835]
+*****************************************************************
+```
+
+Data-section fields:
+
+- `sample_seq`: IMU sample sequence number
 - `ts_ns`: IMU sample timestamp in the `system_realtime` epoch, in `ns`; it is derived from the `CLOCK_MONOTONIC_RAW` FIFO TMST timeline plus the startup frozen offset
-- `host_ts_ns`: GPIO395 DRDY edge anchor mapped to the `system_realtime` epoch, in `ns`
-- `dt_ms`: timestamp delta between adjacent printed `ts_ns` samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
 - `temp_c`: temperature in `degC`
-- `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
+- `accel_mps2`: 3-axis acceleration in `m/s^2`
 - `gyro_rps`: 3-axis angular velocity in `rad/s`
+
+With `--print-metrics`, each record appends this diagnostics section before the final separator:
+
+```text
+metrics:
+host_ts_ns=1785426031488200044
+host_ts_gap_ms=4.975716 dt_ms=99.700735 uncertainty_us=65
+gpio_gap_count=0 fifo_overflow_count=0 mapper_failure_count=0
+```
+
+Metrics-section fields:
+
+- `host_ts_ns`: GPIO395 DRDY edge anchor mapped to the `system_realtime` epoch, in `ns`
+- `host_ts_gap_ms`: `host_ts_ns - ts_ns`, in `ms`, used to inspect the mapping gap between the GPIO edge anchor and the sample timestamp
+- `dt_ms`: timestamp delta between adjacent printed `ts_ns` samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
+- `uncertainty_us` / `gpio_gap_count` / `fifo_overflow_count` / `mapper_failure_count`: diagnostics for timestamp mapping, GPIO event gaps, FIFO overflow, and mapper failures
 
 Notes:
 
@@ -488,7 +527,7 @@ Notes:
 - `host_timestamp_ns` records the GPIO395 rising-edge anchor; `sample_timestamp_ns` is the per-sample timestamp mapped from FIFO TMST. Before the demo prints or forwards them, the same `TIME_BASE` frozen offset converts both values to `system_realtime`.
 - The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`.
 - The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
-- CLI output uses one non-blocking write per line. If an SSH session, pipe, or log collector slows down or closes, CLI log lines are dropped while the owner continues consuming every IMU sample.
+- CLI output uses one non-blocking write per multi-line record. If an SSH session, pipe, or log collector slows down or closes, CLI records are dropped while the owner continues consuming every IMU sample.
 - The 10 Hz default further reduces normal terminal traffic. Increase `--print-rate-hz` explicitly for diagnostics, but log completeness is not guaranteed with a slow sink.
 - If a custom observer or other owner-side computation remains slower than the sample period, the bounded 64-slot FIFO still fails closed rather than silently dropping IMU samples.
 
@@ -575,7 +614,7 @@ sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
   --kill-existing
 ```
 
-Do not run `scripts/cam_demo_regression.sh` from `/root/demo` on the board. The runtime package contains only `bin/`, `lib/`, the top-level launchers `cam_demo`, `imu_reader_demo`, and `serial_port_demo`, plus `env.sh` and `manifest.sha256`.
+Do not run `scripts/cam_demo_regression.sh` from `/root/demo` on the board. The runtime package contains only `bin/`, `lib/`, `config/sensor_config.yaml`, the top-level launchers `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo`, plus `env.sh` and `manifest.sha256`.
 
 ## 8. Runtime Constraints
 
@@ -598,12 +637,15 @@ Confirm the target directory layout:
 
 ```text
 /root/demo/
-├── imu_reader_demo / serial_port_demo / cam_demo
+├── sensor_demo / cam_demo / imu_reader_demo / serial_port_demo
 ├── env.sh
+├── config/
+│   └── sensor_config.yaml
 ├── bin/
+│   ├── sensor_demo
+│   ├── cam_demo
 │   ├── imu_reader_demo
-│   ├── serial_port_demo
-│   └── cam_demo
+│   └── serial_port_demo
 └── lib/
     ├── libicm42688.so
     ├── libsc132.so

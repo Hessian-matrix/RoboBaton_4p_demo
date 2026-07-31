@@ -1,0 +1,13 @@
+# sensor_demo YAML config. Command-line options override this file.
+# camera.camera_mask selects the four-camera path (0xf) or one diagnostic sensor (0x1/0x2/0x4/0x8).
+camera:
+  camera_mask: 0xf
+  fps: 60
+rtsp:
+  bps: 4000
+  codec: h264
+  url: /PRR
+imu:
+  sample_rate_hz: 1000
+  print_rate_hz: 10
+  print_metrics: false

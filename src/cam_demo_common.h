@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <atomic>
 #include <cstddef>
@@ -33,6 +34,7 @@ constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
 constexpr uint32_t kDefaultImuSampleRateHz = 1000U;
 
+constexpr uint32_t kDefaultImuPrintRateHz = 10U;
 extern std::atomic<bool> g_stop_requested;
 enum class VideoCodec : uint32_t {
   kH264 = 0U,
@@ -77,6 +79,8 @@ struct Options {
   uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
+  uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
+  bool imu_print_metrics = false;
   const FrozenSystemClock* system_clock = nullptr;
 };
 
@@ -137,12 +141,47 @@ using ImuSampleObserver = void (*)(const icm42688_sample_t& sample, void* user);
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
                    void* observer_user);
 
+// 临时切换文件描述符为非阻塞模式；生命周期结束时恢复原始 flags。
+class ScopedNonblockingFd final {
+ public:
+  explicit ScopedNonblockingFd(int fd)
+      : fd_(fd), original_flags_(fcntl(fd, F_GETFL, 0)) {
+    // 仅成功设置非阻塞位后才 armed；失败时调用方必须禁用输出。
+    if (original_flags_ >= 0 &&
+        fcntl(fd_, F_SETFL, original_flags_ | O_NONBLOCK) == 0) {
+      armed_ = true;
+    }
+  }
+
+  ScopedNonblockingFd(const ScopedNonblockingFd&) = delete;
+  ScopedNonblockingFd& operator=(const ScopedNonblockingFd&) = delete;
+
+  ~ScopedNonblockingFd() {
+    if (armed_ && fcntl(fd_, F_SETFL, original_flags_) < 0) {
+      // 析构路径不得抛异常，但恢复失败必须留下明确诊断。
+      constexpr char kWarning[] =
+          "warning: failed to restore stdout file status flags\n";
+      const ssize_t warning_result =
+          ::write(STDERR_FILENO, kWarning, sizeof(kWarning) - 1U);
+      static_cast<void>(warning_result);
+    }
+  }
+
+  bool active() const { return armed_; }
+
+ private:
+  int fd_ = -1;
+  int original_flags_ = -1;
+  bool armed_ = false;
+};
+
 struct ImuPrintState {
   uint32_t print_every_samples = 1U;
   uint64_t observed_samples = 0U;
   uint64_t last_timestamp_ns = 0U;
   int output_fd = STDOUT_FILENO;
   bool output_available = true;
+  bool print_metrics = false;
   uint64_t dropped_output_lines = 0U;
 };
 

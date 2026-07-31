@@ -50,6 +50,7 @@ REQUIRED_FILES = {
     "sensor_demo",
     "serial_port_demo",
     "env.sh",
+    "config/sensor_config.yaml",
     "bin/cam_demo",
     "bin/imu_reader_demo",
     "bin/sensor_demo",

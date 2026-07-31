@@ -1,9 +1,12 @@
 #include "cam_demo_config.h"
+#include "sensor_demo_yaml_config.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace robobaton_demo {
 namespace {
@@ -12,6 +15,12 @@ constexpr const char* kSc132SensorProfileEnv = "SC132_SENSOR_PROFILE";
 constexpr const char* kSc132TriggerModeEnv = "SC132_TRIGGER_MODE";
 constexpr const char* kSc132Single60FpsProfile =
     "sc132gs_linear_1088x1280_raw10_60fps_1lane";
+
+struct ParseState {
+  bool channels_set = false;
+  bool camera_selector_set = false;
+  int requested_channels = kMaxChannels;
+};
 
 // 功能：打印 demo 支持的命令行参数。
 // 输入：program 为可执行文件名；include_imu_options 表示是否显示 sensor_demo 专属 IMU 参数。
@@ -33,10 +42,14 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --trigger-mode <software_gpio|vin_lpwm|none> SC132 trigger output mode, default "
             << kDefaultSc132TriggerMode << "\n";
   if (include_imu_options) {
+    std::cout << "  " << SensorDemoYamlConfigRelativePath()
+              << " YAML config is loaded before CLI options; missing file is created with defaults\n";
     std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
     std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
+    std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
+    std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
   }
   std::cout << "  -h, --help        Show this help\n";
 }
@@ -92,6 +105,19 @@ long long ParseLongLong(const std::string& text, const char* name) {
   return value;
 }
 
+// 功能：解析无符号 64 位 CLI 数值，支持 0x 前缀并拒绝负号。
+uint64_t ParseUint64(const std::string& text, const char* name) {
+  if (!text.empty() && text.front() == '-') {
+    throw std::invalid_argument(std::string("invalid unsigned integer for ") + name);
+  }
+  size_t parsed = 0;
+  const unsigned long long value = std::stoull(text, &parsed, 0);
+  if (parsed != text.size()) {
+    throw std::invalid_argument(std::string("invalid unsigned integer for ") + name);
+  }
+  return static_cast<uint64_t>(value);
+}
+
 // 将不可信的 CLI 编码格式收敛为强类型枚举，仅接受 h264/h265。
 // 输入：小写编码格式文本；输出：VideoCodec；非法值抛出 std::invalid_argument。
 VideoCodec ParseVideoCodec(const std::string& text) {
@@ -125,6 +151,67 @@ ImuStartOrder ParseImuStartOrder(const std::string& text) {
     return ImuStartOrder::kCameraFirst;
   }
   throw std::invalid_argument("--imu-start-order must be imu-first or camera-first");
+}
+
+
+
+
+void ApplyChannels(Options* options, ParseState* state, int channels) {
+  options->channels = channels;
+  state->requested_channels = channels;
+  state->channels_set = true;
+  if (!state->camera_selector_set) {
+    options->camera_mask = CameraMaskFromChannelCount(options->channels);
+  }
+}
+
+void ApplyCameraId(Options* options, ParseState* state, int camera_id) {
+  if (camera_id < 0 || camera_id >= kMaxChannels) {
+    throw std::invalid_argument("--camera-id must be 0, 1, 2, or 3");
+  }
+  // 单颗诊断按物理 camera id 选路。
+  options->camera_mask = 1U << static_cast<uint32_t>(camera_id);
+  options->channels = 1;
+  state->camera_selector_set = true;
+}
+
+void ApplyCameraMask(Options* options, ParseState* state, uint32_t camera_mask) {
+  // camera mask 仅接受单颗诊断或完整四目组合。
+  if (!IsSupportedCameraMask(camera_mask)) {
+    throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
+  }
+  options->camera_mask = camera_mask;
+  options->channels = CameraMaskPopCount(camera_mask);
+  state->camera_selector_set = true;
+}
+
+
+void ValidateOptions(const Options& options);
+
+void ValidateSelectorState(const ParseState& state, const Options& options) {
+  if (state.channels_set && state.camera_selector_set &&
+      state.requested_channels != CameraMaskPopCount(options.camera_mask)) {
+    throw std::invalid_argument("--channels conflicts with --camera-id/--camera-mask");
+  }
+}
+
+void FinalizeParsedOptions(Options* options, const ParseState& config_state,
+                           const ParseState& cli_state,
+                           const SensorDemoYamlConfigState& sensor_config_state,
+                           bool accept_imu_options) {
+  const bool cli_selects_camera = cli_state.channels_set || cli_state.camera_selector_set;
+  const ParseState& selector_state = cli_selects_camera ? cli_state : config_state;
+  if (!selector_state.channels_set && !selector_state.camera_selector_set) {
+    options->camera_mask = CameraMaskFromChannelCount(options->channels);
+  }
+  ValidateSelectorState(selector_state, *options);
+
+  if (accept_imu_options && !sensor_config_state.imu_print_rate_was_set) {
+    options->imu_print_rate_hz =
+        std::min(options->imu_sample_rate_hz, kDefaultImuPrintRateHz);
+  }
+
+  ValidateOptions(*options);
 }
 
 // 功能：按 libicm42688 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
@@ -216,6 +303,9 @@ void ValidateOptions(const Options& options) {
     throw std::invalid_argument(
         "--sample-rate-hz must be one of 25, 50, 100, 200, 500, 1000, or 2000");
   }
+  if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
+    throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
+  }
   if (options.imu_sample_drop_policy > ICM42688_SAMPLE_DROP_POLICY_STRICT) {
     throw std::invalid_argument(
         "--imu-sample-drop-policy must be allow-counted or strict");
@@ -229,43 +319,34 @@ void ValidateOptions(const Options& options) {
 
 }  // namespace
 
-// 功能：解析相机/RTSP命令行；sensor_demo 可额外启用 IMU 采样率参数。
-// 输入：main 函数传入的 argc/argv；accept_imu_options 控制是否接受 --sample-rate-hz。
+// 功能：解析相机/RTSP命令行；sensor_demo 参数路径可接受已加载的 YAML 默认值。
+// 输入：main 函数传入的 argc/argv；accept_imu_options 控制 sensor_demo 专属参数。
 // 输出：Options；--help 会打印帮助并退出进程。
 // 异常：未知参数或参数值非法时抛出 std::invalid_argument。
-Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
-  Options options;
-  int requested_channels = options.channels;
-  bool channels_set = false;
-  bool camera_selector_set = false;
+Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
+                             Options options,
+                             SensorDemoYamlConfigState sensor_config_state) {
+  ParseState config_parse_state;
+  config_parse_state.requested_channels = options.channels;
+  if (accept_imu_options && sensor_config_state.camera_mask_was_set) {
+    config_parse_state.camera_selector_set = true;
+    config_parse_state.requested_channels = options.channels;
+  }
+
+  ParseState cli_parse_state;
+  cli_parse_state.requested_channels = options.channels;
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
     if (arg == "--channels") {
-      options.channels = ParseInt(RequireValue(argc, argv, &i, "--channels"), "--channels");
-      requested_channels = options.channels;
-      channels_set = true;
-      if (!camera_selector_set) {
-        options.camera_mask = CameraMaskFromChannelCount(options.channels);
-      }
+      ApplyChannels(&options, &cli_parse_state,
+                    ParseInt(RequireValue(argc, argv, &i, "--channels"), "--channels"));
     } else if (arg == "--camera-id") {
-      const int camera_id = ParseInt(RequireValue(argc, argv, &i, "--camera-id"), "--camera-id");
-      if (camera_id < 0 || camera_id >= kMaxChannels) {
-        throw std::invalid_argument("--camera-id must be 0, 1, 2, or 3");
-      }
-      // 单颗诊断按物理 camera id 选路。
-      options.camera_mask = 1U << static_cast<uint32_t>(camera_id);
-      options.channels = 1;
-      camera_selector_set = true;
+      ApplyCameraId(&options, &cli_parse_state,
+                    ParseInt(RequireValue(argc, argv, &i, "--camera-id"), "--camera-id"));
     } else if (arg == "--camera-mask") {
-      const uint32_t camera_mask = ParseUint32(RequireValue(argc, argv, &i, "--camera-mask"),
-                                              "--camera-mask");
-      // camera mask 仅接受单颗诊断或完整四目组合。
-      if (!IsSupportedCameraMask(camera_mask)) {
-        throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
-      }
-      options.camera_mask = camera_mask;
-      options.channels = CameraMaskPopCount(camera_mask);
-      camera_selector_set = true;
+      ApplyCameraMask(&options, &cli_parse_state,
+                      ParseUint32(RequireValue(argc, argv, &i, "--camera-mask"),
+                                  "--camera-mask"));
     } else if (arg == "--width") {
       options.width = ParseInt(RequireValue(argc, argv, &i, "--width"), "--width");
     } else if (arg == "--height") {
@@ -286,11 +367,12 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
       options.diagnostic_interval_ms =
           ParseInt(RequireValue(argc, argv, &i, "--diag-interval-ms"), "--diag-interval-ms");
     } else if (arg == "--max-skew-ns") {
-      options.frame_set_max_skew_ns = static_cast<uint64_t>(
-          ParseLongLong(RequireValue(argc, argv, &i, "--max-skew-ns"), "--max-skew-ns"));
+      options.frame_set_max_skew_ns =
+          ParseUint64(RequireValue(argc, argv, &i, "--max-skew-ns"), "--max-skew-ns");
     } else if (arg == "--frame-timeout-ms") {
       options.frame_set_timeout_ms = static_cast<uint32_t>(
-          ParseInt(RequireValue(argc, argv, &i, "--frame-timeout-ms"), "--frame-timeout-ms"));
+          ParseUint32(RequireValue(argc, argv, &i, "--frame-timeout-ms"),
+                      "--frame-timeout-ms"));
     } else if (arg == "--trigger-mode") {
       options.trigger_mode = RequireValue(argc, argv, &i, "--trigger-mode");
     } else if (accept_imu_options && arg == "--sample-rate-hz") {
@@ -302,6 +384,13 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
     } else if (accept_imu_options && arg == "--imu-start-order") {
       options.imu_start_order =
           ParseImuStartOrder(RequireValue(argc, argv, &i, "--imu-start-order"));
+    } else if (accept_imu_options && arg == "--print-rate-hz") {
+      options.imu_print_rate_hz =
+          ParseUint32(RequireValue(argc, argv, &i, "--print-rate-hz"),
+                      "--print-rate-hz");
+      sensor_config_state.imu_print_rate_was_set = true;
+    } else if (accept_imu_options && arg == "--print-metrics") {
+      options.imu_print_metrics = true;
     } else if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0], accept_imu_options);
       std::exit(0);
@@ -310,24 +399,18 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options) {
     }
   }
 
-  if (!channels_set && !camera_selector_set) {
-    options.camera_mask = CameraMaskFromChannelCount(options.channels);
-  }
-  if (channels_set && camera_selector_set &&
-      requested_channels != CameraMaskPopCount(options.camera_mask)) {
-    throw std::invalid_argument("--channels conflicts with --camera-id/--camera-mask");
-  }
-
-  ValidateOptions(options);
+  FinalizeParsedOptions(&options, config_parse_state, cli_parse_state,
+                        sensor_config_state, accept_imu_options);
   return options;
 }
 
 Options ParseCommandLine(int argc, char** argv) {
-  return ParseCommandLineImpl(argc, argv, false);
+  return ParseCommandLineImpl(argc, argv, false, Options{}, SensorDemoYamlConfigState{});
 }
 
-Options ParseSensorDemoCommandLine(int argc, char** argv) {
-  return ParseCommandLineImpl(argc, argv, true);
+Options ParseSensorDemoCommandLineWithConfig(int argc, char** argv, Options options,
+                                             SensorDemoYamlConfigState sensor_config_state) {
+  return ParseCommandLineImpl(argc, argv, true, std::move(options), sensor_config_state);
 }
 
 // 功能：把命令行选择的触发模式写入 libsc132 使用的环境变量。
