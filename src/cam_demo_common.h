@@ -21,7 +21,7 @@ namespace robobaton_demo {
 constexpr int kMaxChannels = 4;
 constexpr int kDefaultWidth = 1280;
 constexpr int kDefaultHeight = 1088;
-constexpr int kDefaultFps = 60;
+constexpr int kDefaultFps = 30;
 constexpr long long kDefaultBps = 4000;
 constexpr int kDefaultRotateDegrees = 0;
 constexpr int kMountRotateDegrees = 90;

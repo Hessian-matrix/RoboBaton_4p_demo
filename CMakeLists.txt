@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(x5_imu_uart_open_demo LANGUAGES C CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ROBOBATON_RELEASE_VERSION)
+string(STRIP "${ROBOBATON_RELEASE_VERSION}" ROBOBATON_RELEASE_VERSION)
+if(NOT ROBOBATON_RELEASE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION must contain a SemVer core version")
+endif()
+project(x5_imu_uart_open_demo VERSION ${ROBOBATON_RELEASE_VERSION} LANGUAGES C CXX)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+add_compile_options(
+  $<$<CONFIG:Release>:-O3>
+  $<$<CONFIG:Release>:-DNDEBUG>
+)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +97,11 @@ add_executable(sensor_demo
   src/cam_demo_rtsp.cpp
   src/frozen_system_clock.cpp
 )
+
+foreach(versioned_target IN ITEMS imu_reader_demo serial_port_demo cam_demo sensor_demo)
+  target_compile_definitions(${versioned_target} PRIVATE
+    ROBOBATON_RELEASE_VERSION="${ROBOBATON_RELEASE_VERSION}")
+endforeach()
 
 target_compile_options(imu_reader_demo PRIVATE
   -Wall
@@ -182,3 +200,4 @@ install(FILES
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/sensor_config.yaml"
   DESTINATION config
 )
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DESTINATION .)

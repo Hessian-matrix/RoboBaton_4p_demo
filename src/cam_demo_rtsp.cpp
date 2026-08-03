@@ -1,5 +1,6 @@
 #include "cam_demo_rtsp.h"
 
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -97,6 +98,17 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
       frame.width != widths_[camera_id] || frame.height != heights_[camera_id] ||
       frame.stride < frame.width || frame.vstride < frame.height ||
       (frame.vstride & 1U) != 0U) {
+    std::fprintf(stderr,
+                 "RTSP descriptor rejected camera=%d frame=%ux%u expected=%ux%u "
+                 "stride=%u vstride=%u y_size=%llu uv_size=%llu "
+                 "y_virtual=%p uv_virtual=%p y_phys=%llu uv_phys=%llu owner=%p\n",
+                 camera_id, frame.width, frame.height, widths_[camera_id],
+                 heights_[camera_id], frame.stride, frame.vstride,
+                 static_cast<unsigned long long>(frame.y_size),
+                 static_cast<unsigned long long>(frame.uv_size), frame.y_data,
+                 frame.uv_data, static_cast<unsigned long long>(frame.y_phys),
+                 static_cast<unsigned long long>(frame.uv_phys),
+                 static_cast<void*>(frame.frame));
     return false;
   }
 
@@ -113,6 +125,14 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
   const uintptr_t uv_virtual = reinterpret_cast<uintptr_t>(frame.uv_data);
   if (y_virtual == 0U || uv_virtual == 0U || frame.y_size < y_required ||
       frame.uv_size < uv_required) {
+    std::fprintf(stderr,
+                 "RTSP descriptor size rejected camera=%d stride=%u vstride=%u "
+                 "y_size=%llu required=%llu uv_size=%llu required=%llu\n",
+                 camera_id, frame.stride, frame.vstride,
+                 static_cast<unsigned long long>(frame.y_size),
+                 static_cast<unsigned long long>(y_required),
+                 static_cast<unsigned long long>(frame.uv_size),
+                 static_cast<unsigned long long>(uv_required));
     return false;
   }
 

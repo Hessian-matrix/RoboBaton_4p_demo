@@ -94,6 +94,8 @@ typedef struct sc132_frame_set_config {
 #define SC132_FRAME_SET_CONFIG_INIT \
   { sizeof(sc132_frame_set_config_t), NULL, NULL, 4U, SC132_NATIVE_OUTPUT_WIDTH, SC132_NATIVE_OUTPUT_HEIGHT, 100U, SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS, {0U} }
 
+/* Product release SemVer; returned storage is process-static and read-only. */
+const char *sc132_get_version(void);
 int32_t sc132_set_fps(uint32_t fps);
 int32_t sc132_set_output_rotation(uint32_t rotate_clockwise_degrees);
 int32_t sc132_start_frame_set(const sc132_frame_set_config_t *config,

@@ -13,12 +13,13 @@ STARTUP_TIMEOUT=14
 CHANNELS=4
 WIDTH=1280
 HEIGHT=1088
-FPS=60
+FPS=30
 BPS=2000
 ROTATE=0
 URL_PATH="/PRR"
 DIAG_INTERVAL_MS=1000
 MIN_FPS=55
+MIN_FPS_SET=0
 MIN_GOOD_FPS_SAMPLES=3
 MAX_PIPELINE_DELAY_MS=80
 MAX_SEND_MAX_MS=120
@@ -46,12 +47,12 @@ Connection:
 Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
-  --fps <30|60>               Camera/encoder FPS, default 60
+  --fps <30|60>               Camera/encoder FPS, default 30
   --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio, vin_lpwm, none; default software_gpio/GPIO417
   --output-dir <path>         Local log output directory, default ./regression_logs
 
 Evaluation thresholds:
-  --min-fps <value>           Minimum acceptable per-channel FPS, default 55
+  --min-fps <value>           Minimum acceptable per-channel FPS, default target-dependent (30fps: 25; 60fps: 55)
   --min-good-fps-samples <n>  Minimum FPS samples per channel above --min-fps, default 3
   --max-pipeline-delay-ms <n> Maximum pipeline_delay_ms, default 80
   --max-send-max-ms <n>       Maximum send_max_ms, default 120
@@ -79,7 +80,7 @@ while [[ $# -gt 0 ]]; do
     --rotate) ROTATE="$2"; shift 2 ;;
     --trigger-mode) TRIGGER_MODE="$2"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
-    --min-fps) MIN_FPS="$2"; shift 2 ;;
+    --min-fps) MIN_FPS="$2"; MIN_FPS_SET=1; shift 2 ;;
     --min-good-fps-samples) MIN_GOOD_FPS_SAMPLES="$2"; shift 2 ;;
     --max-pipeline-delay-ms) MAX_PIPELINE_DELAY_MS="$2"; shift 2 ;;
     --max-send-max-ms) MAX_SEND_MAX_MS="$2"; shift 2 ;;
@@ -103,6 +104,12 @@ fi
 if [[ -n "${PASSWORD}" ]] && ! command -v sshpass >/dev/null 2>&1; then
   echo "sshpass is required when --password or X5_PASS is used" >&2
   exit 2
+fi
+if (( MIN_FPS_SET == 0 )); then
+  case "${FPS}" in
+    30) MIN_FPS=25 ;;
+    60) MIN_FPS=55 ;;
+  esac
 fi
 # 多地址开发机应复用 SSH 的 BindAddress，否则 RTSP 探测可能从不可达源网段发出。
 RTSP_PROBE_BIND_ADDRESS="$(ssh -G -l "${USER}" "${HOST}" 2>/dev/null \

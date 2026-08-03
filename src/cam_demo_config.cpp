@@ -29,7 +29,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
             << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
             << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
-            << "  --fps <25|30|40|50|60> Camera and encoder fps, default 60\n"
+            << "  --fps <25|30|40|50|60> Camera and encoder fps, default 30\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --codec <h264|h265> Encoder format, default h264\n"

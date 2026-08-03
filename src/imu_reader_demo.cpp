@@ -25,6 +25,10 @@ extern "C" {
 #include "icm42688_driver.h"
 }
 
+#ifndef ROBOBATON_RELEASE_VERSION
+#define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
+#endif
+
 namespace robobaton_demo {
 volatile sig_atomic_t g_imu_signal_stop = 0;
 
@@ -400,6 +404,12 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+      std::cout << "imu_reader_demo " << ROBOBATON_RELEASE_VERSION << "\n"
+                << "libicm42688 " << icm42688_get_version() << " abi="
+                << ICM42688_ABI_VERSION_MAJOR << "." << ICM42688_ABI_VERSION_MINOR << "\n";
+      return 0;
+    }
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     // stdout 关闭仅表示日志 sink 不可用，不能让 SIGPIPE 终止采集。

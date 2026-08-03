@@ -45,6 +45,34 @@ open_source_demo/
 
 本公开仓库不包含内部 `tests/` 和发布检查清单。集成到顶层 `4cam` 工作区时，这些维护资产位于主仓库的 `tests/robobaton_4p_demo/`；它们不属于用户源码交付，也不会进入 `demo/` 板端运行包。`build_x5/`、`.package-build-*`、`regression_logs/` 和 Python 缓存均为本地生成物，不属于发布内容。
 
+## 发布仓库与版本关系
+
+本仓的`main`是non-ROS公开发布线。完整V1不是由本仓`main`单独定义，而是由顶层`4cam`主仓`master`通过gitlink同时固定以下三个公开仓提交：
+
+```text
+RoboBaton_4p_demo              main
+RoboBaton_4P_ROS2_demo         main
+4P_doc                         main
+```
+
+使用正式交付时，应以发布说明指定的本仓commit/tag和`demo/manifest.sha256`为一组，不要把任意时间拉取的`main`源码与其他版本的预编译库或运行包混用。顶层工程内部的`feature/* -> dev -> rc/* -> master`流程只用于候选晋升；未进入正式组成的dev/feature内容不代表公开支持能力。
+
+## 版本查询
+
+仓库和运行包根目录都包含机器可读的`VERSION`。四个交付程序都支持无需初始化相机、IMU或UART的`--version`：
+
+```bash
+cat demo/VERSION
+demo/cam_demo --version
+demo/sensor_demo --version
+demo/imu_reader_demo --version
+demo/serial_port_demo --version
+```
+
+`cam_demo`和`sensor_demo`还会输出进程实际加载的`libsc132`、`libprrtsp`和`libicm42688`产品版本及ABI版本，用于发现程序与SO混装。三个自研SO分别提供`sc132_get_version()`、`prrtsp_get_version()`和`icm42688_get_version()` C API；返回值是进程静态只读字符串，不得释放。产品SemVer与SO的SONAME/ABI版本相互独立。
+
+功能新增、问题修复和已知限制统一记录在[公开版本更新记录](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md)中。
+
 ## 2. 构建
 
 本 demo 设计为“开发机交叉编译，X5 板端只运行”，不要求也不建议在 X5 板端原生编译。
@@ -225,7 +253,7 @@ cd /root/demo
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
 
-启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 `software_gpio`/`gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域；其他触发模式保留 SC132 原生时间域。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
+启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 
 ### `sensor_demo` 的 `[FRAME_SET] trigger_sync` 诊断日志
 
@@ -244,9 +272,9 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 | `trigger_seq` | 最新匹配 GPIO417 软件上升沿序号；不是 sensor 硬件 frame ID。 |
 | `lag_ns` | 当前 frame-set 最早 frame timestamp 减匹配 GPIO trigger timestamp：`frame_timestamp_ns - trigger_timestamp_ns`。 |
 | `interval_max_lag_ns` | 从上一条 `trigger_sync` 报告以来观测到的最大 lag；打印后清零，当前报告周期约 1 秒，不是整个长测的历史最大值。 |
-| `limit_ns` | 当前允许的最大 trigger lag。60Hz 默认是 `16666666 ns`，约一个 frame period。 |
+| `limit_ns` | 当前允许的最大 trigger lag。当前默认 30Hz 是 `33333333 ns`；显式 60Hz 示例为 `16666666 ns`，均约一个 frame period。 |
 
-上面示例表示：
+上面显式 60Hz 示例表示：
 
 ```text
 当前 lag       = 9.728000 ms
@@ -299,7 +327,7 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、60fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
+`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线，也是 V1 唯一已验证的稳定 Trigger 模式。`vin_lpwm` 和 `none` 仍可作为实验性参数显式传入，但尚未验收，不属于 V1 稳定合同。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、30fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
 
 部署时请整目录拷贝 `/root/demo` 运行包。顶层入口会设置 `LD_LIBRARY_PATH`，如果只拷贝 `bin/cam_demo` 或单个 `.so`，板端可能加载系统库，导致运行环境和交付包不一致。
 
@@ -308,7 +336,7 @@ killall -q cam_demo 2>/dev/null || true
 ```text
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
---fps <25|30|40|50|60> 相机和编码帧率，默认 60
+--fps <25|30|40|50|60> 相机和编码帧率，默认 30；25/30/40/50 为 V1 稳定功能配置；60 为显式 stress-only 压力配置
 --codec <h264|h265> 编码格式，默认 h264
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25/40/50/60fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
@@ -319,16 +347,16 @@ killall -q cam_demo 2>/dev/null || true
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认 `./cam_demo` 使用固定四路、60fps、H.264、正装方向 `1280x1088` 输出。`--fps` 支持 `25/30/40/50/60`，`--codec h265` 使用相同的四路端口和 path。`--rotate 180` 仅支持 30fps 降载模式，不支持 25/40/50/60fps。
+限制说明：默认 `./cam_demo` 使用固定四路、30fps、H.264、正装方向 `1280x1088` 输出。`--fps 25/30/40/50` 是 V1 稳定功能配置；`--fps 60` 是显式 `stress-only` 压力配置，不是稳定发布 profile。`--codec h265` 使用相同的四路端口和 path。`--rotate 180` 仅支持 30fps 降载模式，不支持 25/40/50/60fps。RTSP 编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`；90/270 度不能继续沿用横屏画布。
 
 ### H.265 客户端播放说明
 
-`--codec h265` 的板端编码和 RTSP 接口已经完成，可输出固定四路 H.265 码流。四路 `1280x1088@60fps` 同时播放时，部分客户端可能因 H.265 接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或 RTSP 发送失败。
+`--codec h265` 的板端编码和 RTSP 接口已经完成，可输出固定四路 H.265 码流。在显式 `stress-only` 的四路 `1280x1088@60fps` 配置下同时播放时，部分客户端可能因 H.265 接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或 RTSP 发送失败。
 
 排查时应同时观察板端和客户端：
 
 - 如果板端日志中四路 `fps` 接近目标值、`queue_full_rejects=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
-- 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法稳定处理四路 60fps。
+- 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法处理四路 60fps 压力配置。
 - 如果客户端仍无法实时播放，可将 `--fps` 降为 `25/30/40/50` 中的较低档、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
 - H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
 
@@ -393,7 +421,7 @@ codec_name=hevc
 
 width=1280
 height=1088
-avg_frame_rate=60/1
+avg_frame_rate=30/1
 ```
 
 判定建议：
@@ -421,7 +449,7 @@ avg_frame_rate=60/1
 - `group_id`：`libsc132.so` 生成的四目同步帧组序号
 - `group_skew_ns`：当前帧组四路 timestamp 最大差值，单位 `ns`，用于诊断链路相位差
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
-- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；在其他触发模式下，优先为 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间。
+- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在 V1 唯一已验证的默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；实验性的 `vin_lpwm`/`none` 优先使用 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间，不声明为 V1 wall/realtime 合同。
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
@@ -507,7 +535,11 @@ gpio_gap_count=0 fifo_overflow_count=0 mapper_failure_count=0
 ## 6. 串口通信 Demo
 
 接口线序如下：
-![alt text](image/UART.png)
+![RoboBaton 4P UART 板卡顶视图 pinout](image/UART.png)
+
+三组 UART 的 TX/RX 信号逻辑电平均为 `3.3V`。按上图板卡顶视图从左到右，`DEBUG_UART` 为 `GND/RX/TX`，`UART7` 和 `UART1` 为 `3V3/RX/TX/GND`；图片没有标出 Pin 1，从线缆端或连接器插接面观察时不要直接照抄左右顺序。接线必须共地，禁止接入 5V TTL、RS-232 或 USB-UART VCC；`3V3` 引脚的供电方向、允许电流和热插拔能力不属于 V1 合同。
+
+V1 只交付 `serial_port_demo` 软件示例；UART 实际硬件通信、外接线束、USB-UART 适配器和对端设备尚未纳入 V1 验收。
 
 默认运行：
 
@@ -600,7 +632,7 @@ IMU demo 默认使用当前 X5 主板连接：
 - SPI speed：`4 MHz`
 - 默认读取模式：sensor-timestamp FIFO
 
-串口 demo 不固定硬件连线，用户需要根据现场接线选择 `/dev/ttyS1`、`/dev/ttyS7` 或其他串口设备。
+串口 demo 只提供软件示例。用户需要根据上面的 3.3V pinout 和现场接线选择 `/dev/ttyS1`、`/dev/ttyS7` 或其他串口设备；实际 UART 收发不属于 V1 已验收功能。
 
 SC132 相机 demo 依赖 X5 板端 camera/vpf/hbmem/multimedia/FFmpeg/OpenSSL 等系统运行库，只适合在 X5 板端运行。开发机只用于交叉编译。
 
@@ -698,6 +730,6 @@ ldd ./bin/cam_demo
 
 判断依据：
 
-- 如果应用日志里的 `fps` 接近 60、`queue_full_rejects=0`，但播放器某一路明显慢，问题更可能在 RTSP 客户端缓冲或播放器显示链路。
+- 如果应用日志里的 `fps` 接近配置目标（默认约 30）、`queue_full_rejects=0`，但播放器某一路明显慢，问题更可能在 RTSP 客户端缓冲或播放器显示链路。
 - 如果 `send_max_ms` 长时间异常升高，再继续排查对应 RTSP 或编码链路。
 - 如果 `group_skew_ns` 长期接近一个帧周期，继续检查外触发、相机启动顺序和板端负载。

@@ -9,6 +9,7 @@
 #include <thread>
 
 extern "C" {
+#include "prrtsp_v2.h"
 #include "sc132camera.h"
 }
 
@@ -16,6 +17,10 @@ extern "C" {
 #include "cam_demo_config.h"
 #include "cam_demo_pipeline.h"
 #include "cam_demo_rtsp.h"
+
+#ifndef ROBOBATON_RELEASE_VERSION
+#define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
+#endif
 
 namespace {
 
@@ -44,6 +49,14 @@ robobaton_demo::PipelineHooks MainPipelineHooks() {
 
 int main(int argc, char** argv) {
   using namespace robobaton_demo;
+
+  if (argc == 2 && std::string(argv[1]) == "--version") {
+    std::cout << "cam_demo " << ROBOBATON_RELEASE_VERSION << "\n"
+              << "libsc132 " << sc132_get_version() << " abi="
+              << SC132_ABI_VERSION_MAJOR << "." << SC132_ABI_VERSION_MINOR << "\n"
+              << "libprrtsp " << prrtsp_get_version() << " abi=2.0\n";
+    return 0;
+  }
 
   int exit_code = 0;
   bool sc_start_attempted = false;

@@ -20,6 +20,10 @@
 #include <thread>
 #include <vector>
 
+#ifndef ROBOBATON_RELEASE_VERSION
+#define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
+#endif
+
 namespace {
 
 std::atomic<bool> g_should_stop{false};
@@ -343,6 +347,10 @@ void RunTxRx(const Options& options, const SerialPort& port) {
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+      std::cout << "serial_port_demo " << ROBOBATON_RELEASE_VERSION << "\n";
+      return 0;
+    }
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
 

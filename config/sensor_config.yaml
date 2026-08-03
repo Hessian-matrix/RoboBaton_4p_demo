@@ -3,7 +3,7 @@
 camera:
   width: 1280
   height: 1088
-  fps: 60
+  fps: 30
   rotate: 0
 rtsp:
   bps: 4000

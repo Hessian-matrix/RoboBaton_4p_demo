@@ -45,6 +45,34 @@ open_source_demo/
 
 This public repository does not contain the internal `tests/` directory or release checklist. When integrated into the top-level `4cam` workspace, those maintainer assets live under `tests/robobaton_4p_demo/`; they are not part of the user source delivery or the board-side `demo/` package. `build_x5/`, `.package-build-*`, `regression_logs/`, and Python caches are local generated artifacts and are not release content.
 
+## Repository And Release Identity
+
+The `main` branch is the public non-ROS release line. A complete V1 is not defined by this repository alone: the top-level `4cam` repository on `master` pins one exact commit from each public repository through Git links:
+
+```text
+RoboBaton_4p_demo              main
+RoboBaton_4P_ROS2_demo         main
+4P_doc                         main
+```
+
+For an official delivery, use the commit/tag named by the release together with its matching `demo/manifest.sha256`. Do not combine an arbitrary checkout of `main` with prebuilt libraries or a runtime package from another generation. The top-level `feature/* -> dev -> rc/* -> master` flow is an internal candidate-promotion path; dev/feature content that has not entered the official composition is not a supported public release.
+
+## Version Reporting
+
+Both the repository and runtime package contain a machine-readable `VERSION` file. All four delivered programs support `--version` without initializing camera, IMU, or UART hardware:
+
+```bash
+cat demo/VERSION
+demo/cam_demo --version
+demo/sensor_demo --version
+demo/imu_reader_demo --version
+demo/serial_port_demo --version
+```
+
+`cam_demo` and `sensor_demo` also report the product and ABI versions of the `libsc132`, `libprrtsp`, and `libicm42688` objects actually loaded by the process, which detects mixed packages. The three project-owned shared libraries expose `sc132_get_version()`, `prrtsp_get_version()`, and `icm42688_get_version()` C APIs. Each returns process-static read-only storage that must not be freed. Product SemVer is independent of a shared library's SONAME/ABI version.
+
+Features, fixes, and known limitations are maintained in the [public changelog](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md).
+
 ## 2. Build
 
 This demo is intended to be cross-compiled on a development host and only run on the X5 board. Native compilation on the X5 board is not required or recommended.
@@ -234,7 +262,7 @@ Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAM
 
 `sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
 
-At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`/`gpio` trigger modes, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch; other trigger modes preserve the SC132 native timestamp domain. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
+At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch. Explicit `vin_lpwm` and `none` selections are experimental and unaccepted; they preserve the SC132 native timestamp domain and do not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
 
 ### `sensor_demo` `[FRAME_SET] trigger_sync` diagnostic log
 
@@ -253,7 +281,7 @@ Field definitions:
 | `trigger_seq` | Sequence number of the latest matched GPIO417 software rising edge; it is not a sensor hardware frame ID. |
 | `lag_ns` | The earliest frame timestamp in the current frame-set minus the matched GPIO trigger timestamp: `frame_timestamp_ns - trigger_timestamp_ns`. |
 | `interval_max_lag_ns` | Maximum lag observed since the previous `trigger_sync` report. It is cleared after printing; the report window is approximately 1 second, so this is not the historical maximum for the entire soak. |
-| `limit_ns` | Maximum permitted trigger lag. At the default 60 Hz camera rate it is `16666666 ns`, approximately one frame period. |
+| `limit_ns` | Maximum permitted trigger lag. For the explicit 60 Hz example above it is `16666666 ns`; at the current default 30 Hz it is approximately `33333333 ns`, one frame period. |
 
 The example means:
 
@@ -326,7 +354,7 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring. For normal use, run `./cam_demo` directly for fixed four-camera, 60fps, H.264, upright `1280x1088` output; run `./cam_demo --codec h265` to switch all four streams to H.265.
+`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring and the only V1-validated stable trigger mode. `vin_lpwm` and `none` remain accepted as explicit experimental parameters, but they are unaccepted and outside the V1 stable contract. For normal use, run `./cam_demo` directly for fixed four-camera, 30fps, H.264, upright `1280x1088` output; run `./cam_demo --codec h265` to switch all four streams to H.265.
 
 Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
 
@@ -335,7 +363,7 @@ Common options:
 ```text
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
---fps <25|30|40|50|60> Camera and encoder fps, default 60
+--fps <25|30|40|50|60> Camera and encoder fps, default 30; 25/30/40/50 are V1 stable functional modes; 60 is explicit stress-only
 --codec <h264|h265> Video codec, default h264
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25/40/50/60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
@@ -346,16 +374,16 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses fixed four-camera, 60fps, H.264, upright `1280x1088` output. `--fps` supports `25/30/40/50/60`; `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 25/40/50/60fps.
+Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps 25/30/40/50` are V1 stable functional configurations; `--fps 60` is an explicit stress-only configuration, not a stable release profile. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 25/40/50/60fps.
 
 ### H.265 Client Playback Notes
 
-The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. When four `1280x1088@60fps` streams are displayed concurrently, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not by itself indicate a board-side encoder or RTSP transmission failure.
+The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. In the explicit stress-only four-stream `1280x1088@60fps` configuration, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not by itself indicate a board-side encoder or RTSP transmission failure.
 
 Check both sides when diagnosing playback:
 
 - If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
-- Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain four 60fps streams.
+- Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain the four-stream 60fps stress configuration.
 - If the client still cannot play in real time, reduce `--fps` to a lower `25/30/40/50` mode, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
 - With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
 
@@ -420,7 +448,7 @@ codec_name=hevc
 
 width=1280
 height=1088
-avg_frame_rate=60/1
+avg_frame_rate=30/1
 ```
 
 Diagnosis guide:
@@ -448,7 +476,7 @@ Log fields:
 - `group_id`: synchronized frame-set sequence generated by `libsc132.so`
 - `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
 - `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
-- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode it is the matched GPIO trigger timestamp mapped into the `system_realtime` epoch by the frozen offset; in other trigger modes, the sensor/VIO per-frame timestamp is preferred and the system output timestamp is the fallback
+- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode, the only V1-validated trigger mode, it is the matched GPIO trigger timestamp mapped into the `system_realtime` epoch by the frozen offset. Experimental `vin_lpwm`/`none` prefer the sensor/VIO per-frame timestamp and use the system output timestamp as fallback; they do not carry a V1 wall/realtime contract
 - `queue_full_rejects`: cumulative frames rejected because a per-channel queue was already full; this must remain `0` during stable streaming, and any nonzero value triggers fail-closed shutdown
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
@@ -533,8 +561,12 @@ Notes:
 
 ## 6. UART Communication Demo
 
-interface wire sequence:
-![alt text](image/UART.png)
+Interface pinout:
+![RoboBaton 4P UART board-top pinout](image/UART.png)
+
+TX/RX on all three UART connectors use `3.3V` logic. In the board-top view above, read from left to right: `DEBUG_UART` is `GND/RX/TX`; `UART7` and `UART1` are `3V3/RX/TX/GND`. The image does not identify Pin 1, so do not copy the left-to-right order when viewing from the cable or connector-mating side. Use a common ground and never connect 5V TTL, RS-232, or USB-UART VCC. V1 does not specify the `3V3` pin's power direction, current capability, or hot-plug behavior.
+
+V1 delivers only the `serial_port_demo` software example. Actual UART hardware communication, cables, USB-UART adapters, and peer devices are not V1-accepted product functions.
 
 Default run:
 
@@ -625,7 +657,7 @@ The IMU demo uses the current X5 mainboard connection by default:
 - SPI speed: `4 MHz`
 - Default read mode: sensor-timestamp FIFO
 
-The UART demo does not assume fixed wiring. Select `/dev/ttyS1`, `/dev/ttyS7`, or another serial device according to the actual hardware connection.
+The UART demo is a software example only. Select `/dev/ttyS1`, `/dev/ttyS7`, or another serial device according to the 3.3V pinout and actual wiring; real UART send/receive is not a V1-accepted function.
 
 The SC132 camera demo depends on X5 system runtime libraries such as camera, vpf, hbmem, multimedia, FFmpeg, and OpenSSL. It is intended to run on the X5 board only; the development host is only used for cross-compilation.
 
@@ -723,6 +755,6 @@ For timing diagnostics:
 
 Interpretation:
 
-- If `fps` is close to 60 and `queue_full_rejects=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
+- If `fps` is close to the configured target (about 30 by default) and `queue_full_rejects=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
 - If `send_max_ms` stays unusually high, continue checking that RTSP or encoder path.
 - If `group_skew_ns` stays close to one frame period, continue checking external trigger stability, camera startup order, and board load.

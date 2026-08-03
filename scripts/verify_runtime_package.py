@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 MANIFEST_NAME = "manifest.sha256"
+RELEASE_VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
     "bin/imu_reader_demo": {"ICM42688_X5_2.0"},
@@ -45,6 +46,7 @@ EXPECTED_LIBRARY_NEEDED = {
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
+    "VERSION",
     "cam_demo",
     "imu_reader_demo",
     "sensor_demo",
@@ -82,6 +84,13 @@ def soname(path: Path) -> str | None:
 
 def needed(path: Path) -> set[str]:
     return set(re.findall(r"Shared library: \[([^\]]+)\]", readelf(path, "-d")))
+
+
+def dynamic_symbols(path: Path) -> set[str]:
+    return set(re.findall(
+        r"\b(?:GLOBAL|WEAK)\b\s+\bDEFAULT\b\s+\S+\s+([A-Za-z_][A-Za-z0-9_]*)",
+        readelf(path, "--dyn-syms", "--wide"),
+    ))
 
 
 def verify_aarch64_executable(path: Path) -> None:
@@ -141,6 +150,8 @@ def verify_package(package_dir: Path) -> None:
     missing = sorted(relative for relative in REQUIRED_FILES if not (package_dir / relative).is_file())
     if missing:
         raise AssertionError(f"missing runtime files: {missing}")
+    if (package_dir / "VERSION").read_text(encoding="utf-8").strip() != RELEASE_VERSION:
+        raise AssertionError("runtime VERSION does not match the release version")
 
     for relative in ["cam_demo", "imu_reader_demo", "sensor_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
         mode = (package_dir / relative).stat().st_mode
@@ -186,6 +197,15 @@ def verify_package(package_dir: Path) -> None:
             raise AssertionError(
                 f"SONAME mismatch for {relative}: {actual_soname!r} != {EXPECTED_SONAMES[relative]!r}"
             )
+
+    version_getters = {
+        "lib/libicm42688.so.2.0.0": "icm42688_get_version",
+        "lib/libsc132.so.2.0.0": "sc132_get_version",
+        "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
+    }
+    for relative, symbol in version_getters.items():
+        if symbol not in dynamic_symbols(package_dir / relative):
+            raise AssertionError(f"missing release version getter {symbol} in {relative}")
 
     for real_relative, copies in EXPECTED_LIBRARY_COPIES.items():
         expected_hash = sha256(package_dir / real_relative)

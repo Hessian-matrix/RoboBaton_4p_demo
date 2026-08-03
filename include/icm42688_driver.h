@@ -96,6 +96,8 @@ ICM42688_X5_API int icm42688_start(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_stop(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_is_running(const icm42688_handle_t *handle);
 ICM42688_X5_API void icm42688_destroy(icm42688_handle_t *handle);
+/* Product release SemVer; returned storage is process-static and read-only. */
+ICM42688_X5_API const char *icm42688_get_version(void);
 /* The returned pointer refers to process-static read-only storage and must not be freed. */
 ICM42688_X5_API const char *icm42688_status_message(int status);
 

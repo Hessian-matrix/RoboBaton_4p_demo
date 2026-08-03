@@ -166,7 +166,8 @@ fi
 # Configure only this release repository. The imported producer libraries come from ./lib.
 rm -rf "${BUILD_DIR}"
 cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
-  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+  -DCMAKE_BUILD_TYPE="Release"
 
 PRODUCER_GCC="$(read_configured_c_compiler)"
 if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then
@@ -232,6 +233,7 @@ for library in \
 done
 mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
+cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
 
 for executable in cam_demo imu_reader_demo sensor_demo serial_port_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
@@ -263,7 +265,7 @@ done
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo"
-chmod 644 "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
+chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" --write-manifest "${STAGE_DIR}"
 chmod 644 "${STAGE_DIR}/manifest.sha256"
