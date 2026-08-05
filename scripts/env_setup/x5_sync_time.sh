@@ -96,7 +96,7 @@ is_running() {
     "$PIDOF_BIN" "$1" >/dev/null 2>&1
 }
 
-# 2026-07-26：校时失败时恢复脚本接管前的时钟服务状态，避免失败路径中断原有 PTP/相机时间链路。
+# 校时失败时恢复脚本接管前的时钟服务状态，避免失败路径中断原有 PTP/相机时间链路。
 restore_services() {
     if [ "$NTPD_STARTED_BY_SCRIPT" -eq 1 ] && is_running ntpd; then
         "$NTP_INIT" stop >/dev/null 2>&1 || warn_msg "failed to stop newly started ntpd during rollback"
@@ -121,7 +121,7 @@ restore_services() {
     fi
 }
 
-# 2026-07-26：仅清理已确认不再需要恢复的备份；恢复失败时保留路径供人工恢复。
+# 仅清理已确认不再需要恢复的备份；恢复失败时保留路径供人工恢复。
 cleanup_timezone_backups() {
     if [ "$TIMEZONE_OLD_MOVED" -eq 0 ] && [ -n "$timezone_backup" ]; then
         if [ -e "$timezone_backup" ] || [ -L "$timezone_backup" ]; then
@@ -135,7 +135,7 @@ cleanup_timezone_backups() {
     fi
 }
 
-# 2026-07-26：时区文件采用备份、安装、失败恢复事务，避免两个目标只更新一个。
+# 时区文件采用备份、安装、失败恢复事务，避免两个目标只更新一个。
 restore_timezone() {
     [ "$TIMEZONE_TRANSACTION_ACTIVE" -eq 1 ] || return 0
 
@@ -305,7 +305,7 @@ if is_running cam-service; then
     warn_msg "cam-service is running; system time may step while it remains active"
 fi
 
-# 2026-07-26：只写入运行时 resolver，保持脚本可重复运行且不把临时 DNS 误当成持久配置。
+# 只写入运行时 resolver，保持脚本可重复运行且不把临时 DNS 误当成持久配置。
 write_runtime_resolver() {
     resolver_tmp="${RESOLV_FILE}.x5-sync.$$"
     printf '%s\n' \
@@ -318,7 +318,7 @@ write_runtime_resolver() {
 }
 
 
-# 2026-07-26：NTP 校时成功后统一设置本地时区；NTP 和 RTC 仍使用 UTC 时间基准。
+# NTP 校时成功后统一设置本地时区；NTP 和 RTC 仍使用 UTC 时间基准。
 configure_timezone() {
     timezone_tmp="${TIMEZONE_FILE}.x5-sync.$$"
     localtime_tmp="${LOCALTIME_FILE}.x5-sync.$$"
@@ -351,7 +351,7 @@ configure_timezone() {
     log_msg "timezone configured as $TIMEZONE"
 }
 
-# 2026-07-26：ntpd 必须在一次性校时成功后重新接管，失败时由退出 trap 恢复原 owner。
+# ntpd 必须在一次性校时成功后重新接管，失败时由退出 trap 恢复原 owner。
 start_ntpd() {
     if is_running ntpd; then
         return 0
@@ -361,7 +361,7 @@ start_ntpd() {
     is_running ntpd || fail "ntpd did not stay running"
     NTPD_STARTED_BY_SCRIPT=1
 }
-# 2026-07-26：ntpdate 先完成可观测的一次性校时，避免未校准就写 RTC 或启动新的 owner。
+# ntpdate 先完成可观测的一次性校时，避免未校准就写 RTC 或启动新的 owner。
 sync_once() {
     server="$1"
     log_msg "one-shot NTP sync from $server"
@@ -371,7 +371,7 @@ sync_once() {
     warn_msg "one-shot NTP sync failed for $server"
     return 1
 }
-# 2026-07-26：RTC 使用 BusyBox 的 UTC 写入参数，并在 TZ=UTC 环境下回读校验，避免本地时区格式化造成误判。
+# RTC 使用 BusyBox 的 UTC 写入参数，并在 TZ=UTC 环境下回读校验，避免本地时区格式化造成误判。
 write_rtc_if_requested() {
     if [ "$WRITE_RTC" -eq 0 ]; then
         log_msg "RTC write disabled"
@@ -422,7 +422,7 @@ check_ntpq_lock() {
     return 3
 }
 
-# 2026-07-26：默认只停 phc2sys；ptp4l 不直接写 CLOCK_REALTIME，只有显式选项才停止它。
+# 默认只停 phc2sys；ptp4l 不直接写 CLOCK_REALTIME，只有显式选项才停止它。
 log_msg "starting NTP-owner synchronization"
 if is_running phc2sys; then
     PHC2SYS_STOPPED=1
