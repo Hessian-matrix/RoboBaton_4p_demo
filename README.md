@@ -31,13 +31,15 @@ open_source_demo/
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
+│   ├── rosbag_info.py
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── imu_reader_demo.cpp
+    ├── rosbag_v2_writer.* / sensor_bag_recorder.*
+    ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
 
@@ -155,9 +157,9 @@ file lib/libprrtsp.so
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/417 和 SPI 资源恢复正常。
+> 运行包当前态说明：不要把仓内现存 `demo/` 无条件视为“当前最终发布包”。每次源码、公开头或 `lib/` 发生变化后，维护者都必须在具备 X5 AArch64 toolchain 的环境中重新运行 `scripts/package_runtime.sh`，再用 `scripts/verify_runtime_package.py demo` 验证生成的 `manifest.sha256` 和 `runtime-provenance.json`。只有这一步 fresh rebuild 完成后，新的 `demo/` 才能被当作当前候选。
 >
-> 2026-07-28新增的frozen `CLOCK_REALTIME-CLOCK_MONOTONIC_RAW` offset、相机/IMU共享`system_realtime` epoch和运行中REALTIME跳变免疫，已完成non-ROS T1/T2/T3/T3.1/T4/T5验收；最终报告见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_FINAL_ACCEPTANCE_REPORT.md`，可复用流程见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_TEST_RUNBOOK.md`。
+> 历史板端 smoke、T1/T2/T3/T3.1/T4/T5、以及旧包哈希只能作为历史证据使用；它们不能自动证明当前源码或当前 checked-in `demo/` 仍然有效。正式 release/promotion 仍需结合顶层工作区里的最新测试矩阵和迁移记录一起判断。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -227,7 +229,7 @@ cd /root/demo
 
 四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
-`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu` 三个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz` 和 `imu.print_metrics`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
+`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu`、`save_data` 四个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz`、`imu.print_metrics`、`save_data.save`、`save_data.save_path` 和 `save_data.skip`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；`save_data.save_path` 必须是绝对 `.bag` 路径，`save_data.skip: true` 等价于 `--record-frame-skip 1`。默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
 
 ## 4. sensor_demo 联合相机与IMU
 
@@ -246,6 +248,40 @@ cd /root/demo
 ```bash
 ./sensor_demo --print-rate-hz 50 --print-metrics
 ```
+
+### ROS1 bag 持久化与 X5 硬件 JPEG
+
+`sensor_demo` 可在保持四路 RTSP 和 IMU 采集不变的同时写 ROS1 bag v2.0：
+
+```bash
+./sensor_demo --record-bag /data/run.bag
+./sensor_demo --record-bag /data/run-skip.bag --record-frame-skip 1
+```
+
+也可以在 `config/sensor_config.yaml` 中启用：
+
+```yaml
+save_data:
+  save: true
+  save_path: /root/save_demo/record.bag
+  skip: false
+```
+
+- `--record-bag` 或 `save_data.save: true` 会启动录包，路径必须是绝对 `.bag` 路径；CLI `--record-bag` 优先于 YAML `save_data.save_path`。
+- `--record-frame-skip 0` 或 `save_data.skip: false` 保存每个同步 frame-set；`1`/`true` 按完整 `group_id` 保存一组、跳过一组，四颗相机共享同一个组决策，RTSP 帧率不变。
+- 每个启用相机使用一个持久 `MEDIA_CODEC_ID_JPEG` context，质量参数为 Q80；完整四路模式共 4 个 context。
+- Recorder 将 NV12 复制到自有 hbmem staging 并立即归还相机帧，硬件 JPEG 不延长 SC132 原始帧生命周期；该路径不链接软件 `libjpeg`。
+- bag 包含 `/cameraN/image/compressed`、`/cameraN/camera_info`、`/cameraN/frame_metadata`、`/imu/data`、session config/status。CameraInfo 当前不提供标定参数。
+- 写入先落到安全临时文件；只有 writer 和硬件 JPEG 清理都成功后才原子发布最终 `.bag`，失败 session 不覆盖上一份成功文件。
+
+无需安装 ROS 即可查看 bag 元信息：
+
+```bash
+python3 scripts/rosbag_info.py /data/run.bag
+python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
+```
+
+当前 Host fake、AArch64 构建和运行包 ABI 校验已经通过；四路 JPEG context 与四路 RTSP encoder 的板端并发、持续吞吐和 JPEG 质量仍待目标板验收，不能把 Host/package PASS 当作 board PASS。
 
 退出日志包含：
 
@@ -341,6 +377,7 @@ killall -q cam_demo 2>/dev/null || true
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25/40/50/60fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
+--rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息
 --max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
@@ -371,7 +408,7 @@ rtsp://<x5-ip>:556/PRR
 rtsp://<x5-ip>:557/PRR
 ```
 
-默认 RTSP 端口固定为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出，交付例程不提供端口重映射参数。
+默认端口为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出；需要隔离并行候选时可用 `--rtsp-base-port <port>` 整体重映射，四路实际端口为 `base+0..3`。
 
 ### 4.1 硬件检测：单颗 sensor 取图
 

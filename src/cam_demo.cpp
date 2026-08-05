@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         continue;
       }
       const int32_t status =
-          rtsp->Open(camera_id, RtspPortForChannel(camera_id), options);
+          rtsp->Open(camera_id, RtspPortForChannel(options, camera_id), options);
       if (status != PRRTSP_OK) {
         throw std::runtime_error("prrtsp_stream_open failed for camera " +
                                  std::to_string(camera_id) + " status=" +

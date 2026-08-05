@@ -101,6 +101,10 @@ void ResetImuIdleWaitCountForTest() {
 uint32_t ImuIdleWaitCountForTest() {
   return g_idle_wait_count.load(std::memory_order_acquire);
 }
+
+std::size_t ImuPendingCapacityForTest() {
+  return IcmCallbackContext::kPendingCapacity;
+}
 #endif
 
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,

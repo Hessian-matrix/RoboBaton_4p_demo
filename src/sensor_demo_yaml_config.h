@@ -8,6 +8,8 @@ namespace robobaton_demo {
 
 struct SensorDemoYamlConfigState {
   bool imu_print_rate_was_set = false;
+  bool save_data_enabled = false;
+  std::string save_data_path = "/root/save_demo/record.bag";
 };
 
 // sensor_demo 运行包内的用户 YAML 配置相对路径。

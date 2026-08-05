@@ -31,13 +31,15 @@ open_source_demo/
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
+│   ├── rosbag_info.py
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── imu_reader_demo.cpp
+    ├── rosbag_v2_writer.* / sensor_bag_recorder.*
+    ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
 
@@ -166,9 +168,9 @@ If the cross-compilation toolchain is not available, the demo cannot be rebuilt.
 
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
 
-> Current repository status: as of 2026-07-24, `demo/` was regenerated from the current C ABI v2 sources and the three delivered shared libraries. It passed `scripts/verify_runtime_package.py` and `manifest.sha256` verification; AArch64 builds passed for all four demo targets. The final `sensor_demo` board smoke passed with 12,424 valid IMU samples at 1002.63 Hz, zero invalid/duplicate/regressed timestamps, and exit code 0. The board restored GPIO395/417 and SPI ownership after exit.
+> Runtime package status note: do not assume the checked-in `demo/` directory is always the current final release package. After any source, public-header, or `lib/` change, maintainers must rerun `scripts/package_runtime.sh` in an environment that has the X5 AArch64 toolchain, then validate the generated package with `scripts/verify_runtime_package.py demo`, including both `manifest.sha256` and `runtime-provenance.json`. Only that fresh rebuild may be treated as the current candidate package.
 >
-> The frozen `CLOCK_REALTIME-CLOCK_MONOTONIC_RAW` offset, shared camera/IMU `system_realtime` epoch, and runtime REALTIME-jump immunity added on 2026-07-28 have completed non-ROS T1/T2/T3/T3.1/T4/T5 acceptance. See the top-level `docs/test/FROZEN_SYSTEM_TIMESTAMP_FINAL_ACCEPTANCE_REPORT.md` and reusable `docs/test/FROZEN_SYSTEM_TIMESTAMP_TEST_RUNBOOK.md`.
+> Historical board smoke, T1/T2/T3/T3.1/T4/T5 results, and old package hashes remain useful as historical evidence only. They do not automatically prove that the current source tree or the currently checked-in `demo/` directory is still valid. Final release or promotion decisions must use the latest top-level migration record and test matrix.
 
 After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
 
@@ -239,7 +241,7 @@ cd /root/demo
 
 All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, IMU sample rate, or other runtime parameters.
 
-`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, and `imu` sections and supports `camera.width`, `camera.height`, `camera.fps`, `camera.rotate`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, and `imu.print_metrics`. `camera.width`/`camera.height` are fixed at `1280`/`1088` to expose the current resolution contract; changing them is rejected. The default YAML no longer selects the camera mask: the full four-camera path stays fixed at `0xf`, and single-sensor diagnostics should still use `cam_demo --camera-id`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only settings. `cam_demo` does not read this YAML.
+`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, `imu`, and `save_data` sections and supports `camera.width`, `camera.height`, `camera.fps`, `camera.rotate`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, `imu.print_metrics`, `save_data.save`, `save_data.save_path`, and `save_data.skip`. `camera.width`/`camera.height` are fixed at `1280`/`1088` to expose the current resolution contract; changing them is rejected. `save_data.save_path` must be an absolute `.bag` path, and `save_data.skip: true` is equivalent to `--record-frame-skip 1`. The default YAML no longer selects the camera mask: the full four-camera path stays fixed at `0xf`, and single-sensor diagnostics should still use `cam_demo --camera-id`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only. `cam_demo` does not read this YAML.
 
 ## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
 
@@ -329,6 +331,40 @@ On exit it prints an IMU summary such as:
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
 
+### ROS1 bag persistence and X5 hardware JPEG
+
+`sensor_demo` can write a ROS1 bag v2.0 while keeping all four RTSP streams and IMU acquisition active:
+
+```bash
+./sensor_demo --record-bag /data/run.bag
+./sensor_demo --record-bag /data/run-skip.bag --record-frame-skip 1
+```
+
+Or enable it in `config/sensor_config.yaml`:
+
+```yaml
+save_data:
+  save: true
+  save_path: /root/save_demo/record.bag
+  skip: false
+```
+
+- `--record-bag` or `save_data.save: true` starts recording. The path must be an absolute `.bag` path; CLI `--record-bag` takes precedence over YAML `save_data.save_path`.
+- `--record-frame-skip 0` or `save_data.skip: false` stores every synchronized frame-set. Value `1`/`true` stores one complete `group_id`, skips the next, and shares that decision across all enabled cameras; RTSP FPS is unchanged.
+- Each enabled camera owns one persistent `MEDIA_CODEC_ID_JPEG` context at Q80. Full four-camera mode therefore uses four JPEG contexts.
+- The recorder copies NV12 into recorder-owned hbmem staging and releases the SC132 frame immediately; hardware JPEG does not extend the camera-frame lifetime. This path does not link software `libjpeg`.
+- The bag contains `/cameraN/image/compressed`, `/cameraN/camera_info`, `/cameraN/frame_metadata`, `/imu/data`, and session config/status topics. CameraInfo is currently uncalibrated.
+- Data is written to a safe temporary file. The final `.bag` atomically replaces an older successful file only after both writer finalization and hardware-JPEG cleanup succeed.
+
+Inspect metadata without a ROS installation:
+
+```bash
+python3 scripts/rosbag_info.py /data/run.bag
+python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
+```
+
+Host fakes, AArch64 build, and package ABI validation pass. Concurrent four-JPEG plus four-RTSP hardware capacity, sustained throughput, and JPEG quality remain board-pending; Host/package PASS is not board PASS.
+
 The joint entry keeps the existing `libprrtsp.so.2` and PRRTSP v2 ABI; it does not add a new PRRTSP API or SONAME.
 
 ### 4.1 SC132 4-Camera RTSP Demo
@@ -368,6 +404,7 @@ Common options:
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25/40/50/60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
 --url <path>       RTSP path, default /PRR
+--rtsp-base-port <port> RTSP base port, default 554; cameras 0..3 use base+0..3
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print per-channel send timing and timestamp skew diagnostics
 --max-skew-ns <ns> Frame-set timestamp skew release limit, default 2000000; after synchronized grouping, all four exposed frame_id values match exactly
@@ -398,7 +435,7 @@ rtsp://<x5-ip>:556/PRR
 rtsp://<x5-ip>:557/PRR
 ```
 
-The default RTSP ports are fixed to `554/555/556/557`. Cameras 0/1/2/3 correspond to the four output streams. The delivered demo does not expose a port remapping option.
+The defaults are `554/555/556/557`. Cameras 0/1/2/3 map to the four outputs. Use `--rtsp-base-port <port>` to remap an isolated candidate as a block; the actual ports are `base+0..3`.
 
 ### 4.1 Hardware check: single-sensor capture
 

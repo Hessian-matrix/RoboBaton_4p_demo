@@ -267,8 +267,15 @@ chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/s
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo"
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
-python3 "${SCRIPT_DIR}/verify_runtime_package.py" --write-manifest "${STAGE_DIR}"
-chmod 644 "${STAGE_DIR}/manifest.sha256"
+python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
+  --write-provenance \
+  --write-manifest \
+  --compiler "${PRODUCER_GCC}" \
+  --triplet "${TARGET_TRIPLET}" \
+  --toolchain-file "${TOOLCHAIN_FILE}" \
+  --build-dir "${BUILD_DIR}" \
+  "${STAGE_DIR}"
+chmod 644 "${STAGE_DIR}/runtime-provenance.json" "${STAGE_DIR}/manifest.sha256"
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" "${STAGE_DIR}"
 
 if [[ -e "${OUTPUT_DIR}" ]]; then

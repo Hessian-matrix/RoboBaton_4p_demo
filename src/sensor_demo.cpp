@@ -21,6 +21,7 @@ extern "C" {
 #include "cam_demo_config.h"
 #include "cam_demo_pipeline.h"
 #include "cam_demo_rtsp.h"
+#include "sensor_bag_recorder.h"
 
 #ifndef ROBOBATON_RELEASE_VERSION
 #define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
@@ -48,8 +49,33 @@ void SignalHandler(int) {
 bool InjectJoinFailure(std::thread&, void*) { return false; }
 #endif
 
-robobaton_demo::PipelineHooks MainPipelineHooks() {
+void ObserveQueuedFrameForBag(const robobaton_demo::QueuedFrame& frame, void* user) {
+  auto* recorder = static_cast<robobaton_demo::SensorBagRecorder*>(user);
+  if (recorder != nullptr) {
+    recorder->ObserveFrame(frame);
+  }
+}
+
+std::ostream& AppendBagLatencySummary(std::ostream& stream, const char* prefix,
+                                      const robobaton_demo::SensorBagLatencyStats& stats) {
+  return stream << ' ' << prefix << "_count=" << stats.count << ' ' << prefix
+                << "_avg_ns=" << robobaton_demo::SensorBagLatencyAverageNs(stats) << ' '
+                << prefix << "_p50_ns="
+                << robobaton_demo::SensorBagLatencyPercentileUpperNs(stats, 50U) << ' '
+                << prefix << "_p95_ns="
+                << robobaton_demo::SensorBagLatencyPercentileUpperNs(stats, 95U) << ' '
+                << prefix << "_p99_ns="
+                << robobaton_demo::SensorBagLatencyPercentileUpperNs(stats, 99U) << ' '
+                << prefix << "_max_ns=" << stats.max_ns;
+}
+
+robobaton_demo::PipelineHooks MainPipelineHooks(
+    robobaton_demo::SensorBagRecorder* recorder) {
   robobaton_demo::PipelineHooks hooks{};
+  if (recorder != nullptr) {
+    hooks.on_queued_frame = ObserveQueuedFrameForBag;
+    hooks.user = recorder;
+  }
 #ifdef RELEASE008_TESTING
   const char* inject = std::getenv("RELEASE008_TEST_JOIN_FAILURE");
   if (inject != nullptr && inject[0] != '\0') {
@@ -135,6 +161,7 @@ struct ImuStats {
 struct SensorImuObserverState {
   ImuStats* stats = nullptr;
   robobaton_demo::ImuPrintState* print_state = nullptr;
+  robobaton_demo::SensorBagRecorder* recorder = nullptr;
 };
 
 void ObserveSensorImuSample(const icm42688_sample_t& sample, void* user) {
@@ -147,6 +174,9 @@ void ObserveSensorImuSample(const icm42688_sample_t& sample, void* user) {
   }
   if (state->print_state != nullptr) {
     robobaton_demo::PrintImuSample(sample, state->print_state);
+  }
+  if (state->recorder != nullptr) {
+    state->recorder->ObserveImu(sample);
   }
 }
 
@@ -201,6 +231,9 @@ int main(int argc, char** argv) {
   std::unique_ptr<FrozenSystemClock> system_clock;
   std::unique_ptr<ScopedNonblockingFd> output_mode;
   uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  SensorBagRecorder recorder;
+  bool record_bag_requested = false;
+  std::string record_bag_path;
 
   try {
     signal(SIGINT, SignalHandler);
@@ -213,6 +246,11 @@ int main(int argc, char** argv) {
     system_clock = std::make_unique<FrozenSystemClock>();
     system_clock->PrintTimeBase(std::cout);
     options.system_clock = system_clock.get();
+    record_bag_requested = !options.record_bag_path.empty();
+    record_bag_path = options.record_bag_path;
+    if (record_bag_requested) {
+      recorder.Start(options, record_bag_path);
+    }
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.sample_drop_policy = options.imu_sample_drop_policy;
     imu_options.count = 0U;
@@ -225,11 +263,13 @@ int main(int argc, char** argv) {
     imu_print_state.output_available = output_mode->active();
     imu_observer.stats = &imu_stats;
     imu_observer.print_state = &imu_print_state;
+    imu_observer.recorder = record_bag_requested ? &recorder : nullptr;
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps << " rotate=" << options.rotate_degrees
               << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
+              << " rtsp_base_port=" << options.rtsp_base_port
               << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
               << " imu_sample_drop_policy="
               << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
@@ -239,7 +279,15 @@ int main(int argc, char** argv) {
                       : "imu-first")
               << " imu_print_rate_hz=" << options.imu_print_rate_hz
               << " imu_print_metrics=" << (options.imu_print_metrics ? "on" : "off")
-              << " imu_time=SENSOR_TIMESTAMP_FIFO\n" << std::flush;
+              << " imu_time=SENSOR_TIMESTAMP_FIFO record_bag="
+              << (record_bag_requested ? record_bag_path : "disabled");
+    if (record_bag_requested) {
+      std::cout << " record_frame_skip=" << options.record_frame_skip
+                << " image_persistence_fps="
+                << static_cast<uint32_t>(options.fps) /
+                       (options.record_frame_skip + 1U);
+    }
+    std::cout << "\n" << std::flush;
 
     // 两种顺序复用同一线程入口；imu_options 和 observer 状态的生命周期覆盖统一清理和 join。
     const auto start_imu = [&imu_result, &imu_options, &imu_observer, &imu_thread] {
@@ -267,7 +315,8 @@ int main(int argc, char** argv) {
     ConfigureSc132TriggerMode(options);
     ConfigureSc132SensorProfile(options);
 
-    pipeline = std::make_unique<FramePipeline>(options, &rtsp, MainPipelineHooks());
+    pipeline = std::make_unique<FramePipeline>(
+        options, &rtsp, MainPipelineHooks(record_bag_requested ? &recorder : nullptr));
     pipeline->StartWorkers();
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
@@ -275,7 +324,7 @@ int main(int argc, char** argv) {
         continue;
       }
       const int32_t status =
-          rtsp.Open(camera_id, RtspPortForChannel(camera_id), options);
+          rtsp.Open(camera_id, RtspPortForChannel(options, camera_id), options);
       if (status != PRRTSP_OK) {
         throw std::runtime_error("prrtsp_stream_open failed for camera " +
                                  std::to_string(camera_id) + " status=" +
@@ -299,7 +348,7 @@ int main(int argc, char** argv) {
 
     while (g_signal_stop == 0 &&
            !g_stop_requested.load(std::memory_order_acquire) &&
-           pipeline->FirstError() == 0) {
+           pipeline->FirstError() == 0 && !recorder.HasFatalError()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   } catch (const std::exception& error) {
@@ -356,6 +405,50 @@ int main(int argc, char** argv) {
     std::cerr
         << "fatal: IMU mapper_failure_count regressed; max_consecutive_drops evidence invalid\n";
     exit_code = 1;
+  }
+
+  if (record_bag_requested) {
+    const bool recorder_ok = recorder.Finish(exit_code == 0);
+    const SensorBagRecorderStats bag_stats = recorder.SnapshotStats();
+    if (!recorder_ok || recorder.HasFatalError()) {
+      std::cerr << "fatal: bag recorder failed: " << recorder.ErrorMessage() << "\n";
+      exit_code = 1;
+    }
+    const uint64_t image_span_ns =
+        bag_stats.has_image_timestamp &&
+                bag_stats.last_image_timestamp_ns > bag_stats.first_image_timestamp_ns
+            ? bag_stats.last_image_timestamp_ns - bag_stats.first_image_timestamp_ns
+            : 0U;
+    std::cout << "SENSOR_BAG_RESULT path=" << record_bag_path
+              << " image_frames=" << bag_stats.image_frames
+              << " image_frames_by_camera=cam0:" << bag_stats.image_frames_by_camera[0]
+              << ",cam1:" << bag_stats.image_frames_by_camera[1]
+              << ",cam2:" << bag_stats.image_frames_by_camera[2]
+              << ",cam3:" << bag_stats.image_frames_by_camera[3]
+              << " image_first_ns=" << bag_stats.first_image_timestamp_ns
+              << " image_last_ns=" << bag_stats.last_image_timestamp_ns
+              << " image_span_ns=" << image_span_ns
+              << " imu_samples=" << bag_stats.imu_samples
+              << " imu_queue_peak_depth=" << bag_stats.imu_queue_peak_depth
+              << " imu_queue_full_rejects=" << bag_stats.imu_queue_full_rejects
+              << " frame_queue_peak_depth=" << bag_stats.frame_queue_peak_depth
+              << " frame_queue_full_rejects=" << bag_stats.frame_queue_full_rejects
+              << " encoded_queue_peak_depth=" << bag_stats.encoded_queue_peak_depth
+              << " encoded_queue_full_rejects=" << bag_stats.encoded_queue_full_rejects
+              << " frame_metadata_messages=" << bag_stats.frame_metadata_messages
+              << " jpeg_bytes=" << bag_stats.jpeg_bytes
+              << " nv12_copy_bytes=" << bag_stats.nv12_copy_bytes
+              << " write_order_wait_max_ns=" << bag_stats.write_order_wait_max_ns
+              << " writer_mutex_wait_max_ns=" << bag_stats.writer_mutex_wait_max_ns
+              << " writer_mutex_hold_max_ns=" << bag_stats.writer_mutex_hold_max_ns;
+    AppendBagLatencySummary(std::cout, "nv12_copy", bag_stats.nv12_copy_latency);
+    AppendBagLatencySummary(std::cout, "jpeg_encode", bag_stats.jpeg_encode_latency);
+    AppendBagLatencySummary(std::cout, "write_order_wait", bag_stats.write_order_wait_latency);
+    AppendBagLatencySummary(std::cout, "image_writer_wait", bag_stats.image_writer_wait_latency);
+    AppendBagLatencySummary(std::cout, "image_writer_hold", bag_stats.image_writer_hold_latency);
+    AppendBagLatencySummary(std::cout, "imu_writer_wait", bag_stats.imu_writer_wait_latency);
+    AppendBagLatencySummary(std::cout, "imu_writer_hold", bag_stats.imu_writer_hold_latency);
+    std::cout << " success=" << (exit_code == 0 ? "yes" : "no") << "\n";
   }
 
   std::cout << "SENSOR_IMU_RESULT samples=" << imu_stats.samples

@@ -13,3 +13,7 @@ imu:
   sample_rate_hz: 1000
   print_rate_hz: 10
   print_metrics: false
+save_data:
+  save: false
+  save_path: /root/save_demo/record.bag
+  skip: false

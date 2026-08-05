@@ -536,9 +536,29 @@ class FramePipeline::Impl {
                                             : raw_timestamp_ns;
   }
 
+  bool Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(uint64_t timestamp_ns) const noexcept {
+    if (!Sc132TimestampsAreMonotonicRaw(options_) || options_.system_clock == nullptr) {
+      return false;
+    }
+    const uint64_t raw_start_ns = options_.system_clock->monotonic_raw_start_ns();
+    const uint64_t realtime_start_ns = options_.system_clock->realtime_start_ns();
+    if (realtime_start_ns <= raw_start_ns) {
+      return false;
+    }
+    const uint64_t realtime_epoch_midpoint_ns =
+        raw_start_ns + (realtime_start_ns - raw_start_ns) / 2ULL;
+    return timestamp_ns >= realtime_epoch_midpoint_ns;
+  }
+
   uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
-    return Sc132TimestampsAreMonotonicRaw(options_) ? MapRawTimestampNs(timestamp_ns)
-                                                   : timestamp_ns;
+    if (!Sc132TimestampsAreMonotonicRaw(options_)) {
+      return timestamp_ns;
+    }
+    if (Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(timestamp_ns)) {
+      // software_gpio 应输出 MONOTONIC_RAW；接近 REALTIME epoch 说明底层回退到了系统时钟，继续套用 RAW 偏移会把相机时间写到错误 epoch。
+      throw std::runtime_error("SC132 software GPIO timestamp is not MONOTONIC_RAW");
+    }
+    return MapRawTimestampNs(timestamp_ns);
   }
 
   uint64_t PipelineNowNs() const { return MapRawTimestampNs(SteadyClockNowNs()); }
@@ -686,7 +706,7 @@ class FramePipeline::Impl {
               static_cast<unsigned long long>(diagnostic.last_rtsp_timestamp_ns),
               TimestampDomainName(diagnostic.last_rtsp_timestamp_domain),
               send_average_ms, send_max_ms, camera_id + 1,
-              RtspPortForChannel(camera_id))) {
+              RtspPortForChannel(options_, camera_id))) {
         return false;
       }
     }

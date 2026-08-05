@@ -84,7 +84,8 @@ std::size_t CountLeadingSpaces(const std::string& text) noexcept {
 }
 
 bool IsSupportedSection(const std::string& section) noexcept {
-  return section == "camera" || section == "rtsp" || section == "imu";
+  return section == "camera" || section == "rtsp" || section == "imu" ||
+         section == "save_data";
 }
 
 int ParseInt(const std::string& text, const char* name) {
@@ -199,7 +200,11 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "imu:\n"
          << "  sample_rate_hz: " << defaults.imu_sample_rate_hz << "\n"
          << "  print_rate_hz: " << kDefaultImuPrintRateHz << "\n"
-         << "  print_metrics: false\n";
+         << "  print_metrics: false\n"
+         << "save_data:\n"
+         << "  save: false\n"
+         << "  save_path: " << SensorDemoYamlConfigState{}.save_data_path << "\n"
+         << "  skip: false\n";
   return output.str();
 }
 
@@ -243,6 +248,20 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     state->imu_print_rate_was_set = true;
   } else if (key == "imu.print_metrics") {
     options->imu_print_metrics = ParseBool(value, name.c_str());
+  } else if (key == "save_data.save") {
+    state->save_data_enabled = ParseBool(value, name.c_str());
+    options->record_bag_path =
+        state->save_data_enabled ? state->save_data_path : std::string();
+  } else if (key == "save_data.save_path") {
+    if (value.empty() || value.front() != '/') {
+      throw std::invalid_argument("save_data.save_path must be an absolute path");
+    }
+    state->save_data_path = value;
+    if (state->save_data_enabled) {
+      options->record_bag_path = state->save_data_path;
+    }
+  } else if (key == "save_data.skip") {
+    options->record_frame_skip = ParseBool(value, name.c_str()) ? 1U : 0U;
   } else {
     return false;
   }

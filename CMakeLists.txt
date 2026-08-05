@@ -51,6 +51,20 @@ if(NOT X5_HOBOT_LIB_DIR AND CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/usr_x5/ho
   set(X5_HOBOT_LIB_DIR "${CMAKE_SYSROOT}/usr_x5/hobot/lib")
 endif()
 
+set(X5_MULTIMEDIA_SO "")
+set(X5_HBMEM_SO "")
+if(X5_HOBOT_LIB_DIR)
+  if(EXISTS "${X5_HOBOT_LIB_DIR}/libmultimedia.so")
+    set(X5_MULTIMEDIA_SO "${X5_HOBOT_LIB_DIR}/libmultimedia.so")
+  endif()
+  if(EXISTS "${X5_HOBOT_LIB_DIR}/libhbmem.so")
+    set(X5_HBMEM_SO "${X5_HOBOT_LIB_DIR}/libhbmem.so")
+  endif()
+endif()
+if(NOT X5_MULTIMEDIA_SO OR NOT X5_HBMEM_SO)
+  message(FATAL_ERROR "Missing X5 multimedia/hbmem libraries required by sensor_demo --record-bag")
+endif()
+
 add_library(icm42688_x5 SHARED IMPORTED GLOBAL)
 set_target_properties(icm42688_x5 PROPERTIES
   IMPORTED_LOCATION "${ICM42688_SO}"
@@ -96,6 +110,9 @@ add_executable(sensor_demo
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
   src/frozen_system_clock.cpp
+  src/rosbag_v2_writer.cpp
+  src/sensor_bag_recorder.cpp
+  src/x5_jpeg_encoder.cpp
 )
 
 foreach(versioned_target IN ITEMS imu_reader_demo serial_port_demo cam_demo sensor_demo)
@@ -151,7 +168,7 @@ if(X5_HOBOT_LIB_DIR)
   target_link_options(sensor_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
 target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
-target_link_libraries(sensor_demo PRIVATE icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads)
+target_link_libraries(sensor_demo PRIVATE icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
 target_link_options(cam_demo PRIVATE
   -static-libstdc++
   -static-libgcc
@@ -187,7 +204,16 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo
   LIBRARY DESTINATION lib
 )
 
-install(FILES "${ICM42688_SO}" "${SC132_SO}" "${PRRTSP_SO}"
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so"
   DESTINATION lib
 )
 
