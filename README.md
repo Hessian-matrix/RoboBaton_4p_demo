@@ -252,6 +252,7 @@ cd /root/demo
 ```text
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
+`effective_hz`按相对1000Hz目标的ppm误差验收；V1门限为绝对误差`<=12000ppm`，等价稳定窗口约`988.0–1012.0Hz`。
 
 启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 

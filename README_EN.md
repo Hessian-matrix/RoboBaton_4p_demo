@@ -328,6 +328,7 @@ On exit it prints an IMU summary such as:
 ```text
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
+`effective_hz` is gated as a ppm error against the 1000Hz target. The V1 limit is absolute error `<=12000ppm`, equivalent to an approximate stable window of `988.0-1012.0Hz`.
 
 The joint entry keeps the existing `libprrtsp.so.2` and PRRTSP v2 ABI; it does not add a new PRRTSP API or SONAME.
 
