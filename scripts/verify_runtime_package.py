@@ -16,6 +16,7 @@ MANIFEST_NAME = "manifest.sha256"
 RELEASE_VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
+    "bin/mosaic_rtsp_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
     "bin/imu_reader_demo": {"ICM42688_X5_2.0"},
     "bin/sensor_demo": {"ICM42688_X5_2.0", "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
@@ -38,6 +39,7 @@ EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
 }
 EXPECTED_LIBRARY_NEEDED = {
@@ -48,6 +50,7 @@ EXPECTED_LIBRARY_NEEDED = {
 REQUIRED_FILES = {
     "VERSION",
     "cam_demo",
+    "mosaic_rtsp_demo",
     "imu_reader_demo",
     "sensor_demo",
     "serial_port_demo",
@@ -55,6 +58,7 @@ REQUIRED_FILES = {
     "config/sensor_config.yaml",
     "bin/cam_demo",
     "bin/imu_reader_demo",
+    "bin/mosaic_rtsp_demo",
     "bin/sensor_demo",
     "bin/serial_port_demo",
     *EXPECTED_VERSION_DEFINITIONS,
@@ -153,7 +157,7 @@ def verify_package(package_dir: Path) -> None:
     if (package_dir / "VERSION").read_text(encoding="utf-8").strip() != RELEASE_VERSION:
         raise AssertionError("runtime VERSION does not match the release version")
 
-    for relative in ["cam_demo", "imu_reader_demo", "sensor_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
+    for relative in ["cam_demo", "imu_reader_demo", "mosaic_rtsp_demo", "sensor_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")

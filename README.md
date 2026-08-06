@@ -12,7 +12,7 @@ open_source_demo/
 ├── CMakeLists.txt
 ├── README.md / README_EN.md
 ├── demo/                    # 可直接部署到 X5 /root/demo 的运行包
-│   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
+│   ├── cam_demo / mosaic_rtsp_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── config/              # sensor_demo YAML 配置
 │   ├── bin/                 # AArch64 可执行文件
@@ -27,6 +27,7 @@ open_source_demo/
 ├── lib/                     # 源码交叉构建时链接的交付库
 ├── scripts/
 │   ├── build_cam_demo.sh
+│   ├── build_mosaic_rtsp_demo.sh
 │   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
@@ -34,7 +35,8 @@ open_source_demo/
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
-    ├── cam_demo.cpp / sensor_demo.cpp
+    ├── cam_demo.cpp / mosaic_rtsp_demo.cpp / sensor_demo.cpp
+    ├── mosaic_nv12.*
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
@@ -59,17 +61,18 @@ RoboBaton_4P_ROS2_demo         main
 
 ## 版本查询
 
-仓库和运行包根目录都包含机器可读的`VERSION`。四个交付程序都支持无需初始化相机、IMU或UART的`--version`：
+仓库和运行包根目录都包含机器可读的`VERSION`。五个交付程序都支持无需初始化相机、IMU或UART的`--version`：
 
 ```bash
 cat demo/VERSION
 demo/cam_demo --version
+demo/mosaic_rtsp_demo --version
 demo/sensor_demo --version
 demo/imu_reader_demo --version
 demo/serial_port_demo --version
 ```
 
-`cam_demo`和`sensor_demo`还会输出进程实际加载的`libsc132`、`libprrtsp`和`libicm42688`产品版本及ABI版本，用于发现程序与SO混装。三个自研SO分别提供`sc132_get_version()`、`prrtsp_get_version()`和`icm42688_get_version()` C API；返回值是进程静态只读字符串，不得释放。产品SemVer与SO的SONAME/ABI版本相互独立。
+各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42688`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42688`，用于发现程序与 SO 混装。三个自研 SO 分别提供 `sc132_get_version()`、`prrtsp_get_version()` 和 `icm42688_get_version()` C API；返回值是进程静态只读字符串，不得释放。产品 SemVer 与 SO 的 SONAME/ABI 版本相互独立。
 
 功能新增、问题修复和已知限制统一记录在[公开版本更新记录](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md)中。
 
@@ -123,6 +126,7 @@ cmake --build build_x5 -j
 
 ```bash
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_cam_demo.sh
+TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_mosaic_rtsp_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_sensor_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
@@ -135,6 +139,7 @@ TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_por
 - `build_x5/sensor_demo`
 - `build_x5/serial_port_demo`
 - `build_x5/cam_demo`
+- `build_x5/mosaic_rtsp_demo`
 
 检查架构：
 
@@ -142,6 +147,7 @@ TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_por
 file build_x5/imu_reader_demo
 file build_x5/serial_port_demo
 file build_x5/cam_demo
+file build_x5/mosaic_rtsp_demo
 file lib/libicm42688.so
 file lib/libsc132.so
 file lib/libprrtsp.so
@@ -149,7 +155,7 @@ file lib/libprrtsp.so
 
 期望输出包含 `ARM aarch64`。
 
-如果没有交叉编译工具链，则不能重新编译 demo，只能使用已经编译好的 `sensor_demo`、`imu_reader_demo`、`serial_port_demo`、`cam_demo` 和 `lib/` 下对应 `.so` 部署到板端运行。
+如果没有交叉编译工具链，则不能重新编译 demo，只能使用已经编译好的 `sensor_demo`、`mosaic_rtsp_demo`、`imu_reader_demo`、`serial_port_demo`、`cam_demo` 和 `lib/` 下对应 `.so` 部署到板端运行。
 
 ## 3. 部署
 
@@ -166,7 +172,7 @@ cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的四个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
+`scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的五个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
 
 运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
 
@@ -175,7 +181,7 @@ scripts/package_runtime.sh
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
 tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
-ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
+ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/mosaic_rtsp_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
 
 注意：这里复制的是 `demo/` 目录里的内容，不是把外层 `demo/` 目录整体复制到板端；板端不应出现 `/root/demo/demo/`。
@@ -185,6 +191,7 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 ```text
 /root/demo/
 ├── cam_demo
+├── mosaic_rtsp_demo
 ├── sensor_demo
 ├── imu_reader_demo
 ├── serial_port_demo
@@ -193,6 +200,7 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 │   └── sensor_config.yaml
 ├── bin/
 │   ├── cam_demo
+│   ├── mosaic_rtsp_demo
 │   ├── sensor_demo
 │   ├── imu_reader_demo
 │   └── serial_port_demo
@@ -207,11 +215,12 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 ```bash
 cd /root/demo
 ./cam_demo
+./mosaic_rtsp_demo
 ./imu_reader_demo
 ./serial_port_demo
 ```
 
-顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
+顶层 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
@@ -304,14 +313,14 @@ queue_full_rejects
 `trigger_sync` 是诊断进度行，不是单独的 PASS/FAIL 结论。只有当它伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
 
 
-### SC132 四目相机 RTSP Demo
+### SC132 四目相机 RTSP Demo 与 Mosaic RTSP Demo
 
 `cam_demo` 演示如何同时使用：
 
 - `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
 - `libprrtsp.so`：把四路 NV12 帧送入 X5 编码器并输出 RTSP
 
-四个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
+五个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
 
 默认运行：
 
@@ -328,6 +337,16 @@ killall -q cam_demo 2>/dev/null || true
 ```
 
 `--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线，也是 V1 唯一已验证的稳定 Trigger 模式。`vin_lpwm` 和 `none` 仍可作为实验性参数显式传入，但尚未验收，不属于 V1 稳定合同。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、30fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
+
+`mosaic_rtsp_demo` 默认把四路 `1280x1088` NV12 frame-set 在 CPU 内合成到 hbmem NV12 DMA 输出缓冲，并以 external NV12 方式提交给编码器，输出单路 `2560x2176` H.264 RTSP：
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+`mosaic_rtsp_demo --fps <25|30|40|50|60>` 用于能力边界验证；25/30/40/50 为 V1 稳定功能配置，60 为显式 stress-only 压力配置，不属于 V1 稳定合同。该参数同步设置 SC132 出图/触发目标帧率、PRRTSP encoder fps metadata 和 frame-set timeout。Mosaic 的分辨率、编码格式、码率、端口和 path 固定为 `2560x2176`、H.264、8000kbps、`558`、`/PRR`，实际输出帧率仍跟随四路同步 frame-set 的真实到达率。
 
 部署时请整目录拷贝 `/root/demo` 运行包。顶层入口会设置 `LD_LIBRARY_PATH`，如果只拷贝 `bin/cam_demo` 或单个 `.so`，板端可能加载系统库，导致运行环境和交付包不一致。
 
@@ -372,6 +391,26 @@ rtsp://<x5-ip>:557/PRR
 ```
 
 默认 RTSP 端口固定为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出，交付例程不提供端口重映射参数。
+
+### Mosaic RTSP Demo
+
+`mosaic_rtsp_demo` 把四路 SC132 `1280x1088` NV12 frame-set 在 CPU 内合成到 hbmem NV12 DMA 输出缓冲，并通过 `libprrtsp.so` 的 external NV12 输入输出固定 H.264 RTSP，避免 PRRTSP 再复制整帧：
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+固定 RTSP 地址：
+
+```text
+rtsp://<x5-ip>:558/PRR
+```
+
+该程序固定四路、H.264、8000kbps、正装方向、RTSP 端口 `558` 和 path `/PRR`，支持 `--fps <25|30|40|50|60>`。默认 30fps；25/30/40/50 已按 V1 稳定功能档验收通过；60fps 仅作为显式 stress-only 压力档，不属于稳定发布 profile。
+
+退出时会输出 `queue_full_drop`、`invalid_group`、`copy_failure`、`send_failure`、`retain_release_balance`、`copy_duration_avg_ms`、`send_duration_avg_ms` 和 PRRTSP 计数；`retain_release_balance=0` 表示跨线程保留的 SC132 frame 已全部归还。维护者验收口径为四档均在 CPU busy 约 98.6% 的板端压力窗口内保持 `2560x2176` H.264 目标帧率、零 queue drop、零 invalid group、零 copy/send failure 和零 retain 泄漏；内部 runner 与原始证据不属于公开 demo 交付内容。
 
 ### 4.1 硬件检测：单颗 sensor 取图
 

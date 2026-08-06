@@ -12,7 +12,7 @@ open_source_demo/
 ├── CMakeLists.txt
 ├── README.md / README_EN.md
 ├── demo/                    # Runtime package deployable to X5 /root/demo
-│   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
+│   ├── cam_demo / mosaic_rtsp_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── config/              # sensor_demo YAML config
 │   ├── bin/                 # AArch64 executables
@@ -27,6 +27,7 @@ open_source_demo/
 ├── lib/                     # Delivered libraries used for source cross-builds
 ├── scripts/
 │   ├── build_cam_demo.sh
+│   ├── build_mosaic_rtsp_demo.sh
 │   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
@@ -34,7 +35,8 @@ open_source_demo/
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
-    ├── cam_demo.cpp / sensor_demo.cpp
+    ├── cam_demo.cpp / mosaic_rtsp_demo.cpp / sensor_demo.cpp
+    ├── mosaic_nv12.*
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
     ├── imu_reader_demo.cpp
@@ -59,17 +61,18 @@ For an official delivery, use the commit/tag named by the release together with 
 
 ## Version Reporting
 
-Both the repository and runtime package contain a machine-readable `VERSION` file. All four delivered programs support `--version` without initializing camera, IMU, or UART hardware:
+Both the repository and runtime package contain a machine-readable `VERSION` file. All five delivered programs support `--version` without initializing camera, IMU, or UART hardware:
 
 ```bash
 cat demo/VERSION
 demo/cam_demo --version
+demo/mosaic_rtsp_demo --version
 demo/sensor_demo --version
 demo/imu_reader_demo --version
 demo/serial_port_demo --version
 ```
 
-`cam_demo` and `sensor_demo` also report the product and ABI versions of the `libsc132`, `libprrtsp`, and `libicm42688` objects actually loaded by the process, which detects mixed packages. The three project-owned shared libraries expose `sc132_get_version()`, `prrtsp_get_version()`, and `icm42688_get_version()` C APIs. Each returns process-static read-only storage that must not be freed. Product SemVer is independent of a shared library's SONAME/ABI version.
+Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42688`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42688`. This detects mixed packages. The three project-owned shared libraries expose `sc132_get_version()`, `prrtsp_get_version()`, and `icm42688_get_version()` C APIs. Each returns process-static read-only storage that must not be freed. Product SemVer is independent of a shared library's SONAME/ABI version.
 
 Features, fixes, and known limitations are maintained in the [public changelog](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md).
 
@@ -133,6 +136,7 @@ You can also build one demo target at a time:
 
 ```bash
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_cam_demo.sh
+TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_mosaic_rtsp_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_sensor_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader_demo.sh
 TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
@@ -145,6 +149,7 @@ Generated binaries:
 - `build_x5/imu_reader_demo`
 - `build_x5/serial_port_demo`
 - `build_x5/cam_demo`
+- `build_x5/mosaic_rtsp_demo`
 
 Check the target architecture:
 
@@ -153,6 +158,7 @@ file build_x5/sensor_demo
 file build_x5/imu_reader_demo
 file build_x5/serial_port_demo
 file build_x5/cam_demo
+file build_x5/mosaic_rtsp_demo
 file lib/libicm42688.so
 file lib/libsc132.so
 file lib/libprrtsp.so
@@ -160,7 +166,7 @@ file lib/libprrtsp.so
 
 The expected output should contain `ARM aarch64`.
 
-If the cross-compilation toolchain is not available, the demo cannot be rebuilt. In that case, deploy the prebuilt binaries and the matching libraries under `lib/` to the board and run them directly.
+If the cross-compilation toolchain is not available, the demo cannot be rebuilt. In that case, deploy the prebuilt `sensor_demo`, `mosaic_rtsp_demo`, `imu_reader_demo`, `serial_port_demo`, `cam_demo`, and the matching libraries under `lib/` to the board and run them directly.
 
 ## 3. Deploy
 
@@ -177,7 +183,7 @@ cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
 scripts/package_runtime.sh
 ```
 
-`scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's four demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
+`scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's five demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
 
 The runtime package contains the top-level launchers, `env.sh`, `config/sensor_config.yaml`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable, one `.so` file, or omit the config file.
 
@@ -186,7 +192,7 @@ Deploy it to X5:
 ```bash
 ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
 tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
-ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
+ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/mosaic_rtsp_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
 ```
 
 Note: copy the contents of `demo/`, not the outer `demo/` directory itself; the board should not contain `/root/demo/demo/`.
@@ -196,6 +202,7 @@ Runtime layout on X5:
 ```text
 /root/demo/
 ├── cam_demo
+├── mosaic_rtsp_demo
 ├── sensor_demo
 ├── imu_reader_demo
 ├── serial_port_demo
@@ -204,6 +211,7 @@ Runtime layout on X5:
 │   └── sensor_config.yaml
 ├── bin/
 │   ├── cam_demo
+│   ├── mosaic_rtsp_demo
 │   ├── sensor_demo
 │   ├── imu_reader_demo
 │   └── serial_port_demo
@@ -219,11 +227,12 @@ Default run commands:
 cd /root/demo
 ./sensor_demo
 ./cam_demo
+./mosaic_rtsp_demo
 ./imu_reader_demo
 ./serial_port_demo
 ```
 
-The top-level `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set:
+The top-level `sensor_demo`, `cam_demo`, `mosaic_rtsp_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set:
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
@@ -331,14 +340,14 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 
 The joint entry keeps the existing `libprrtsp.so.2` and PRRTSP v2 ABI; it does not add a new PRRTSP API or SONAME.
 
-### 4.1 SC132 4-Camera RTSP Demo
+### 4.1 SC132 4-Camera RTSP Demo And Mosaic RTSP Demo
 
 `cam_demo` demonstrates how to use:
 
 - `libsc132.so`: starts the SC132 4-camera pipeline and provides synchronized NV12 DMA frames through a frame-set callback
 - `libprrtsp.so`: sends the four NV12 streams to the X5 encoder and publishes RTSP streams
 
-The four demo executables are linked for the X5 runtime environment. Keep `sensor_demo`, `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
+The five demo executables are linked for the X5 runtime environment. Keep `sensor_demo`, `cam_demo`, `mosaic_rtsp_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
 
 Default run:
 
@@ -355,6 +364,16 @@ killall -q cam_demo 2>/dev/null || true
 ```
 
 `--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring and the only V1-validated stable trigger mode. `vin_lpwm` and `none` remain accepted as explicit experimental parameters, but they are unaccepted and outside the V1 stable contract. For normal use, run `./cam_demo` directly for fixed four-camera, 30fps, H.264, upright `1280x1088` output; run `./cam_demo --codec h265` to switch all four streams to H.265.
+
+`mosaic_rtsp_demo` CPU-composites four `1280x1088` NV12 frame sets into an hbmem NV12 DMA output buffer, submits it to the encoder as external NV12, and publishes one `2560x2176` H.264 RTSP stream by default:
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+`mosaic_rtsp_demo --fps <25|30|40|50|60>` is intended for capability-boundary checks. 25/30/40/50 are V1 stable functional modes; 60 is explicit stress-only and outside the V1 stable contract. It applies the selected rate to the SC132 camera/trigger target, PRRTSP encoder fps metadata, and frame-set timeout. Mosaic resolution, codec, bitrate, port, and path remain fixed at `2560x2176`, H.264, 8000kbps, `558`, and `/PRR`; actual output rate still follows the real arrival rate of synchronized four-camera frame sets.
 
 Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
 
@@ -399,6 +418,26 @@ rtsp://<x5-ip>:557/PRR
 ```
 
 The default RTSP ports are fixed to `554/555/556/557`. Cameras 0/1/2/3 correspond to the four output streams. The delivered demo does not expose a port remapping option.
+
+### Mosaic RTSP Demo
+
+`mosaic_rtsp_demo` CPU-composites four synchronized SC132 `1280x1088` NV12 frame sets into an hbmem NV12 DMA output buffer, then publishes a fixed H.264 RTSP stream through `libprrtsp.so` external NV12 input without an extra full-frame PRRTSP copy:
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+Fixed RTSP URL:
+
+```text
+rtsp://<x5-ip>:558/PRR
+```
+
+This program is fixed to four cameras, H.264, 8000kbps, upright output, RTSP port `558`, and path `/PRR`; it supports `--fps <25|30|40|50|60>`. The default is 30fps. 25/30/40/50 have passed the V1 stable functional acceptance scope; 60fps is explicit stress-only and is not a stable release profile.
+
+On exit it prints `queue_full_drop`, `invalid_group`, `copy_failure`, `send_failure`, `retain_release_balance`, `copy_duration_avg_ms`, `send_duration_avg_ms`, and PRRTSP counters; `retain_release_balance=0` means all SC132 frames retained across threads were returned. Maintainer acceptance requires all four stable modes to keep the `2560x2176` H.264 target rate during a board-side CPU-busy window around 98.6%, with zero queue drops, zero invalid groups, zero copy/send failures, and zero retained-frame leaks. Internal runners and raw evidence are not part of this public demo delivery.
 
 ### 4.1 Hardware check: single-sensor capture
 
