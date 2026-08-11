@@ -26,6 +26,11 @@ open_source_demo/
 │   └── prrtsp_v2.h
 ├── lib/                     # 源码交叉构建时链接的交付库
 ├── scripts/
+│   ├── env_setup/
+│   │   ├── configure_x5_ptp_master.sh
+│   │   ├── enable_uart_autologin.sh
+│   │   ├── x5_sync_time.sh
+│   │   └── x5-ion-mem.run
 │   ├── build_cam_demo.sh
 │   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
@@ -40,6 +45,8 @@ open_source_demo/
     ├── imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
+
+`scripts/env_setup/` 存放可选的板端环境辅助脚本：NTP 校时、X5 PTP master 配置、debug UART root autologin 切换和 `x5-ion-mem` 安装。它们只服务用户部署和排障，不属于内部测试、fixture 或发布证据。
 
 `cam_demo.cpp` 保留主流程和用户二次开发入口；配置解析、RTSP 封装、帧队列和后台推流流程分别拆到 `cam_demo_config.*`、`cam_demo_rtsp.*`、`cam_demo_pipeline.*`，便于用户按模块阅读。
 
