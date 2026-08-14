@@ -30,6 +30,7 @@ constexpr int kDefaultRtspBasePort = 554;
 constexpr int kMaxRtspPort = 65535;
 constexpr size_t kQueueCapacity = 10;
 constexpr int kDefaultDiagnosticIntervalMs = 1000;
+constexpr uint32_t kDefaultSourceLivenessTimeoutMs = 2000U;
 constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
@@ -53,6 +54,10 @@ enum class ImuStartOrder : uint32_t {
   kImuFirst = 0U,
   kCameraFirst = 1U,
 };
+enum class RtspPreviewFailurePolicy : uint32_t {
+  kFailClosed = 0U,
+  kDegradePreview = 1U,
+};
 
 struct Options;
 
@@ -75,6 +80,7 @@ struct Options {
   int rotate_degrees = kDefaultRotateDegrees;
   bool diagnostics = false;
   int diagnostic_interval_ms = kDefaultDiagnosticIntervalMs;
+  uint32_t source_liveness_timeout_ms = kDefaultSourceLivenessTimeoutMs;
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
@@ -86,6 +92,8 @@ struct Options {
   const FrozenSystemClock* system_clock = nullptr;
   uint32_t record_frame_skip = 0U;
   std::string record_bag_path;
+  RtspPreviewFailurePolicy rtsp_preview_failure_policy =
+      RtspPreviewFailurePolicy::kFailClosed;
 };
 
 // retained SC frame 由可移动、不可复制的 RAII job 独占。

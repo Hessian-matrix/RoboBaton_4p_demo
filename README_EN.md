@@ -266,12 +266,13 @@ Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAM
 
 At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch. Explicit `vin_lpwm` and `none` selections are experimental and unaccepted; they preserve the SC132 native timestamp domain and do not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
 
-### `sensor_demo` `[FRAME_SET] trigger_sync` diagnostic log
+### `sensor_demo` frame-set/source diagnostic log
 
-With `sensor_demo --diagnostics`, the SC132 frame-set matcher may periodically print:
+With `sensor_demo --diagnostics`, the SC132 frame-set matcher and pipeline source liveness may periodically print:
 
 ```text
 [FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
+source frame_sets_seen=6961 stale_ms=2 liveness_timeout_ms=2000
 ```
 
 Field definitions:
@@ -284,6 +285,9 @@ Field definitions:
 | `lag_ns` | The earliest frame timestamp in the current frame-set minus the matched GPIO trigger timestamp: `frame_timestamp_ns - trigger_timestamp_ns`. |
 | `interval_max_lag_ns` | Maximum lag observed since the previous `trigger_sync` report. It is cleared after printing; the report window is approximately 1 second, so this is not the historical maximum for the entire soak. |
 | `limit_ns` | Maximum permitted trigger lag. For the explicit 60 Hz example above it is `16666666 ns`; at the current default 30 Hz it is approximately `33333333 ns`, one frame period. |
+| `frame_sets_seen` | Cumulative number of frame sets received by the pipeline; use it to confirm that the `libsc132` producer-to-callback source is still progressing. |
+| `stale_ms` | Host steady-clock interval since the latest frame-set callback; values near `liveness_timeout_ms` mean the source is stuck. |
+| `liveness_timeout_ms` | Source liveness fail-closed timeout. After successful startup, exceeding this interval without a new frame set emits a fatal line and requests producer stop. |
 
 The example means:
 
@@ -312,7 +316,7 @@ four RTSP frame counts
 queue_full_rejects
 ```
 
-`trigger_sync` is a diagnostic progress line, not an independent PASS/FAIL result. Continue with the T3/T4/T5 runbook only when it accompanies a stopped frame-set producer, all four RTSP streams stopping, a retryable burst limit, a structural fatal, or a timestamp mismatch.
+`trigger_sync` and `source` are diagnostic progress lines, not independent PASS/FAIL results. After successful startup, a source timeout emits `fatal: liveness stage=source_matcher ...` and fails closed; otherwise continue with the T3/T4/T5 runbook only when these diagnostics accompany a stopped frame-set producer, all four RTSP streams stopping, a retryable burst limit, a structural fatal, or a timestamp mismatch.
 
 Run it from the complete package:
 
@@ -406,7 +410,7 @@ Common options:
 --url <path>       RTSP path, default /PRR
 --rtsp-base-port <port> RTSP base port, default 554; cameras 0..3 use base+0..3
 --trigger-mode <software_gpio|vin_lpwm|none> Trigger output mode, default software_gpio/GPIO417
---diagnostics      Print per-channel send timing and timestamp skew diagnostics
+--diagnostics      Print source liveness, per-channel send timing, and timestamp skew diagnostics
 --max-skew-ns <ns> Frame-set timestamp skew release limit, default 2000000; after synchronized grouping, all four exposed frame_id values match exactly
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
@@ -518,6 +522,7 @@ Log fields:
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
 - `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
+- `source frame_sets_seen` / `stale_ms` / `liveness_timeout_ms`: source progress, time since the latest frame set, and fail-closed timeout when `--diagnostics` is enabled; source timeout emits `fatal: liveness stage=source_matcher ...`
 
 ### ICM ABI v2 Boundary
 

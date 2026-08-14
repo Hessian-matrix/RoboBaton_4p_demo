@@ -11,6 +11,14 @@
 
 namespace robobaton_demo {
 
+struct X5JpegNv12CopyResult {
+  uint64_t bulk_plane_count = 0U;
+  uint64_t bulk_bytes = 0U;
+  uint64_t row_copy_count = 0U;
+  uint64_t row_bytes = 0U;
+};
+
+
 struct X5JpegInputSlot {
   int camera_id = 0;
   uint32_t width = 0U;
@@ -57,8 +65,11 @@ class X5JpegEncoder final {
   void NotifySlotWaiters() noexcept;
   void ReleaseSlot(X5JpegInputSlot* slot) noexcept;
   void QuarantineSlot(X5JpegInputSlot* slot) noexcept;
-  void CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* slot);
+  X5JpegNv12CopyResult CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* slot);
   void Encode(const X5JpegEncodeRequest& request, std::vector<uint8_t>* jpeg);
+  // 将 JPEG 直接追加到已有 ROS payload，返回本次追加的 JPEG 有效字节数。
+  void EncodeAppend(const X5JpegEncodeRequest& request, std::vector<uint8_t>* payload,
+                    size_t* jpeg_size);
 
  private:
   struct Impl;

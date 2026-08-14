@@ -37,7 +37,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --url <path>      RTSP URL path, default /PRR\n"
             << "  --rtsp-base-port <port> RTSP first channel port, default "
             << kDefaultRtspBasePort << "\n"
-            << "  --diagnostics     Print per-channel RTSP timing diagnostics\n"
+            << "  --diagnostics     Print source liveness and per-channel RTSP timing diagnostics\n"
             << "  --diag-interval-ms <ms> Diagnostics interval, default 1000\n"
             << "  --max-skew-ns <ns> Frame-set timestamp skew limit, default "
             << kDefaultFrameSetMaxSkewNs << "\n"

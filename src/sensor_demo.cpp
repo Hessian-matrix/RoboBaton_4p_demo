@@ -6,9 +6,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
+#include <string>
 #include <thread>
 
 extern "C" {
@@ -49,10 +52,10 @@ void SignalHandler(int) {
 bool InjectJoinFailure(std::thread&, void*) { return false; }
 #endif
 
-void ObserveQueuedFrameForBag(const robobaton_demo::QueuedFrame& frame, void* user) {
+void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
   auto* recorder = static_cast<robobaton_demo::SensorBagRecorder*>(user);
   if (recorder != nullptr) {
-    recorder->ObserveFrame(frame);
+    static_cast<void>(recorder->TryAcceptFrameSet(frame_set));
   }
 }
 
@@ -69,11 +72,178 @@ std::ostream& AppendBagLatencySummary(std::ostream& stream, const char* prefix,
                 << prefix << "_max_ns=" << stats.max_ns;
 }
 
+std::ostream& AppendRosbagWriterLatencySummary(
+    std::ostream& stream, const char* prefix,
+    const robobaton_demo::RosbagV2LatencyStats& stats) {
+  return stream << ' ' << prefix << "_count=" << stats.count << ' ' << prefix
+                << "_avg_ns=" << robobaton_demo::RosbagV2LatencyAverageNs(stats) << ' '
+                << prefix << "_p50_ns="
+                << robobaton_demo::RosbagV2LatencyPercentileUpperNs(stats, 50U) << ' '
+                << prefix << "_p95_ns="
+                << robobaton_demo::RosbagV2LatencyPercentileUpperNs(stats, 95U) << ' '
+                << prefix << "_p99_ns="
+                << robobaton_demo::RosbagV2LatencyPercentileUpperNs(stats, 99U) << ' '
+                << prefix << "_max_ns=" << stats.max_ns;
+}
+
+std::ostream& AppendRosbagWriterSummary(
+    std::ostream& stream, const robobaton_demo::RosbagV2WriterStats& stats) {
+  AppendRosbagWriterLatencySummary(stream, "chunk_open", stats.chunk_open_latency);
+  AppendRosbagWriterLatencySummary(stream, "chunk_write", stats.chunk_write_latency);
+  AppendRosbagWriterLatencySummary(stream, "chunk_header_patch",
+                                   stats.chunk_header_patch_latency);
+  AppendRosbagWriterLatencySummary(stream, "chunk_index", stats.chunk_index_latency);
+  AppendRosbagWriterLatencySummary(stream, "chunk_close", stats.chunk_close_latency);
+  AppendRosbagWriterLatencySummary(stream, "record_write", stats.record_write_latency);
+  AppendRosbagWriterLatencySummary(stream, "record_header_write",
+                                   stats.record_header_write_latency);
+  AppendRosbagWriterLatencySummary(stream, "record_payload_write",
+                                   stats.record_payload_write_latency);
+  AppendRosbagWriterLatencySummary(stream, "flush_close", stats.flush_close_latency);
+  return stream << " raw_write_calls=" << stats.raw_write_calls
+                << " raw_write_bytes=" << stats.raw_write_bytes
+                << " record_header_write_bytes=" << stats.record_header_write_bytes
+                << " record_payload_write_bytes=" << stats.record_payload_write_bytes;
+}
+
+uint64_t SensorDemoSteadyNowNs() noexcept {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch();
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+}
+
+struct ProcMeminfoSnapshot {
+  uint64_t dirty_kb = 0U;
+  uint64_t writeback_kb = 0U;
+  bool valid = false;
+};
+
+struct ProcDiskstatsSnapshot {
+  uint64_t read_ios = 0U;
+  uint64_t write_ios = 0U;
+  uint64_t read_sectors = 0U;
+  uint64_t write_sectors = 0U;
+  uint64_t io_time_ms = 0U;
+  bool valid = false;
+};
+
+struct DiskObservabilitySnapshot {
+  ProcMeminfoSnapshot meminfo;
+  ProcDiskstatsSnapshot diskstats;
+  uint64_t steady_ns = 0U;
+};
+
+uint64_t NondecreasingDelta(uint64_t before, uint64_t after) noexcept {
+  return after >= before ? after - before : 0U;
+}
+
+ProcMeminfoSnapshot ReadProcMeminfo() {
+  std::ifstream input("/proc/meminfo");
+  ProcMeminfoSnapshot snapshot;
+  std::string line;
+  while (std::getline(input, line)) {
+    std::istringstream fields(line);
+    std::string key;
+    uint64_t value_kb = 0U;
+    if (!(fields >> key >> value_kb)) {
+      continue;
+    }
+    if (key == "Dirty:") {
+      snapshot.dirty_kb = value_kb;
+    } else if (key == "Writeback:") {
+      snapshot.writeback_kb = value_kb;
+    }
+  }
+  snapshot.valid = static_cast<bool>(input.eof());
+  return snapshot;
+}
+
+ProcDiskstatsSnapshot ReadProcDiskstats() {
+  std::ifstream input("/proc/diskstats");
+  ProcDiskstatsSnapshot snapshot;
+  std::string line;
+  while (std::getline(input, line)) {
+    std::istringstream fields(line);
+    unsigned int major = 0U;
+    unsigned int minor = 0U;
+    std::string name;
+    uint64_t reads_completed = 0U;
+    uint64_t reads_merged = 0U;
+    uint64_t sectors_read = 0U;
+    uint64_t read_time_ms = 0U;
+    uint64_t writes_completed = 0U;
+    uint64_t writes_merged = 0U;
+    uint64_t sectors_written = 0U;
+    uint64_t write_time_ms = 0U;
+    uint64_t io_in_progress = 0U;
+    uint64_t io_time_ms = 0U;
+    if (!(fields >> major >> minor >> name >> reads_completed >> reads_merged >>
+          sectors_read >> read_time_ms >> writes_completed >> writes_merged >>
+          sectors_written >> write_time_ms >> io_in_progress >> io_time_ms)) {
+      continue;
+    }
+    snapshot.read_ios += reads_completed;
+    snapshot.write_ios += writes_completed;
+    snapshot.read_sectors += sectors_read;
+    snapshot.write_sectors += sectors_written;
+    snapshot.io_time_ms += io_time_ms;
+  }
+  snapshot.valid = static_cast<bool>(input.eof());
+  return snapshot;
+}
+
+DiskObservabilitySnapshot CaptureDiskObservability() {
+  DiskObservabilitySnapshot snapshot;
+  snapshot.meminfo = ReadProcMeminfo();
+  snapshot.diskstats = ReadProcDiskstats();
+  snapshot.steady_ns = SensorDemoSteadyNowNs();
+  return snapshot;
+}
+
+std::ostream& AppendDiskObservabilitySummary(
+    std::ostream& stream, const DiskObservabilitySnapshot& before,
+    const DiskObservabilitySnapshot& after) {
+  return stream << " dirty_kb=" << after.meminfo.dirty_kb
+                << " writeback_kb=" << after.meminfo.writeback_kb
+                << " meminfo_available=" << (after.meminfo.valid ? "yes" : "no")
+                << " diskstats_available=" << (after.diskstats.valid ? "yes" : "no")
+                << " diskstats_interval_ns="
+                << NondecreasingDelta(before.steady_ns, after.steady_ns)
+                << " diskstats_read_ios_delta="
+                << NondecreasingDelta(before.diskstats.read_ios, after.diskstats.read_ios)
+                << " diskstats_write_ios_delta="
+                << NondecreasingDelta(before.diskstats.write_ios, after.diskstats.write_ios)
+                << " diskstats_read_sectors_delta="
+                << NondecreasingDelta(before.diskstats.read_sectors,
+                                      after.diskstats.read_sectors)
+                << " diskstats_write_sectors_delta="
+                << NondecreasingDelta(before.diskstats.write_sectors,
+                                      after.diskstats.write_sectors)
+                << " diskstats_io_time_ms_delta="
+                << NondecreasingDelta(before.diskstats.io_time_ms,
+                                      after.diskstats.io_time_ms);
+}
+
+std::string TerminalToken(const std::string& value) {
+  if (value.empty()) {
+    return "-";
+  }
+  std::string token;
+  token.reserve(value.size());
+  for (unsigned char ch : value) {
+    const bool safe = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                      (ch >= '0' && ch <= '9') || ch == '/' || ch == '.' ||
+                      ch == '_' || ch == '-' || ch == ':';
+    token.push_back(safe ? static_cast<char>(ch) : '_');
+  }
+  return token;
+}
+
 robobaton_demo::PipelineHooks MainPipelineHooks(
     robobaton_demo::SensorBagRecorder* recorder) {
   robobaton_demo::PipelineHooks hooks{};
   if (recorder != nullptr) {
-    hooks.on_queued_frame = ObserveQueuedFrameForBag;
+    hooks.on_frame_set = ObserveFrameSetForBag;
     hooks.user = recorder;
   }
 #ifdef RELEASE008_TESTING
@@ -84,6 +254,7 @@ robobaton_demo::PipelineHooks MainPipelineHooks(
 #endif
   return hooks;
 }
+
 
 struct ImuStats {
   uint64_t samples = 0U;
@@ -158,6 +329,53 @@ struct ImuStats {
   }
 };
 
+struct SensorDemoShutdownContext {
+  robobaton_demo::SensorBagRecorder* recorder = nullptr;
+  std::thread* imu_thread = nullptr;
+  std::atomic<int>* imu_result = nullptr;
+  ImuStats* imu_stats = nullptr;
+  int* exit_code = nullptr;
+  bool record_bag_requested = false;
+  bool bag_finish_done = false;
+  robobaton_demo::SensorBagFinishResult bag_finish;
+  robobaton_demo::SensorBagRecorderStats bag_stats;
+};
+
+void StopImuAndFinishBagBeforeSc132Stop(const robobaton_demo::Sc132ShutdownResult& shutdown,
+                                        void* user) noexcept {
+  auto* context = static_cast<SensorDemoShutdownContext*>(user);
+  if (context == nullptr) {
+    return;
+  }
+
+  robobaton_demo::g_stop_requested.store(true, std::memory_order_release);
+  if (context->imu_thread != nullptr && context->imu_thread->joinable()) {
+    context->imu_thread->join();
+  }
+  if (context->imu_result != nullptr &&
+      context->imu_result->load(std::memory_order_acquire) != 0 &&
+      context->exit_code != nullptr) {
+    *context->exit_code = 1;
+  }
+  if (context->imu_stats != nullptr && !context->imu_stats->max_consecutive_drops_valid &&
+      context->exit_code != nullptr) {
+    *context->exit_code = 1;
+  }
+  if (!context->record_bag_requested || context->recorder == nullptr ||
+      context->bag_finish_done) {
+    return;
+  }
+
+  // SC132 blocking stop 会等待所有 retained frame 归零；先停止 recorder 私有 worker，
+  // 避免 JPEG staging slot 等待把底层相机 teardown 卡在 retained frame 上。
+  const bool session_success = context->exit_code != nullptr && *context->exit_code == 0 &&
+                               shutdown.consumer_join_ok && shutdown.ownership_quiescent &&
+                               shutdown.rtsp_status_ok && shutdown.rtsp_close_ok;
+  context->bag_finish = context->recorder->Finish(session_success);
+  context->bag_stats = context->recorder->SnapshotStats();
+  context->bag_finish_done = true;
+}
+
 struct SensorImuObserverState {
   ImuStats* stats = nullptr;
   robobaton_demo::ImuPrintState* print_state = nullptr;
@@ -219,6 +437,13 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   bool sc_start_attempted = false;
   bool consumer_quiescent = false;
+  bool rtsp_status_ok = true;
+  bool rtsp_close_ok = true;
+  bool rtsp_cleanup_done = false;
+  bool rtsp_preview_complete = true;
+  uint64_t rtsp_preview_dropped_total = 0U;
+  uint64_t rtsp_preview_dropped_by_camera[kMaxChannels]{};
+  int32_t rtsp_preview_last_error_by_camera[kMaxChannels]{};
   // 0 同时表示参数错误等硬件前失败路径尚未启动 IMU 线程。
   std::atomic<int> imu_result{0};
   ImuStats imu_stats;
@@ -234,6 +459,8 @@ int main(int argc, char** argv) {
   SensorBagRecorder recorder;
   bool record_bag_requested = false;
   std::string record_bag_path;
+  SensorDemoShutdownContext shutdown_context;
+  DiskObservabilitySnapshot disk_observability_start;
 
   try {
     signal(SIGINT, SignalHandler);
@@ -247,8 +474,12 @@ int main(int argc, char** argv) {
     system_clock->PrintTimeBase(std::cout);
     options.system_clock = system_clock.get();
     record_bag_requested = !options.record_bag_path.empty();
+    if (record_bag_requested) {
+      disk_observability_start = CaptureDiskObservability();
+    }
     record_bag_path = options.record_bag_path;
     if (record_bag_requested) {
+      options.rtsp_preview_failure_policy = RtspPreviewFailurePolicy::kDegradePreview;
       recorder.Start(options, record_bag_path);
     }
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
@@ -280,7 +511,12 @@ int main(int argc, char** argv) {
               << " imu_print_rate_hz=" << options.imu_print_rate_hz
               << " imu_print_metrics=" << (options.imu_print_metrics ? "on" : "off")
               << " imu_time=SENSOR_TIMESTAMP_FIFO record_bag="
-              << (record_bag_requested ? record_bag_path : "disabled");
+              << (record_bag_requested ? record_bag_path : "disabled")
+              << " rtsp_preview_policy="
+              << (options.rtsp_preview_failure_policy ==
+                          RtspPreviewFailurePolicy::kDegradePreview
+                      ? "degrade-preview"
+                      : "fail-closed");
     if (record_bag_requested) {
       std::cout << " record_frame_skip=" << options.record_frame_skip
                 << " image_persistence_fps="
@@ -332,7 +568,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    pipeline->StartDiagnosticsIfEnabled();
+    pipeline->StartRuntimeMonitor();
     sc132_frame_set_config_t config = pipeline->MakeFrameSetConfig();
     sc_start_attempted = true;
     const int32_t start_status = sc132_start_frame_set(&config, options.camera_mask);
@@ -340,6 +576,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("sc132_start_frame_set failed status=" +
                                std::to_string(start_status));
     }
+    pipeline->MarkSourceStarted();
 
     // camera-first 只在所选 frame-set 启动成功后建立 IMU final producer epoch。
     if (options.imu_start_order == ImuStartOrder::kCameraFirst) {
@@ -363,10 +600,34 @@ int main(int argc, char** argv) {
 
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
-      consumer_quiescent = FinishSc132Shutdown(pipeline.get(), &rtsp);
+      if (pipeline->FirstError() != 0 || recorder.HasFatalError()) {
+        exit_code = 1;
+      }
+      shutdown_context.recorder = &recorder;
+      shutdown_context.imu_thread = &imu_thread;
+      shutdown_context.imu_result = &imu_result;
+      shutdown_context.imu_stats = &imu_stats;
+      shutdown_context.exit_code = &exit_code;
+      shutdown_context.record_bag_requested = record_bag_requested;
+      const Sc132ShutdownResult shutdown = FinishSc132ShutdownDetailed(
+          pipeline.get(), &rtsp,
+          record_bag_requested ? StopImuAndFinishBagBeforeSc132Stop : nullptr,
+          record_bag_requested ? &shutdown_context : nullptr);
+      consumer_quiescent = shutdown.consumer_join_ok && shutdown.ownership_quiescent;
+      rtsp_status_ok = shutdown.rtsp_status_ok;
+      rtsp_close_ok = shutdown.rtsp_close_ok;
+      rtsp_cleanup_done = shutdown.sc132_cleanup_reached;
     } else {
       pipeline->BeginShutdown(false);
       consumer_quiescent = pipeline->Join();
+    }
+    rtsp_preview_complete = pipeline->RtspPreviewComplete();
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      rtsp_preview_dropped_by_camera[camera_id] =
+          pipeline->RtspPreviewDroppedFrames(camera_id);
+      rtsp_preview_last_error_by_camera[camera_id] =
+          pipeline->RtspPreviewLastError(camera_id);
+      rtsp_preview_dropped_total += rtsp_preview_dropped_by_camera[camera_id];
     }
     if (pipeline->FirstError() != 0) {
       std::cerr << "fatal: pipeline first_error=" << pipeline->FirstError() << "\n";
@@ -381,12 +642,20 @@ int main(int argc, char** argv) {
     std::_Exit(1);
   }
 
-  if (!rtsp.CaptureStatuses()) {
+  if (!rtsp_cleanup_done) {
+    rtsp_status_ok = rtsp.CaptureStatuses();
+    rtsp_close_ok = rtsp.CloseReverse();
+  }
+  if (!rtsp_status_ok) {
     std::cerr << "fatal: prrtsp_stream_get_status failed\n";
     exit_code = 1;
   }
-  if (!rtsp.CloseReverse()) {
+  if (!rtsp_close_ok) {
     std::cerr << "fatal: RTSP handle remains after three close attempts\n";
+    exit_code = 1;
+  }
+  if (!rtsp_preview_complete && !record_bag_requested) {
+    std::cerr << "fatal: RTSP preview degraded without record-bag isolation\n";
     exit_code = 1;
   }
 
@@ -407,11 +676,32 @@ int main(int argc, char** argv) {
     exit_code = 1;
   }
 
+  std::cout << "SENSOR_RTSP_RESULT preview_complete="
+            << (rtsp_preview_complete ? "yes" : "no")
+            << " preview_dropped_total=" << rtsp_preview_dropped_total
+            << " preview_dropped_by_camera=cam0:" << rtsp_preview_dropped_by_camera[0]
+            << ",cam1:" << rtsp_preview_dropped_by_camera[1]
+            << ",cam2:" << rtsp_preview_dropped_by_camera[2]
+            << ",cam3:" << rtsp_preview_dropped_by_camera[3]
+            << " preview_last_error_by_camera=cam0:"
+            << rtsp_preview_last_error_by_camera[0]
+            << ",cam1:" << rtsp_preview_last_error_by_camera[1]
+            << ",cam2:" << rtsp_preview_last_error_by_camera[2]
+            << ",cam3:" << rtsp_preview_last_error_by_camera[3] << "\n";
+
   if (record_bag_requested) {
-    const bool recorder_ok = recorder.Finish(exit_code == 0);
-    const SensorBagRecorderStats bag_stats = recorder.SnapshotStats();
-    if (!recorder_ok || recorder.HasFatalError()) {
-      std::cerr << "fatal: bag recorder failed: " << recorder.ErrorMessage() << "\n";
+    const SensorBagFinishResult bag_finish = shutdown_context.bag_finish_done
+                                                ? shutdown_context.bag_finish
+                                                : recorder.Finish(exit_code == 0);
+    const SensorBagRecorderStats bag_stats = shutdown_context.bag_finish_done
+                                                ? shutdown_context.bag_stats
+                                                : recorder.SnapshotStats();
+    const DiskObservabilitySnapshot disk_observability_finish =
+        CaptureDiskObservability();
+    if (!bag_finish || recorder.HasFatalError()) {
+      const std::string error = !bag_finish.error.empty() ? bag_finish.error
+                                                          : recorder.ErrorMessage();
+      std::cerr << "fatal: bag recorder failed: " << error << "\n";
       exit_code = 1;
     }
     const uint64_t image_span_ns =
@@ -419,25 +709,77 @@ int main(int argc, char** argv) {
                 bag_stats.last_image_timestamp_ns > bag_stats.first_image_timestamp_ns
             ? bag_stats.last_image_timestamp_ns - bag_stats.first_image_timestamp_ns
             : 0U;
-    std::cout << "SENSOR_BAG_RESULT path=" << record_bag_path
+    const std::string published_path = bag_finish.published_path.empty()
+                                           ? record_bag_path
+                                           : bag_finish.published_path;
+    std::cout << "SENSOR_BAG_RESULT path=" << TerminalToken(published_path)
+              << " configured_path=" << TerminalToken(record_bag_path)
+              << " bag_outcome="
+              << SensorBagFinishOutcomeName(bag_finish.outcome)
+              << " data_complete=" << (bag_finish.data_complete ? "yes" : "no")
+              << " cleanup_complete=" << (bag_finish.cleanup_complete ? "yes" : "no")
+              << " session_uuid=" << TerminalToken(bag_finish.session_uuid)
+              << " quarantine_path=" << TerminalToken(bag_finish.quarantine_path)
               << " image_frames=" << bag_stats.image_frames
               << " image_frames_by_camera=cam0:" << bag_stats.image_frames_by_camera[0]
               << ",cam1:" << bag_stats.image_frames_by_camera[1]
               << ",cam2:" << bag_stats.image_frames_by_camera[2]
               << ",cam3:" << bag_stats.image_frames_by_camera[3]
+              << " rtsp_preview_complete="
+              << (rtsp_preview_complete ? "yes" : "no")
+              << " rtsp_preview_dropped_total=" << rtsp_preview_dropped_total
               << " image_first_ns=" << bag_stats.first_image_timestamp_ns
               << " image_last_ns=" << bag_stats.last_image_timestamp_ns
               << " image_span_ns=" << image_span_ns
+              << " source_frame_sets_seen=" << bag_stats.source_frame_sets_seen
+              << " recorder_selected_groups=" << bag_stats.recorder_selected_groups
+              << " recorder_admitted_groups=" << bag_stats.recorder_admitted_groups
+              << " recorder_dropped_groups=" << bag_stats.recorder_dropped_groups
+              << " recorder_written_groups=" << bag_stats.recorder_written_groups
+              << " recorder_imu_admitted=" << bag_stats.recorder_imu_admitted
+              << " recorder_imu_written=" << bag_stats.recorder_imu_written
               << " imu_samples=" << bag_stats.imu_samples
-              << " imu_queue_peak_depth=" << bag_stats.imu_queue_peak_depth
-              << " imu_queue_full_rejects=" << bag_stats.imu_queue_full_rejects
+              << " frame_queue_capacity=" << bag_stats.frame_queue_capacity
+              << " frame_queue_high_watermark=" << bag_stats.frame_queue_high_watermark
               << " frame_queue_peak_depth=" << bag_stats.frame_queue_peak_depth
+              << " frame_queue_at_capacity_dwell_ns="
+              << bag_stats.frame_queue_at_capacity_dwell_ns
+              << " frame_queue_at_capacity_events="
+              << bag_stats.frame_queue_at_capacity_events
               << " frame_queue_full_rejects=" << bag_stats.frame_queue_full_rejects
+              << " encoded_queue_capacity=" << bag_stats.encoded_queue_capacity
+              << " encoded_queue_high_watermark="
+              << bag_stats.encoded_queue_high_watermark
               << " encoded_queue_peak_depth=" << bag_stats.encoded_queue_peak_depth
-              << " encoded_queue_full_rejects=" << bag_stats.encoded_queue_full_rejects
+              << " encoded_queue_at_capacity_dwell_ns="
+              << bag_stats.encoded_queue_at_capacity_dwell_ns
+              << " encoded_queue_at_capacity_events="
+              << bag_stats.encoded_queue_at_capacity_events
+              << " encoded_queue_full_rejects="
+              << bag_stats.encoded_queue_full_rejects
+              << " encoded_queue_oldest_evicted_groups="
+              << bag_stats.encoded_queue_oldest_evicted_groups
+              << " encoded_queue_oldest_evicted_frames="
+              << bag_stats.encoded_queue_oldest_evicted_frames
+              << " encoded_queue_oldest_evicted_bytes="
+              << bag_stats.encoded_queue_oldest_evicted_bytes
+              << " imu_queue_capacity=" << bag_stats.imu_queue_capacity
+              << " imu_queue_high_watermark=" << bag_stats.imu_queue_high_watermark
+              << " imu_queue_peak_depth=" << bag_stats.imu_queue_peak_depth
+              << " imu_queue_at_capacity_dwell_ns="
+              << bag_stats.imu_queue_at_capacity_dwell_ns
+              << " imu_queue_at_capacity_events="
+              << bag_stats.imu_queue_at_capacity_events
+              << " imu_queue_full_rejects=" << bag_stats.imu_queue_full_rejects
+              << " writer_image_backlog_peak_depth=" << bag_stats.writer_image_backlog_peak_depth
               << " frame_metadata_messages=" << bag_stats.frame_metadata_messages
               << " jpeg_bytes=" << bag_stats.jpeg_bytes
               << " nv12_copy_bytes=" << bag_stats.nv12_copy_bytes
+              << " nv12_copy_bulk_plane_count="
+              << bag_stats.nv12_copy_bulk_plane_count
+              << " nv12_copy_bulk_bytes=" << bag_stats.nv12_copy_bulk_bytes
+              << " nv12_copy_row_count=" << bag_stats.nv12_copy_row_count
+              << " nv12_copy_row_bytes=" << bag_stats.nv12_copy_row_bytes
               << " write_order_wait_max_ns=" << bag_stats.write_order_wait_max_ns
               << " writer_mutex_wait_max_ns=" << bag_stats.writer_mutex_wait_max_ns
               << " writer_mutex_hold_max_ns=" << bag_stats.writer_mutex_hold_max_ns;
@@ -448,6 +790,9 @@ int main(int argc, char** argv) {
     AppendBagLatencySummary(std::cout, "image_writer_hold", bag_stats.image_writer_hold_latency);
     AppendBagLatencySummary(std::cout, "imu_writer_wait", bag_stats.imu_writer_wait_latency);
     AppendBagLatencySummary(std::cout, "imu_writer_hold", bag_stats.imu_writer_hold_latency);
+    AppendRosbagWriterSummary(std::cout, bag_stats.writer_stats);
+    AppendDiskObservabilitySummary(std::cout, disk_observability_start,
+                                   disk_observability_finish);
     std::cout << " success=" << (exit_code == 0 ? "yes" : "no") << "\n";
   }
 

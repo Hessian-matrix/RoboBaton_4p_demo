@@ -70,6 +70,25 @@ uint32_t CheckedJpegBitstreamCapacity(uint32_t width, uint32_t height) {
   return static_cast<uint32_t>(aligned);
 }
 
+// 行内没有 padding 时直接拷贝整块有效字节；否则逐行拷贝以兼容任意 stride。
+void CopyNv12Plane(const uint8_t* src, uint8_t* dst, uint32_t width,
+                   uint32_t rows, uint32_t src_stride, uint32_t dst_stride,
+                   bool contiguous_rows, X5JpegNv12CopyResult* result) {
+  const uint64_t copy_bytes = static_cast<uint64_t>(width) * rows;
+  if (contiguous_rows) {
+    std::memcpy(dst, src, static_cast<size_t>(copy_bytes));
+    ++result->bulk_plane_count;
+    result->bulk_bytes += copy_bytes;
+    return;
+  }
+  for (uint32_t row = 0U; row < rows; ++row) {
+    std::memcpy(dst + static_cast<size_t>(row) * dst_stride,
+                src + static_cast<size_t>(row) * src_stride, width);
+  }
+  result->row_copy_count += rows;
+  result->row_bytes += copy_bytes;
+}
+
 }  // namespace
 
 struct X5JpegEncoder::Impl {
@@ -397,7 +416,8 @@ void X5JpegEncoder::QuarantineSlot(X5JpegInputSlot* public_slot) noexcept {
   }
 }
 
-void X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* slot) {
+X5JpegNv12CopyResult X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame,
+                                                   X5JpegInputSlot* slot) {
   if (slot == nullptr || frame.y_data == nullptr || frame.uv_data == nullptr ||
       frame.width != slot->width || frame.height != slot->height ||
       frame.stride < frame.width || frame.vstride < frame.height ||
@@ -409,18 +429,12 @@ void X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* sl
   if (frame.y_size < y_required || frame.uv_size < uv_required) {
     throw std::runtime_error("hardware JPEG source plane capacity too small");
   }
-  for (uint32_t row = 0U; row < frame.height; ++row) {
-    std::memcpy(slot->y_data + static_cast<size_t>(row) * slot->stride,
-                static_cast<const uint8_t*>(frame.y_data) +
-                    static_cast<size_t>(row) * frame.stride,
-                frame.width);
-  }
-  for (uint32_t row = 0U; row < frame.height / 2U; ++row) {
-    std::memcpy(slot->uv_data + static_cast<size_t>(row) * slot->stride,
-                static_cast<const uint8_t*>(frame.uv_data) +
-                    static_cast<size_t>(row) * frame.stride,
-                frame.width);
-  }
+  X5JpegNv12CopyResult copy_result;
+  const bool contiguous_rows = frame.stride == frame.width && slot->stride == slot->width;
+  CopyNv12Plane(static_cast<const uint8_t*>(frame.y_data), slot->y_data, frame.width,
+                frame.height, frame.stride, slot->stride, contiguous_rows, &copy_result);
+  CopyNv12Plane(static_cast<const uint8_t*>(frame.uv_data), slot->uv_data, frame.width,
+                frame.height / 2U, frame.stride, slot->stride, contiguous_rows, &copy_result);
   int result = hb_mem_flush_buf_with_vaddr(
       reinterpret_cast<uint64_t>(slot->y_data), slot->y_capacity);
   if (result != 0) {
@@ -431,13 +445,27 @@ void X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* sl
   if (result != 0) {
     throw std::runtime_error(StageError(slot->camera_id, "flush_uv", result));
   }
+  return copy_result;
 }
 
+
 void X5JpegEncoder::Encode(const X5JpegEncodeRequest& request, std::vector<uint8_t>* jpeg) {
-  if (!started_ || jpeg == nullptr || request.slot == nullptr ||
+  if (jpeg == nullptr) {
+    throw std::runtime_error("hardware JPEG invalid encode request");
+  }
+  jpeg->clear();
+  size_t jpeg_size = 0U;
+  EncodeAppend(request, jpeg, &jpeg_size);
+}
+
+void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
+                                 std::vector<uint8_t>* payload,
+                                 size_t* jpeg_size) {
+  if (!started_ || payload == nullptr || jpeg_size == nullptr || request.slot == nullptr ||
       request.camera_id < 0 || request.camera_id >= kMaxChannels) {
     throw std::runtime_error("hardware JPEG invalid encode request");
   }
+  *jpeg_size = 0U;
   Impl::Camera& camera = impl_->cameras[static_cast<size_t>(request.camera_id)];
   media_codec_buffer_t input{};
   int result = hb_mm_mc_dequeue_input_buffer(&camera.context, &input, kCodecTimeoutMs);
@@ -472,7 +500,7 @@ void X5JpegEncoder::Encode(const X5JpegEncodeRequest& request, std::vector<uint8
     throw std::runtime_error(StageError(request.camera_id, "queue_input", result));
   }
 
-  jpeg->clear();
+  const size_t jpeg_start = payload->size();
   for (size_t output_count = 0U; output_count < kMaxJpegOutputBuffers; ++output_count) {
     media_codec_buffer_t output{};
     media_codec_output_buffer_info_t info{};
@@ -483,21 +511,23 @@ void X5JpegEncoder::Encode(const X5JpegEncodeRequest& request, std::vector<uint8
     bool output_return_attempted = false;
     try {
       const size_t output_size = static_cast<size_t>(output.vstream_buf.size);
+      const size_t current_jpeg_size = payload->size() - jpeg_start;
       if (output_size == 0U) {
         throw std::runtime_error("hardware JPEG malformed output: missing payload size");
       }
       if (output_size > impl_->bitstream_capacity ||
-          jpeg->size() > impl_->bitstream_capacity - output_size) {
+          current_jpeg_size > impl_->bitstream_capacity - output_size) {
         throw std::runtime_error("hardware JPEG malformed output: payload size exceeds bounds");
       }
       if (output.vstream_buf.vir_ptr == nullptr) {
         throw std::runtime_error("hardware JPEG malformed output: missing SOI");
       }
-      jpeg->insert(jpeg->end(), output.vstream_buf.vir_ptr,
-                   output.vstream_buf.vir_ptr + output_size);
-      size_t payload = 0U;
+      payload->insert(payload->end(), output.vstream_buf.vir_ptr,
+                      output.vstream_buf.vir_ptr + output_size);
+      size_t payload_size = 0U;
       const bool complete = TryResolveJpegPayloadLength(
-          jpeg->data(), jpeg->size(), impl_->bitstream_capacity, &payload);
+          payload->data() + jpeg_start, payload->size() - jpeg_start,
+          impl_->bitstream_capacity, &payload_size);
       const bool last_slice = IsLastJpegOutputSlice(info);
       if (!complete && last_slice) {
         throw std::runtime_error("hardware JPEG malformed output: missing EOI");
@@ -508,7 +538,8 @@ void X5JpegEncoder::Encode(const X5JpegEncodeRequest& request, std::vector<uint8
         throw std::runtime_error(StageError(request.camera_id, "queue_output", result));
       }
       if (complete) {
-        jpeg->resize(payload);
+        payload->resize(jpeg_start + payload_size);
+        *jpeg_size = payload_size;
         const_cast<X5JpegInputSlot*>(request.slot)->submitted_to_hardware = false;
         return;
       }

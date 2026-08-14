@@ -291,12 +291,13 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 
 启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 
-### `sensor_demo` 的 `[FRAME_SET] trigger_sync` 诊断日志
+### `sensor_demo` 的 frame-set/source 诊断日志
 
-使用 `sensor_demo --diagnostics` 时，SC132 frame-set matcher 可能周期性输出：
+使用 `sensor_demo --diagnostics` 时，SC132 frame-set matcher 和 pipeline source liveness 可能周期性输出：
 
 ```text
 [FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
+source frame_sets_seen=6961 stale_ms=2 liveness_timeout_ms=2000
 ```
 
 字段含义：
@@ -309,6 +310,9 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 | `lag_ns` | 当前 frame-set 最早 frame timestamp 减匹配 GPIO trigger timestamp：`frame_timestamp_ns - trigger_timestamp_ns`。 |
 | `interval_max_lag_ns` | 从上一条 `trigger_sync` 报告以来观测到的最大 lag；打印后清零，当前报告周期约 1 秒，不是整个长测的历史最大值。 |
 | `limit_ns` | 当前允许的最大 trigger lag。当前默认 30Hz 是 `33333333 ns`；显式 60Hz 示例为 `16666666 ns`，均约一个 frame period。 |
+| `frame_sets_seen` | pipeline 已收到的 frame-set 累计数，用于确认 libsc132 producer 到用户态 callback 的源头仍在前进。 |
+| `stale_ms` | 距最近一次 frame-set callback 的 host steady-clock 间隔；接近 `liveness_timeout_ms` 时表示 source 已卡住。 |
+| `liveness_timeout_ms` | source liveness fail-closed 超时；启动成功后超过该时间仍无新 frame-set 会触发 fatal 并请求 producer 停止。 |
 
 上面显式 60Hz 示例表示：
 
@@ -337,7 +341,7 @@ worker fatal
 queue_full_rejects
 ```
 
-`trigger_sync` 是诊断进度行，不是单独的 PASS/FAIL 结论。只有当它伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
+`trigger_sync` 和 `source` 都是诊断进度行，不是单独的 PASS/FAIL 结论。启动成功后若 source 超时，进程会输出 `fatal: liveness stage=source_matcher ...` 并 fail-closed；其他情况下，只有当这些诊断伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
 
 
 ### SC132 四目相机 RTSP Demo
@@ -379,7 +383,7 @@ killall -q cam_demo 2>/dev/null || true
 --url <path>       RTSP path，默认 /PRR
 --rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
---diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息
+--diagnostics      输出source liveness、每路送帧耗时和时间戳 skew 诊断信息
 --max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
@@ -492,6 +496,7 @@ avg_frame_rate=30/1
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
 - `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `prrtsp_stream_send()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
+- `source frame_sets_seen` / `stale_ms` / `liveness_timeout_ms`：开启 `--diagnostics` 后输出，表示 frame-set source 累计进度、距最近 frame-set 的间隔和 fail-closed 超时；source 超时会输出 `fatal: liveness stage=source_matcher ...`
 
 ### ICM ABI v2边界
 
