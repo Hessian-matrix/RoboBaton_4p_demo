@@ -32,6 +32,7 @@ open_source_demo/
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
 │   ├── rosbag_info.py
+│   ├── rosbag_extract.py
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
@@ -280,6 +281,14 @@ save_data:
 python3 scripts/rosbag_info.py /data/run.bag
 python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
 ```
+
+将已完成索引的 `.bag` 或 `.partial.bag` 解包为 IMU CSV、相机参数和四路 JPEG：
+
+```bash
+python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
+```
+
+输出目录必须不存在；脚本成功后生成 `imu.csv`、`camera_params.yaml`、`conversion_summary.json` 和 `camera0` 到 `camera3` 四个目录。`imu.csv` 保存消息时间戳、sequence、frame ID、姿态占位值、角速度、线加速度及其协方差。JPEG 默认命名为 `<图像消息时间戳ns>.jpg`；同一相机时间戳重复时追加消息 sequence。`camera_params.yaml` 直接反映 bag 中的 `CameraInfo`，当前未标定录包仍会输出零标定矩阵。脚本只依赖 Python 标准库，支持当前未压缩且已完成索引的 ROS1 bag v2.0。
 
 当前 Host fake、AArch64 构建和运行包 ABI 校验已经通过；四路 JPEG context 与四路 RTSP encoder 的板端并发、持续吞吐和 JPEG 质量仍待目标板验收，不能把 Host/package PASS 当作 board PASS。
 

@@ -32,6 +32,7 @@ open_source_demo/
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
 │   ├── rosbag_info.py
+│   ├── rosbag_extract.py
 │   ├── package_runtime.sh
 │   └── verify_runtime_package.py
 └── src/
@@ -366,6 +367,14 @@ Inspect metadata without a ROS installation:
 python3 scripts/rosbag_info.py /data/run.bag
 python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
 ```
+
+Extract an indexed `.bag` or `.partial.bag` into IMU CSV, camera parameters, and four JPEG streams:
+
+```bash
+python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
+```
+
+The output directory must not exist. On success it contains `imu.csv`, `camera_params.yaml`, `conversion_summary.json`, and `camera0` through `camera3`. `imu.csv` preserves the message timestamp, sequence, frame ID, orientation placeholder, angular velocity, linear acceleration, and all covariance fields. JPEG files use `<image-message-timestamp-ns>.jpg`; a repeated timestamp for the same camera receives the message sequence suffix. `camera_params.yaml` reflects the recorded `CameraInfo` exactly, so bags recorded without calibration still contain zero calibration matrices. The tool uses only the Python standard library and supports the current uncompressed, indexed ROS1 bag v2.0 output.
 
 Host fakes, AArch64 build, and package ABI validation pass. Concurrent four-JPEG plus four-RTSP hardware capacity, sustained throughput, and JPEG quality remain board-pending; Host/package PASS is not board PASS.
 

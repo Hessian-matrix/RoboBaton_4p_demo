@@ -10,7 +10,7 @@ import re
 import struct
 import sys
 import time
-from typing import Any
+from typing import Any, Iterator
 
 
 BAG_MAGIC = b"#ROSBAG V2.0\n"
@@ -43,6 +43,19 @@ class ConnectionInfo:
     datatype: str
     md5sum: str
     message_definition: str
+
+
+@dataclass(frozen=True)
+class BagMessage:
+    """One uncompressed ROS1 bag message record."""
+
+    connection: ConnectionInfo
+    stamp: tuple[int, int]
+    payload: bytes
+
+    @property
+    def timestamp_ns(self) -> int:
+        return self.stamp[0] * 1_000_000_000 + self.stamp[1]
 
 
 @dataclass
@@ -175,6 +188,34 @@ class BagReader:
                 ) from exc
             fields[name] = raw_field[separator + 1 :]
         return fields
+
+
+def parse_header_bytes(header: bytes, context: str) -> dict[str, bytes]:
+    """Parse a ROS bag record header already held in memory."""
+    fields: dict[str, bytes] = {}
+    cursor = 0
+    header_len = len(header)
+    while cursor < header_len:
+        if cursor + 4 > header_len:
+            raise BagInfoError(f"malformed bag: {context} header field length is truncated")
+        field_len = struct.unpack_from("<I", header, cursor)[0]
+        cursor += 4
+        field_end = cursor + field_len
+        if field_end > header_len:
+            raise BagInfoError(f"malformed bag: {context} header field overruns header")
+        raw_field = header[cursor:field_end]
+        cursor = field_end
+        separator = raw_field.find(b"=")
+        if separator <= 0:
+            raise BagInfoError(f"malformed bag: {context} header field has no name")
+        try:
+            name = raw_field[:separator].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise BagInfoError(
+                f"malformed bag: {context} header field name is not ASCII"
+            ) from exc
+        fields[name] = raw_field[separator + 1 :]
+    return fields
 
 
 def field_u8(fields: dict[str, bytes], name: str, context: str) -> int:
@@ -340,6 +381,105 @@ def scan_chunk_region(
     if reader.tell() != index_pos:
         raise BagInfoError(f"malformed bag: reader stopped at {reader.tell()}, expected index_pos {index_pos}")
     return chunk_headers, indexes
+
+
+def _iter_chunk_messages(
+    payload: bytes, chunk_pos: int, connections: dict[int, ConnectionInfo]
+) -> Iterator[BagMessage]:
+    cursor = 0
+    payload_size = len(payload)
+    while cursor < payload_size:
+        record_start = cursor
+        if cursor + 4 > payload_size:
+            raise BagInfoError(f"truncated bag: chunk at {chunk_pos} record header length")
+        header_len = struct.unpack_from("<I", payload, cursor)[0]
+        cursor += 4
+        header_end = cursor + header_len
+        if header_end > payload_size:
+            raise BagInfoError(f"truncated bag: chunk at {chunk_pos} record header")
+        fields = parse_header_bytes(
+            payload[cursor:header_end], f"chunk at {chunk_pos} record at {record_start}"
+        )
+        cursor = header_end
+        if cursor + 4 > payload_size:
+            raise BagInfoError(f"truncated bag: chunk at {chunk_pos} record data length")
+        data_len = struct.unpack_from("<I", payload, cursor)[0]
+        cursor += 4
+        data_end = cursor + data_len
+        if data_end > payload_size:
+            raise BagInfoError(f"truncated bag: chunk at {chunk_pos} record payload")
+        context = f"chunk at {chunk_pos} record at {record_start}"
+        if field_u8(fields, "op", context) != OP_MSG_DATA:
+            raise BagInfoError(f"malformed bag: {context} is not a message record")
+        conn_id = field_u32(fields, "conn", context)
+        connection = connections.get(conn_id)
+        if connection is None:
+            raise BagInfoError(f"malformed bag: {context} references connection {conn_id}")
+        stamp = field_time(fields, "time", context)
+        yield BagMessage(connection=connection, stamp=stamp, payload=payload[cursor:data_end])
+        cursor = data_end
+
+
+def iter_bag_messages(path_arg: str | Path) -> Iterator[BagMessage]:
+    """Yield message records from a finalized, uncompressed ROS1 bag in file order."""
+    path = Path(path_arg)
+    if not path.exists():
+        raise BagInfoError("does not exist")
+    reader = BagReader(path)
+    try:
+        magic = reader.read_exact(len(BAG_MAGIC), "version line")
+        if magic != BAG_MAGIC:
+            raise BagInfoError("unsupported bag version: expected #ROSBAG V2.0")
+        file_header = reader.parse_header("file header")
+        if field_u8(file_header, "op", "file header") != OP_FILE_HEADER:
+            raise BagInfoError("malformed bag: first record is not a file header")
+        index_pos = field_u64(file_header, "index_pos", "file header")
+        chunk_count = field_u32(file_header, "chunk_count", "file header")
+        padding_len = reader.read_u32("file header data length")
+        reader.skip(padding_len, "file header data")
+        if index_pos == 0:
+            raise UnindexedBagError("bag has no finalized index_pos")
+        if index_pos < reader.tell() or index_pos > reader.size:
+            raise BagInfoError(f"malformed bag: index_pos {index_pos} outside indexed region")
+
+        chunk_region_start = reader.tell()
+        connections, chunks = scan_index_region(reader, index_pos)
+        if chunk_count != len(chunks):
+            raise BagInfoError(
+                f"malformed bag: file header chunk_count {chunk_count} != parsed {len(chunks)}"
+            )
+        chunk_positions = {chunk.pos for chunk in chunks}
+        reader.seek(chunk_region_start)
+        seen_chunks: set[int] = set()
+        while reader.tell() < index_pos:
+            record_start = reader.tell()
+            fields = reader.parse_header(f"record at {record_start}")
+            op = field_u8(fields, "op", f"record at {record_start}")
+            data_len = reader.read_u32(f"record at {record_start} data length")
+            if record_start not in chunk_positions and op == OP_CHUNK:
+                raise BagInfoError(f"malformed bag: chunk at {record_start} is absent from index")
+            if op == OP_CHUNK:
+                compression = field_string(fields, "compression", f"chunk at {record_start}")
+                uncompressed_size = field_u32(fields, "size", f"chunk at {record_start}")
+                if compression != "none":
+                    raise BagInfoError(f"unsupported compression: {compression}")
+                if uncompressed_size != data_len:
+                    raise BagInfoError(
+                        f"malformed bag: uncompressed chunk at {record_start} size mismatch"
+                    )
+                chunk_payload = reader.read_exact(data_len, f"chunk payload at {record_start}")
+                seen_chunks.add(record_start)
+                yield from _iter_chunk_messages(chunk_payload, record_start, connections)
+            elif op == OP_INDEX_DATA:
+                reader.skip(data_len, f"index entries at {record_start}")
+            else:
+                raise BagInfoError(f"malformed bag: unexpected op {op} before index_pos")
+        if reader.tell() != index_pos:
+            raise BagInfoError(f"malformed bag: reader stopped at {reader.tell()}, expected index_pos {index_pos}")
+        if seen_chunks != chunk_positions:
+            raise BagInfoError("malformed bag: indexed chunk set does not match data chunk set")
+    finally:
+        reader.close()
 
 
 def scan_index_region(reader: BagReader, index_pos: int) -> tuple[dict[int, ConnectionInfo], list[ChunkInfo]]:
