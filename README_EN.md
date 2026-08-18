@@ -26,6 +26,11 @@ open_source_demo/
 │   └── prrtsp_v2.h
 ├── lib/                     # Delivered libraries used for source cross-builds
 ├── scripts/
+│   ├── env_setup/
+│   │   ├── configure_x5_ptp_master.sh
+│   │   ├── enable_uart_autologin.sh
+│   │   ├── x5_sync_time.sh
+│   │   └── x5-ion-mem.run
 │   ├── build_cam_demo.sh
 │   ├── build_sensor_demo.sh
 │   ├── build_imu_reader_demo.sh
@@ -45,6 +50,8 @@ open_source_demo/
     ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
+
+`scripts/env_setup/` contains optional board-side environment helpers for NTP time sync, X5 PTP master setup, debug-UART root autologin toggling, and `x5-ion-mem` installation. They serve user deployment and troubleshooting only; they are not internal tests, fixtures, or release evidence.
 
 `cam_demo.cpp` keeps the main flow and user extension hooks. Command-line parsing, RTSP wrapping, frame queues, and background streaming are split into `cam_demo_config.*`, `cam_demo_rtsp.*`, and `cam_demo_pipeline.*` for easier reading.
 
@@ -341,6 +348,7 @@ On exit it prints an IMU summary such as:
 ```text
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
+`effective_hz` is gated as a ppm error against the 1000Hz target. The V1 limit is absolute error `<=12000ppm`, equivalent to an approximate stable window of `988.0-1012.0Hz`.
 
 ### ROS1 bag persistence and X5 hardware JPEG
 
