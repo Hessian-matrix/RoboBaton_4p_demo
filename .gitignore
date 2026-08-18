@@ -5,3 +5,5 @@ regression_logs/*
 .package-build-icm42688/
 __pycache__/
 *.py[cod]
+build_x5_jpeg_fix/
+build_x5_origin_overlay/

@@ -67,7 +67,9 @@ uint64_t SteadyClockNowNs() {
   return timestamp_ns;
 }
 
-int RtspPortForChannel(int channel) { return kBaseRtspPort + channel; }
+int RtspPortForChannel(const Options& options, int channel) {
+  return options.rtsp_base_port + channel;
+}
 
 // 编码格式名称统一用于用户可见的状态和日志输出。
 const char* VideoCodecName(VideoCodec codec) noexcept {

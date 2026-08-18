@@ -25,6 +25,7 @@ namespace {
 constexpr int32_t kErrorCallback = -1001;
 constexpr int32_t kErrorWorker = -1003;
 constexpr int32_t kErrorJoin = -1004;
+constexpr int32_t kErrorSourceLiveness = -1005;
 
 class FrameQueue {
  public:
@@ -95,7 +96,7 @@ class GroupSendBarrier {
     current_group_ = 0U;
     waiting_mask_ = 0U;
     arrived_mask_ = 0U;
-    sent_mask_ = 0U;
+    processed_mask_ = 0U;
     waiting_groups_.fill(0U);
     stopped_ = false;
   }
@@ -140,16 +141,16 @@ class GroupSendBarrier {
     return !stopped_;
   }
 
-  void MarkSent(int camera_id, uint64_t group_id) noexcept {
+  void MarkProcessed(int camera_id, uint64_t group_id) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_ || group_id != current_group_) {
       return;
     }
-    sent_mask_ |= 1U << static_cast<uint32_t>(camera_id);
-    if (sent_mask_ == mask_) {
+    processed_mask_ |= 1U << static_cast<uint32_t>(camera_id);
+    if (processed_mask_ == mask_) {
       current_group_ = 0U;
       arrived_mask_ = 0U;
-      sent_mask_ = 0U;
+      processed_mask_ = 0U;
       condition_.notify_all();
     }
   }
@@ -169,7 +170,7 @@ class GroupSendBarrier {
   uint32_t mask_ = 0U;
   uint32_t waiting_mask_ = 0U;
   uint32_t arrived_mask_ = 0U;
-  uint32_t sent_mask_ = 0U;
+  uint32_t processed_mask_ = 0U;
   uint64_t current_group_ = 0U;
   bool stopped_ = false;
 };
@@ -254,6 +255,26 @@ bool WriteDiagnostic(const char* data, size_t size) noexcept {
   return true;
 }
 
+uint64_t MsToNs(uint32_t milliseconds) noexcept {
+  return static_cast<uint64_t>(milliseconds) * 1000000ULL;
+}
+
+uint32_t RuntimeMonitorIntervalMs(const Options& options) noexcept {
+  const uint32_t diagnostic_ms =
+      static_cast<uint32_t>(std::max(options.diagnostic_interval_ms, 1));
+  if (options.source_liveness_timeout_ms == 0U) {
+    return diagnostic_ms;
+  }
+  const uint32_t liveness_poll_ms =
+      std::max<uint32_t>(20U,
+                         std::min<uint32_t>(100U,
+                                            options.source_liveness_timeout_ms / 10U));
+  if (!options.diagnostics) {
+    return liveness_poll_ms;
+  }
+  return std::min<uint32_t>(diagnostic_ms, liveness_poll_ms);
+}
+
 }  // namespace
 
 class FramePipeline::Impl {
@@ -290,15 +311,15 @@ class FramePipeline::Impl {
     }
   }
 
-  void StartDiagnosticsIfEnabled() {
-    if (!options_.diagnostics) {
+  void StartRuntimeMonitor() {
+    if (!options_.diagnostics && options_.source_liveness_timeout_ms == 0U) {
       return;
     }
     try {
-      diagnostics_worker_ = std::thread(&Impl::DiagnosticsEntry, this);
-      diagnostics_owned_.store(true, std::memory_order_release);
+      monitor_worker_ = std::thread(&Impl::RuntimeMonitorEntry, this);
+      monitor_owned_.store(true, std::memory_order_release);
     } catch (...) {
-      // diagnostics 创建失败只停止 consumer，不发布空闲态 SC stop 请求。
+      // monitor 创建失败只停止 consumer，不发布空闲态 SC stop 请求。
       RecordFailure(kErrorWorker);
       BeginShutdown(false);
       throw;
@@ -315,6 +336,11 @@ class FramePipeline::Impl {
     config.timeout_ms = options_.frame_set_timeout_ms;
     config.max_skew_ns = options_.frame_set_max_skew_ns;
     return config;
+  }
+
+  void MarkSourceStarted() noexcept {
+    last_source_progress_ns_.store(SteadyClockNowNs(), std::memory_order_release);
+    source_started_.store(true, std::memory_order_release);
   }
 
   void HandleFrameSet(const sc132_frame_set_t& frame_set) {
@@ -394,6 +420,7 @@ class FramePipeline::Impl {
     }
 
     CaptureFrameSetDiagnostics(mapped_frame_set);
+    RecordSourceProgress();
     if (hooks_.on_frame_set != nullptr) {
       hooks_.on_frame_set(mapped_frame_set, hooks_.user);
     }
@@ -465,20 +492,20 @@ class FramePipeline::Impl {
       }
     }
 
-    if (diagnostics_owned_.load(std::memory_order_acquire)) {
+    if (monitor_owned_.load(std::memory_order_acquire)) {
       bool joined = false;
       try {
         if (hooks_.join_thread != nullptr) {
-          joined = hooks_.join_thread(diagnostics_worker_, hooks_.user);
+          joined = hooks_.join_thread(monitor_worker_, hooks_.user);
         } else {
-          diagnostics_worker_.join();
+          monitor_worker_.join();
           joined = true;
         }
       } catch (...) {
         joined = false;
       }
       if (joined) {
-        diagnostics_owned_.store(false, std::memory_order_release);
+        monitor_owned_.store(false, std::memory_order_release);
       } else {
         success = false;
       }
@@ -500,7 +527,7 @@ class FramePipeline::Impl {
         return true;
       }
     }
-    return diagnostics_worker_.joinable();
+    return monitor_worker_.joinable();
   }
 
   int32_t FirstError() const noexcept { return first_error_.load(std::memory_order_acquire); }
@@ -514,6 +541,30 @@ class FramePipeline::Impl {
 
   bool IsQuiescent() const noexcept { return quiescent_.load(std::memory_order_acquire); }
 
+  bool RtspPreviewComplete() const noexcept {
+    for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+      if (CameraMaskContains(options_.camera_mask, camera_id) &&
+          rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  uint64_t RtspPreviewDroppedFrames(int camera_id) const noexcept {
+    if (camera_id < 0 || camera_id >= kMaxChannels) {
+      return 0U;
+    }
+    return rtsp_preview_dropped_[camera_id].load(std::memory_order_acquire);
+  }
+
+  int32_t RtspPreviewLastError(int camera_id) const noexcept {
+    if (camera_id < 0 || camera_id >= kMaxChannels) {
+      return PRRTSP_E_INVALID_ARGUMENT;
+    }
+    return rtsp_preview_last_error_[camera_id].load(std::memory_order_acquire);
+  }
+
 #ifdef RELEASE008_TESTING
   size_t OwnedThreadCountForTesting() const noexcept {
     size_t count = 0U;
@@ -523,7 +574,7 @@ class FramePipeline::Impl {
         ++count;
       }
     }
-    if (diagnostics_owned_.load(std::memory_order_acquire) || diagnostics_worker_.joinable()) {
+    if (monitor_owned_.load(std::memory_order_acquire) || monitor_worker_.joinable()) {
       ++count;
     }
     return count;
@@ -536,12 +587,94 @@ class FramePipeline::Impl {
                                             : raw_timestamp_ns;
   }
 
-  uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
-    return Sc132TimestampsAreMonotonicRaw(options_) ? MapRawTimestampNs(timestamp_ns)
-                                                   : timestamp_ns;
+  bool Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(uint64_t timestamp_ns) const noexcept {
+    if (!Sc132TimestampsAreMonotonicRaw(options_) || options_.system_clock == nullptr) {
+      return false;
+    }
+    const uint64_t raw_start_ns = options_.system_clock->monotonic_raw_start_ns();
+    const uint64_t realtime_start_ns = options_.system_clock->realtime_start_ns();
+    if (realtime_start_ns <= raw_start_ns) {
+      return false;
+    }
+    const uint64_t realtime_epoch_midpoint_ns =
+        raw_start_ns + (realtime_start_ns - raw_start_ns) / 2ULL;
+    return timestamp_ns >= realtime_epoch_midpoint_ns;
   }
 
+  uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
+    if (!Sc132TimestampsAreMonotonicRaw(options_)) {
+      return timestamp_ns;
+    }
+    if (Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(timestamp_ns)) {
+      // software_gpio 应输出 MONOTONIC_RAW；接近 REALTIME epoch 说明底层回退到了系统时钟，继续套用 RAW 偏移会把相机时间写到错误 epoch。
+      throw std::runtime_error("SC132 software GPIO timestamp is not MONOTONIC_RAW");
+    }
+    return MapRawTimestampNs(timestamp_ns);
+  }
+
+
+  bool ShouldDegradeRtspPreview(int32_t result) const noexcept {
+    if (options_.rtsp_preview_failure_policy != RtspPreviewFailurePolicy::kDegradePreview) {
+      return false;
+    }
+    return result == PRRTSP_E_TIMEOUT || result == PRRTSP_E_RTSP ||
+           result == PRRTSP_E_CODEC || result == PRRTSP_E_STATE ||
+           result == PRRTSP_E_CLEANUP_REQUIRED;
+  }
+
+  void RecordRtspPreviewDrop(int camera_id, int32_t result) noexcept {
+    rtsp_preview_last_error_[camera_id].store(result, std::memory_order_release);
+    rtsp_preview_dropped_[camera_id].fetch_add(1U, std::memory_order_acq_rel);
+    if (!rtsp_preview_degraded_[camera_id].exchange(true, std::memory_order_acq_rel)) {
+      std::fprintf(stderr, "warning: RTSP preview degraded camera=%d status=%d\n", camera_id,
+                   result);
+      (void)std::fflush(stderr);
+    }
+  }
   uint64_t PipelineNowNs() const { return MapRawTimestampNs(SteadyClockNowNs()); }
+
+  void RecordSourceProgress() noexcept {
+    source_frame_sets_seen_.fetch_add(1U, std::memory_order_acq_rel);
+    last_source_progress_ns_.store(SteadyClockNowNs(), std::memory_order_release);
+  }
+
+  uint64_t SourceStaleMs(uint64_t now_ns) const noexcept {
+    if (!source_started_.load(std::memory_order_acquire)) {
+      return 0U;
+    }
+    const uint64_t last_ns = last_source_progress_ns_.load(std::memory_order_acquire);
+    if (last_ns == 0U || now_ns <= last_ns) {
+      return 0U;
+    }
+    return (now_ns - last_ns) / 1000000ULL;
+  }
+
+  bool CheckSourceLiveness(uint64_t now_ns) noexcept {
+    if (options_.source_liveness_timeout_ms == 0U ||
+        !source_started_.load(std::memory_order_acquire) ||
+        shutdown_started_.load(std::memory_order_acquire) ||
+        first_error_.load(std::memory_order_acquire) != 0) {
+      return true;
+    }
+    const uint64_t last_ns = last_source_progress_ns_.load(std::memory_order_acquire);
+    if (last_ns == 0U || now_ns < last_ns ||
+        now_ns - last_ns < MsToNs(options_.source_liveness_timeout_ms)) {
+      return true;
+    }
+    const uint64_t stale_ms = (now_ns - last_ns) / 1000000ULL;
+    if (!source_liveness_reported_.exchange(true, std::memory_order_acq_rel)) {
+      std::fprintf(stderr,
+                   "fatal: liveness stage=source_matcher source_frame_sets_seen=%llu "
+                   "stale_ms=%llu timeout_ms=%u\n",
+                   static_cast<unsigned long long>(
+                       source_frame_sets_seen_.load(std::memory_order_acquire)),
+                   static_cast<unsigned long long>(stale_ms),
+                   options_.source_liveness_timeout_ms);
+      (void)std::fflush(stderr);
+    }
+    RequestFailure(kErrorSourceLiveness);
+    return false;
+  }
 
   void CaptureFrameSetDiagnostics(const sc132_frame_set_t& frame_set) noexcept {
     FrameSetDiagnosticSnapshot snapshot;
@@ -595,6 +728,7 @@ class FramePipeline::Impl {
     std::array<char, 4096> output{};
     size_t used = 0U;
     FrameSetDiagnosticSnapshot frame_set_snapshot;
+    const uint64_t diagnostic_now_ns = SteadyClockNowNs();
     {
       std::lock_guard<std::mutex> lock(frame_set_diagnostics_mutex_);
       frame_set_snapshot = frame_set_diagnostics_;
@@ -631,6 +765,18 @@ class FramePipeline::Impl {
         return false;
       }
     }
+    if (source_started_.load(std::memory_order_acquire) ||
+        source_frame_sets_seen_.load(std::memory_order_acquire) > 0U) {
+      if (!AppendDiagnostic(
+              &output, &used,
+              "source frame_sets_seen=%llu stale_ms=%llu liveness_timeout_ms=%u\n",
+              static_cast<unsigned long long>(
+                  source_frame_sets_seen_.load(std::memory_order_acquire)),
+              static_cast<unsigned long long>(SourceStaleMs(diagnostic_now_ns)),
+              options_.source_liveness_timeout_ms)) {
+        return false;
+      }
+    }
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
       if (!CameraMaskContains(options_.camera_mask, camera_id)) {
@@ -638,6 +784,12 @@ class FramePipeline::Impl {
       }
       ChannelDiagnosticValues diagnostic;
       uint64_t total_sent = 0U;
+      const uint64_t preview_dropped =
+          rtsp_preview_dropped_[camera_id].load(std::memory_order_acquire);
+      const bool preview_degraded =
+          rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire);
+      const int32_t preview_last_error =
+          rtsp_preview_last_error_[camera_id].load(std::memory_order_acquire);
       // 锁内复制并清零区间字段，避免一次发送被拆分到两个统计周期。
       {
         ChannelDiagnosticState& state = channel_diagnostics_[camera_id];
@@ -648,7 +800,7 @@ class FramePipeline::Impl {
         state.values.interval_send_max_ns = 0U;
         total_sent = total_sent_[camera_id].load(std::memory_order_relaxed);
       }
-      if (total_sent == 0U) {
+      if (total_sent == 0U && preview_dropped == 0U) {
         continue;
       }
 
@@ -673,7 +825,8 @@ class FramePipeline::Impl {
               "queue=%zu/%zu queue_full_rejects=%llu pipeline_delay_ms=%llu "
               "camera_ts_ns=%llu camera_ts_domain=%s rtsp_ts_ns=%llu "
               "rtsp_ts_domain=%s send_avg_ms=%.2f send_max_ms=%.2f "
-              "rtsp_endpoint=ch%d rtsp_port=%d\n",
+              "rtsp_endpoint=ch%d rtsp_port=%d rtsp_degraded=%d "
+              "rtsp_preview_dropped=%llu rtsp_last_error=%d\n",
               camera_id, fps,
               static_cast<unsigned long long>(diagnostic.last_sequence),
               static_cast<unsigned long long>(diagnostic.last_group_id),
@@ -686,7 +839,8 @@ class FramePipeline::Impl {
               static_cast<unsigned long long>(diagnostic.last_rtsp_timestamp_ns),
               TimestampDomainName(diagnostic.last_rtsp_timestamp_domain),
               send_average_ms, send_max_ms, camera_id + 1,
-              RtspPortForChannel(camera_id))) {
+              RtspPortForChannel(options_, camera_id), preview_degraded ? 1 : 0,
+              static_cast<unsigned long long>(preview_dropped), preview_last_error)) {
         return false;
       }
     }
@@ -706,6 +860,11 @@ class FramePipeline::Impl {
         if (!group_barrier_.Wait(camera_id, frame.group_id)) {
           break;
         }
+        if (rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire)) {
+          RecordRtspPreviewDrop(camera_id, RtspPreviewLastError(camera_id));
+          group_barrier_.MarkProcessed(camera_id, frame.group_id);
+          continue;
+        }
         const SendDiagnosticSample sample{frame.sequence,
                                           frame.group_id,
                                           frame.group_max_skew_ns,
@@ -718,11 +877,16 @@ class FramePipeline::Impl {
         const int32_t send_result = rtsp_->Send(camera_id, frame);
         const uint64_t send_complete_ns = PipelineNowNs();
         if (send_result != PRRTSP_OK) {
+          if (ShouldDegradeRtspPreview(send_result)) {
+            RecordRtspPreviewDrop(camera_id, send_result);
+            group_barrier_.MarkProcessed(camera_id, sample.group_id);
+            continue;
+          }
           // 保留原始 send status，失败帧 release 且不计成功。
           RequestFailure(send_result);
           break;
         }
-        group_barrier_.MarkSent(camera_id, sample.group_id);
+        group_barrier_.MarkProcessed(camera_id, sample.group_id);
         RecordSuccessfulSend(camera_id, sample, send_complete_ns - send_start_ns,
                              send_complete_ns - sample.enqueue_timestamp_ns);
       }
@@ -731,23 +895,34 @@ class FramePipeline::Impl {
     }
   }
 
-  void DiagnosticsEntry() noexcept {
+  void RuntimeMonitorEntry() noexcept {
     try {
+      const uint32_t diagnostic_interval_ms =
+          static_cast<uint32_t>(std::max(options_.diagnostic_interval_ms, 1));
+      const uint32_t monitor_interval_ms = RuntimeMonitorIntervalMs(options_);
       uint64_t previous_report_ns = SteadyClockNowNs();
+      uint64_t next_report_ns = previous_report_ns + MsToNs(diagnostic_interval_ms);
       std::unique_lock<std::mutex> lock(diagnostics_mutex_);
       while (!shutdown_started_.load(std::memory_order_acquire)) {
         const bool stopping = diagnostics_condition_.wait_for(
-            lock, std::chrono::milliseconds(options_.diagnostic_interval_ms),
+            lock, std::chrono::milliseconds(monitor_interval_ms),
             [&] { return shutdown_started_.load(std::memory_order_acquire); });
         if (stopping) {
           break;
         }
         const uint64_t now_ns = SteadyClockNowNs();
+        if (!CheckSourceLiveness(now_ns)) {
+          break;
+        }
+        if (!options_.diagnostics || now_ns < next_report_ns) {
+          continue;
+        }
         const double elapsed_seconds = now_ns > previous_report_ns
                                            ? static_cast<double>(now_ns - previous_report_ns) /
                                                  1000000000.0
                                            : 0.0;
         previous_report_ns = now_ns;
+        next_report_ns = now_ns + MsToNs(diagnostic_interval_ms);
         lock.unlock();
         if (!EmitDiagnostics(elapsed_seconds)) {
           return;
@@ -765,10 +940,13 @@ class FramePipeline::Impl {
   std::array<FrameQueue, kMaxChannels> queues_;
   GroupSendBarrier group_barrier_;
   std::array<std::thread, kMaxChannels> workers_;
-  std::thread diagnostics_worker_;
+  std::thread monitor_worker_;
   std::array<std::atomic<bool>, kMaxChannels> worker_owned_{};
-  std::atomic<bool> diagnostics_owned_{false};
+  std::atomic<bool> monitor_owned_{false};
   std::array<std::atomic<uint64_t>, kMaxChannels> total_sent_{};
+  std::array<std::atomic<bool>, kMaxChannels> rtsp_preview_degraded_{};
+  std::array<std::atomic<uint64_t>, kMaxChannels> rtsp_preview_dropped_{};
+  std::array<std::atomic<int32_t>, kMaxChannels> rtsp_preview_last_error_{};
   std::array<ChannelDiagnosticState, kMaxChannels> channel_diagnostics_;
   std::mutex frame_set_diagnostics_mutex_;
   FrameSetDiagnosticSnapshot frame_set_diagnostics_;
@@ -777,6 +955,10 @@ class FramePipeline::Impl {
   std::atomic<bool> sc_stop_requested_{false};
   std::atomic<bool> quiescent_{false};
   std::atomic<int32_t> first_error_{0};
+  std::atomic<bool> source_started_{false};
+  std::atomic<uint64_t> last_source_progress_ns_{0U};
+  std::atomic<uint64_t> source_frame_sets_seen_{0U};
+  std::atomic<bool> source_liveness_reported_{false};
   std::mutex diagnostics_mutex_;
   std::condition_variable diagnostics_condition_;
 };
@@ -795,7 +977,8 @@ FramePipeline::~FramePipeline() {
 }
 
 void FramePipeline::StartWorkers() { impl_->StartWorkers(); }
-void FramePipeline::StartDiagnosticsIfEnabled() { impl_->StartDiagnosticsIfEnabled(); }
+void FramePipeline::StartRuntimeMonitor() { impl_->StartRuntimeMonitor(); }
+void FramePipeline::MarkSourceStarted() noexcept { impl_->MarkSourceStarted(); }
 sc132_frame_set_config_t FramePipeline::MakeFrameSetConfig() {
   return impl_->MakeFrameSetConfig(this);
 }
@@ -808,6 +991,13 @@ uint64_t FramePipeline::TotalSentFrames(int camera_id) const noexcept {
   return impl_->TotalSentFrames(camera_id);
 }
 bool FramePipeline::IsQuiescent() const noexcept { return impl_->IsQuiescent(); }
+bool FramePipeline::RtspPreviewComplete() const noexcept { return impl_->RtspPreviewComplete(); }
+uint64_t FramePipeline::RtspPreviewDroppedFrames(int camera_id) const noexcept {
+  return impl_->RtspPreviewDroppedFrames(camera_id);
+}
+int32_t FramePipeline::RtspPreviewLastError(int camera_id) const noexcept {
+  return impl_->RtspPreviewLastError(camera_id);
+}
 #ifdef RELEASE008_TESTING
 size_t FramePipeline::OwnedThreadCountForTesting() const noexcept {
   return impl_->OwnedThreadCountForTesting();
@@ -829,26 +1019,43 @@ void FramePipeline::FrameSetCallback(const sc132_frame_set_t* frame_set, void* u
   }
 }
 
-bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept {
+Sc132ShutdownResult FinishSc132ShutdownDetailed(
+    FramePipeline* pipeline, RtspChannels* rtsp,
+    Sc132BeforeBlockingStopHook before_blocking_stop,
+    void* before_blocking_stop_user) noexcept {
+  Sc132ShutdownResult result;
   if (pipeline == nullptr || rtsp == nullptr) {
-    return false;
+    return result;
   }
   pipeline->BeginShutdown(true);
-  if (!pipeline->Join()) {
+  result.consumer_join_ok = pipeline->Join();
+  if (!result.consumer_join_ok) {
     std::cerr << "fatal: consumer join failed; preserving producer ownership\n";
-    return false;
+    return result;
   }
-  const bool status_captured = rtsp->CaptureStatuses();
+  result.ownership_quiescent = pipeline->IsQuiescent();
+  result.rtsp_status_ok = rtsp->CaptureStatuses();
   // RTSP close 先归还 encoder 持有的最后一帧，再允许 SC132 等待 retained frame 归零。
-  if (!rtsp->CloseReverse()) {
+  result.rtsp_close_ok = rtsp->CloseReverse();
+  if (!result.rtsp_close_ok) {
     std::cerr << "fatal: RTSP close failed; preserving SC132 producer ownership\n";
-    return false;
+    return result;
+  }
+  if (before_blocking_stop != nullptr) {
+    before_blocking_stop(result, before_blocking_stop_user);
   }
   // 首次执行常规 cleanup；若底层 join 瞬时失败并保留 STOPPING，第二次按公共合同重试。
   // 已完成时 sc132_stop 按 generation 状态幂等返回，不重复 teardown。
   sc132_stop();
   sc132_stop();
-  return status_captured;
+  result.sc132_cleanup_reached = true;
+  return result;
+}
+
+bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept {
+  const Sc132ShutdownResult result = FinishSc132ShutdownDetailed(pipeline, rtsp);
+  return result.consumer_join_ok && result.rtsp_status_ok && result.rtsp_close_ok &&
+         result.sc132_cleanup_reached && result.ownership_quiescent;
 }
 
 }  // namespace robobaton_demo

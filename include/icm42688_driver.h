@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 #define ICM42688_ABI_VERSION_MAJOR 2U
-#define ICM42688_ABI_VERSION_MINOR 0U
+#define ICM42688_ABI_VERSION_MINOR 1U
 
 typedef struct icm42688_handle icm42688_handle_t;
 
@@ -60,6 +60,21 @@ typedef struct icm42688_raw_sample {
   int16_t reserved;
 } icm42688_raw_sample_t;
 
+typedef struct icm42688_runtime_health {
+  uint32_t struct_size;
+  uint32_t session_generation;
+  uint64_t published_samples;
+  uint32_t gpio_event_gap_count;
+  uint32_t fifo_overflow_count;
+  uint32_t mapper_failure_count;
+  uint32_t uncertainty_over_200_drop_count;
+  uint32_t max_consecutive_timing_drop_count;
+  uint32_t reserved[3];
+} icm42688_runtime_health_t;
+
+#define ICM42688_RUNTIME_HEALTH_INIT \
+  { sizeof(icm42688_runtime_health_t), 0U, 0U, 0U, 0U, 0U, 0U, 0U, {0U} }
+
 typedef struct icm42688_sample {
   uint32_t struct_size;
   /* reserved0 复用为诊断字段，表示 driver 实际观测到的 20-bit TMST low rollover 累计数。 */
@@ -95,6 +110,9 @@ ICM42688_X5_API int icm42688_set_callback(icm42688_handle_t *handle,
 ICM42688_X5_API int icm42688_start(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_stop(icm42688_handle_t *handle);
 ICM42688_X5_API int icm42688_is_running(const icm42688_handle_t *handle);
+/* Valid only after a successful stop for the most recent start generation. */
+ICM42688_X5_API int icm42688_get_runtime_health(
+    const icm42688_handle_t *handle, icm42688_runtime_health_t *out_health);
 ICM42688_X5_API void icm42688_destroy(icm42688_handle_t *handle);
 /* Product release SemVer; returned storage is process-static and read-only. */
 ICM42688_X5_API const char *icm42688_get_version(void);

@@ -19,6 +19,9 @@ constexpr const char* kSc132Single60FpsProfile =
 struct ParseState {
   bool channels_set = false;
   bool camera_selector_set = false;
+  bool record_frame_skip_set = false;
+  bool record_bag_set = false;
+  bool record_mp4_set = false;
   int requested_channels = kMaxChannels;
 };
 
@@ -34,7 +37,9 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --codec <h264|h265> Encoder format, default h264\n"
             << "  --url <path>      RTSP URL path, default /PRR\n"
-            << "  --diagnostics     Print per-channel RTSP timing diagnostics\n"
+            << "  --rtsp-base-port <port> RTSP first channel port, default "
+            << kDefaultRtspBasePort << "\n"
+            << "  --diagnostics     Print source liveness and per-channel RTSP timing diagnostics\n"
             << "  --diag-interval-ms <ms> Diagnostics interval, default 1000\n"
             << "  --max-skew-ns <ns> Frame-set timestamp skew limit, default "
             << kDefaultFrameSetMaxSkewNs << "\n"
@@ -50,6 +55,9 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
     std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
+    std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
+    std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
+    std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
   }
   std::cout << "  -h, --help        Show this help\n";
 }
@@ -186,7 +194,7 @@ void ApplyCameraMask(Options* options, ParseState* state, uint32_t camera_mask) 
 }
 
 
-void ValidateOptions(const Options& options);
+void ValidateOptions(const Options& options, bool record_frame_skip_set);
 
 void ValidateSelectorState(const ParseState& state, const Options& options) {
   if (state.channels_set && state.camera_selector_set &&
@@ -211,7 +219,7 @@ void FinalizeParsedOptions(Options* options, const ParseState& config_state,
         std::min(options->imu_sample_rate_hz, kDefaultImuPrintRateHz);
   }
 
-  ValidateOptions(*options);
+  ValidateOptions(*options, cli_state.record_frame_skip_set);
 }
 
 // 功能：按 libicm42688 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
@@ -251,7 +259,7 @@ bool IsSupportedCameraFps(int fps) {
 // 输入：已解析的 Options。
 // 输出：无。
 // 异常：参数不合法时抛出 std::invalid_argument。
-void ValidateOptions(const Options& options) {
+void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   // 交付路径仅支持完整四目，内部诊断仅支持单颗物理 sensor。
   if (options.channels != 1 && options.channels != kMaxChannels) {
     throw std::invalid_argument("--channels is an internal debug option and only supports 1 or 4");
@@ -282,6 +290,10 @@ void ValidateOptions(const Options& options) {
       throw std::invalid_argument("--url contains a v2-forbidden character");
     }
   }
+  if (options.rtsp_base_port <= 0 ||
+      options.rtsp_base_port > kMaxRtspPort - (kMaxChannels - 1)) {
+    throw std::invalid_argument("--rtsp-base-port must keep four channel ports in 1..65535");
+  }
   if (options.rotate_degrees != 0 && options.rotate_degrees != 90 &&
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
@@ -302,6 +314,29 @@ void ValidateOptions(const Options& options) {
   if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
     throw std::invalid_argument(
         "--sample-rate-hz must be one of 25, 50, 100, 200, 500, 1000, or 2000");
+  }
+  if (options.record_frame_skip > 1U) {
+    throw std::invalid_argument("--record-frame-skip must be 0 or 1");
+  }
+  if (!options.record_bag_path.empty() && options.record_bag_path.front() != '/') {
+    throw std::invalid_argument("--record-bag/save_data.save_path path must be absolute");
+  }
+  if (!options.record_mp4_directory.empty() &&
+      options.record_mp4_directory.front() != '/') {
+    throw std::invalid_argument("--record-mp4-dir/save_data.save_path path must be absolute");
+  }
+  if (!options.record_bag_path.empty() && !options.record_mp4_directory.empty()) {
+    throw std::invalid_argument("ROS bag and MP4 recording are mutually exclusive");
+  }
+  if (record_frame_skip_set && options.record_bag_path.empty()) {
+    throw std::invalid_argument("--record-frame-skip requires --record-bag");
+  }
+  if (!options.record_mp4_directory.empty() && options.record_frame_skip != 0U) {
+    throw std::invalid_argument("MP4 recording does not support frame skip");
+  }
+  if (!options.record_mp4_directory.empty() &&
+      options.video_codec != VideoCodec::kH264) {
+    throw std::invalid_argument("MP4 recording requires --codec h264");
   }
   if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
@@ -355,6 +390,9 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       options.video_codec = ParseVideoCodec(RequireValue(argc, argv, &i, "--codec"));
     } else if (arg == "--url") {
       options.url = RequireValue(argc, argv, &i, "--url");
+    } else if (arg == "--rtsp-base-port") {
+      options.rtsp_base_port =
+          ParseInt(RequireValue(argc, argv, &i, "--rtsp-base-port"), "--rtsp-base-port");
     } else if (arg == "--rotate") {
       options.rotate_degrees = ParseInt(RequireValue(argc, argv, &i, "--rotate"), "--rotate");
     } else if (arg == "--diagnostics") {
@@ -387,6 +425,33 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       sensor_config_state.imu_print_rate_was_set = true;
     } else if (accept_imu_options && arg == "--print-metrics") {
       options.imu_print_metrics = true;
+    } else if (accept_imu_options && arg == "--record-bag") {
+      if (cli_parse_state.record_mp4_set) {
+        throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
+      }
+      options.record_bag_path = RequireValue(argc, argv, &i, "--record-bag");
+      if (options.record_bag_path.empty() || options.record_bag_path.front() != '/') {
+        throw std::invalid_argument("--record-bag path must be absolute");
+      }
+      options.record_mp4_directory.clear();
+      cli_parse_state.record_bag_set = true;
+    } else if (accept_imu_options && arg == "--record-mp4-dir") {
+      if (cli_parse_state.record_bag_set) {
+        throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
+      }
+      options.record_mp4_directory =
+          RequireValue(argc, argv, &i, "--record-mp4-dir");
+      if (options.record_mp4_directory.empty() ||
+          options.record_mp4_directory.front() != '/') {
+        throw std::invalid_argument("--record-mp4-dir path must be absolute");
+      }
+      options.record_bag_path.clear();
+      cli_parse_state.record_mp4_set = true;
+    } else if (accept_imu_options && arg == "--record-frame-skip") {
+      options.record_frame_skip =
+          ParseUint32(RequireValue(argc, argv, &i, "--record-frame-skip"),
+                      "--record-frame-skip");
+      cli_parse_state.record_frame_skip_set = true;
     } else if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0], accept_imu_options);
       std::exit(0);

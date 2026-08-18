@@ -36,7 +36,8 @@ class FramePipeline {
   FramePipeline& operator=(const FramePipeline&) = delete;
 
   void StartWorkers();
-  void StartDiagnosticsIfEnabled();
+  void StartRuntimeMonitor();
+  void MarkSourceStarted() noexcept;
   sc132_frame_set_config_t MakeFrameSetConfig();
   void BeginShutdown(bool request_sc_stop = true) noexcept;
   bool Join() noexcept;
@@ -51,12 +52,32 @@ class FramePipeline {
   // 功能：返回 worker/RTSP 运行阶段是否发生致命错误。
   bool HasFatalError() const;
 
+  bool RtspPreviewComplete() const noexcept;
+  uint64_t RtspPreviewDroppedFrames(int camera_id) const noexcept;
+  int32_t RtspPreviewLastError(int camera_id) const noexcept;
+
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 
   static void FrameSetCallback(const sc132_frame_set_t* frame_set, void* user) noexcept;
 };
+
+struct Sc132ShutdownResult {
+  bool consumer_join_ok = false;
+  bool rtsp_status_ok = false;
+  bool rtsp_close_ok = false;
+  bool sc132_cleanup_reached = false;
+  bool ownership_quiescent = false;
+};
+
+using Sc132BeforeBlockingStopHook = void (*)(const Sc132ShutdownResult& result,
+                                             void* user) noexcept;
+
+Sc132ShutdownResult FinishSc132ShutdownDetailed(
+    FramePipeline* pipeline, RtspChannels* rtsp,
+    Sc132BeforeBlockingStopHook before_blocking_stop = nullptr,
+    void* before_blocking_stop_user = nullptr) noexcept;
 
 // 关闭顺序：admission-close、request、drain、join、RTSP frame release、blocking stop。
 bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept;

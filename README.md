@@ -15,7 +15,7 @@ open_source_demo/
 │   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── config/              # sensor_demo YAML 配置
-│   ├── bin/                 # AArch64 可执行文件
+│   ├── bin/                 # AArch64 可执行文件和 MP4 ffprobe helper
 │   └── lib/                 # 与运行包匹配的三套动态库
 ├── image/                   # README 接线图片
 ├── config/                  # sensor_demo 默认 YAML 配置
@@ -31,13 +31,18 @@ open_source_demo/
 │   ├── build_imu_reader_demo.sh
 │   ├── build_serial_port_demo.sh
 │   ├── cam_demo_regression.sh
+│   ├── rosbag_info.py
+│   ├── rosbag_extract.py
+│   ├── mp4_extract.py
 │   ├── package_runtime.sh
+│   ├── runtime_ffprobe_frame_count.sh
 │   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── imu_reader_demo.cpp
+    ├── rosbag_v2_writer.* / sensor_bag_recorder.* / h264_mp4_recorder.*
+    ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
 
@@ -72,6 +77,8 @@ demo/serial_port_demo --version
 `cam_demo`和`sensor_demo`还会输出进程实际加载的`libsc132`、`libprrtsp`和`libicm42688`产品版本及ABI版本，用于发现程序与SO混装。三个自研SO分别提供`sc132_get_version()`、`prrtsp_get_version()`和`icm42688_get_version()` C API；返回值是进程静态只读字符串，不得释放。产品SemVer与SO的SONAME/ABI版本相互独立。
 
 功能新增、问题修复和已知限制统一记录在[公开版本更新记录](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md)中。
+
+保存数据的整包校验、板端运行、ROS1 bag/MP4互斥配置、优雅退出、完整性验收、离线转换和恢复步骤见公开文档仓的[保存数据应用说明](https://github.com/Hessian-matrix/4P_doc/blob/main/source/save-data-application-guide.md)。
 
 ## 2. 构建
 
@@ -155,9 +162,9 @@ file lib/libprrtsp.so
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
 
-> 当前仓库状态提示：截至 2026-07-24，`demo/` 已由当前 C ABI v2 源码和三套交付 SO 重新生成，并通过 `scripts/verify_runtime_package.py` 与 `manifest.sha256` 包内一致性校验；四个 demo 均通过 AArch64 构建。最终 `sensor_demo` 板端联合 smoke 取得 12424 个有效 IMU sample、1002.63Hz，invalid/duplicate/regression 均为 0，退出码为 0，板后 GPIO395/417 和 SPI 资源恢复正常。
+> 运行包当前态说明：不要把仓内现存 `demo/` 无条件视为“当前最终发布包”。每次源码、公开头或 `lib/` 发生变化后，维护者都必须在具备 X5 AArch64 toolchain 的环境中重新运行 `scripts/package_runtime.sh`，再用 `scripts/verify_runtime_package.py demo` 验证生成的 `manifest.sha256` 和 `runtime-provenance.json`。只有这一步 fresh rebuild 完成后，新的 `demo/` 才能被当作当前候选。
 >
-> 2026-07-28新增的frozen `CLOCK_REALTIME-CLOCK_MONOTONIC_RAW` offset、相机/IMU共享`system_realtime` epoch和运行中REALTIME跳变免疫，已完成non-ROS T1/T2/T3/T3.1/T4/T5验收；最终报告见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_FINAL_ACCEPTANCE_REPORT.md`，可复用流程见顶层`docs/test/FROZEN_SYSTEM_TIMESTAMP_TEST_RUNBOOK.md`。
+> 历史板端 smoke、T1/T2/T3/T3.1/T4/T5、以及旧包哈希只能作为历史证据使用；它们不能自动证明当前源码或当前 checked-in `demo/` 仍然有效。正式 release/promotion 仍需结合顶层工作区里的最新测试矩阵和迁移记录一起判断。
 
 代码或动态库变更后，维护者先在开发机重新构建依赖库并刷新 `demo/`：
 
@@ -168,7 +175,7 @@ scripts/package_runtime.sh
 
 `scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的四个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
 
-运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
+运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/ffprobe`、四个 `bin/` ELF 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
 
 部署到 X5：
 
@@ -195,7 +202,8 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 │   ├── cam_demo
 │   ├── sensor_demo
 │   ├── imu_reader_demo
-│   └── serial_port_demo
+│   ├── serial_port_demo
+│   └── ffprobe
 └── lib/
     ├── libicm42688.so
     ├── libsc132.so
@@ -211,10 +219,11 @@ cd /root/demo
 ./serial_port_demo
 ```
 
-顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
+顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置运行库路径，并把运行包自带工具目录放到 `PATH` 前缀：
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
+PATH=/root/demo/bin:/root/demo:$PATH
 ```
 
 真实 ELF 在 `bin/` 下。如果要直接运行 `bin/` 下的 ELF，需要先加载环境：
@@ -227,7 +236,7 @@ cd /root/demo
 
 四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
-`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu` 三个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz` 和 `imu.print_metrics`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
+`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu`、`save_data` 四个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz`、`imu.print_metrics`、`save_data.save`、`save_data.format`、`save_data.save_path` 和 `save_data.skip`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；`save_data.format` 可选 `rosbag` 或 `mp4`，默认 `rosbag`；`save_data.save_path` 必须是绝对路径，`rosbag` 模式使用 `.bag` 文件，`mp4` 模式使用输出目录；`save_data.skip: true` 只适用于 `rosbag`，等价于 `--record-frame-skip 1`。默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
 
 ## 4. sensor_demo 联合相机与IMU
 
@@ -247,6 +256,89 @@ cd /root/demo
 ./sensor_demo --print-rate-hz 50 --print-metrics
 ```
 
+### ROS1 bag 持久化与 X5 硬件 JPEG
+
+`sensor_demo` 可在保持四路 RTSP 和 IMU 采集不变的同时写 ROS1 bag v2.0：
+
+```bash
+./sensor_demo --record-bag /data/run.bag
+./sensor_demo --record-bag /data/run-skip.bag --record-frame-skip 1
+```
+
+也可以在 `config/sensor_config.yaml` 中启用：
+
+```yaml
+save_data:
+  save: true
+  format: rosbag
+  save_path: /root/save_demo/record.bag
+  skip: false
+```
+
+- `--record-bag` 或 `save_data.save: true` 会启动录包，路径必须是绝对 `.bag` 路径；CLI `--record-bag` 优先于 YAML `save_data.save_path`。
+- `--record-frame-skip 0` 或 `save_data.skip: false` 保存每个同步 frame-set；`1`/`true` 按完整 `group_id` 保存一组、跳过一组，四颗相机共享同一个组决策，RTSP 帧率不变。
+- 每个启用相机使用一个持久 `MEDIA_CODEC_ID_JPEG` context，质量参数为 Q80；完整四路模式共 4 个 context。
+- Recorder 将 NV12 复制到自有 hbmem staging 并立即归还相机帧，硬件 JPEG 不延长 SC132 原始帧生命周期；该路径不链接软件 `libjpeg`。
+- bag 包含 `/cameraN/image/compressed`、`/cameraN/camera_info`、`/cameraN/frame_metadata`、`/imu/data`、session config/status。CameraInfo 当前不提供标定参数。
+- 写入先落到安全临时文件；只有 writer 和硬件 JPEG 清理都成功后才原子发布最终 `.bag`，失败 session 不覆盖上一份成功文件。
+
+无需安装 ROS 即可查看 bag 元信息：
+
+```bash
+python3 scripts/rosbag_info.py /data/run.bag
+python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
+```
+
+将已完成索引的 `.bag` 或 `.partial.bag` 解包为 IMU CSV、相机参数和四路 JPEG：
+
+```bash
+python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
+```
+
+输出目录必须不存在；脚本成功后生成 `imu.csv`、`camera_params.yaml`、`conversion_summary.json` 和 `camera0` 到 `camera3` 四个目录。`imu.csv` 保存消息时间戳、sequence、frame ID、姿态占位值、角速度、线加速度及其协方差。JPEG 默认命名为 `<图像消息时间戳ns>.jpg`；同一相机时间戳重复时追加消息 sequence。`camera_params.yaml` 直接反映 bag 中的 `CameraInfo`，当前未标定录包仍会输出零标定矩阵。脚本只依赖 Python 标准库，支持当前未压缩且已完成索引的 ROS1 bag v2.0。
+
+### H.264 MP4 持久化与离线 JPEG
+
+`sensor_demo` 也可以复用每路 RTSP 已编码的 H.264 AU，保存四个 MP4、四个 timestamp index 和 IMU CSV：
+
+```bash
+./sensor_demo --record-mp4-dir /data/run_mp4
+```
+
+也可以在 `config/sensor_config.yaml` 中启用：
+
+```yaml
+save_data:
+  save: true
+  format: mp4
+  save_path: /root/save_demo/mp4_session
+  skip: false
+```
+
+- `--record-mp4-dir` 与 `--record-bag` 互斥，且 MP4 模式只支持 H.264、要求完整四路 camera mask `0x0f`、不支持 `record-frame-skip`；配置的 final 输出目录不得以保留后缀 `.partial` 结尾。若目标目录或同名 `.partial` 已存在，实际输出自动切到同级 `<目录名>-YYYYMMDDTHHMMSSZ[-NNNN]`，`SENSOR_MP4_RESULT path=` 给出真实路径。
+- MP4 packet 使用名义 H.264 frame timing；同一 session 下 `cameraN_timestamps.csv` 中的精确纳秒相机时间戳才是权威时间，按 `frame_index` 和 MP4 metadata 中的 start timestamp 对齐。
+- IMU 单独保存为同一 session 下的 `imu.csv`。owner/signal stop会先停止并join producer，再drain已进入adapter FIFO的tail；complete 还要求 sample sequence 连续、GPIO gap/FIFO overflow/mapper drop 为 0、无 timestamp duplicate/regression，且已发布样本的最大 timestamp uncertainty 不超过 200 µs。
+- 输出先写入临时目录，只有 session 状态、MP4、timestamp index、IMU CSV 和发布 receipt 都完成耐久化后才发布；不完整 session 会以 `.partial` 目录保存，进程退出码为 `2`。
+
+将 MP4 session 转成时间戳命名 JPEG：
+
+```bash
+python3 scripts/mp4_extract.py /data/run_mp4 /data/run_mp4_dataset
+python3 scripts/mp4_extract.py /data/run_mp4.partial /data/run_mp4_partial_dataset
+```
+
+完整源判定固定绑定四路 `camera_mask=0x0f`、receipt 中四路 MP4/index inventory 和默认 `--expected-cameras 0,1,2,3`；只提取子集或 inventory 被篡改时不会接受为 complete。最终输出目录使用no-replace原子promotion，不覆盖并发创建的路径。
+
+MP4 complete还要求stop/join后的ICM final-health snapshot有效：producer published数量必须等于consumer已观察数量，且final mapper/GPIO/FIFO/uncertainty-drop计数全部为0。公开C ABI通过`icm42688_get_runtime_health()`查询该快照，不改变既有sample/config布局和SONAME 2。
+
+若RTSP handle连续三次close失败，进程会以exit 1立即终止以保留相机callback ownership；该次数据只能从`.partial`/staging按恢复数据处理。
+
+输出目录必须不存在；脚本成功后生成 `imu.csv`、`camera_params.yaml`、`session_status.json`、`publication_receipt.json`、`conversion_summary.json`、`camera0_timestamps.csv` 到 `camera3_timestamps.csv`，以及 `camera0` 到 `camera3` 四个 JPEG 目录。`published_complete` 输入必须带有匹配的 `publication_receipt.json`；`.partial` 输入可转换，但 summary 中会保留 `source_outcome` 且 `source_data_complete=false`。
+
+MP4 录制模式仍依赖运行环境 PATH 中可执行的 `ffmpeg`；运行包自带的 `bin/ffprobe` 是录制链路 frame-count 调用的兼容 helper，不是完整 `ffprobe` 替代品。顶层启动脚本和 `env.sh` 会把它放到 `PATH` 前缀，避免板端系统缺少 `ffprobe` 时录制失败。启动录制前可用 `. ./env.sh && command -v ffmpeg && command -v ffprobe` 检查。`scripts/mp4_extract.py` 离线转换仍要求 Host PATH 中有完整 `ffmpeg` 和 `ffprobe`。离线转换的每个外部工具默认 1800 秒超时，可用 `--tool-timeout-seconds` 调整；超时会清理整个进程组。实际可持续保存帧率和压力边界以目标板验证结果为准。
+
+MP4 模式保持 PRRTSP v2 的五个导出函数和 `libprrtsp.so.2` SONAME；编码 AU 观察器通过 `prrtsp_stream_config_v2` 的可选尾部字段启用。
+
 退出日志包含：
 
 ```text
@@ -255,12 +347,13 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 
 启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 
-### `sensor_demo` 的 `[FRAME_SET] trigger_sync` 诊断日志
+### `sensor_demo` 的 frame-set/source 诊断日志
 
-使用 `sensor_demo --diagnostics` 时，SC132 frame-set matcher 可能周期性输出：
+使用 `sensor_demo --diagnostics` 时，SC132 frame-set matcher 和 pipeline source liveness 可能周期性输出：
 
 ```text
 [FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
+source frame_sets_seen=6961 stale_ms=2 liveness_timeout_ms=2000
 ```
 
 字段含义：
@@ -273,6 +366,9 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 | `lag_ns` | 当前 frame-set 最早 frame timestamp 减匹配 GPIO trigger timestamp：`frame_timestamp_ns - trigger_timestamp_ns`。 |
 | `interval_max_lag_ns` | 从上一条 `trigger_sync` 报告以来观测到的最大 lag；打印后清零，当前报告周期约 1 秒，不是整个长测的历史最大值。 |
 | `limit_ns` | 当前允许的最大 trigger lag。当前默认 30Hz 是 `33333333 ns`；显式 60Hz 示例为 `16666666 ns`，均约一个 frame period。 |
+| `frame_sets_seen` | pipeline 已收到的 frame-set 累计数，用于确认 libsc132 producer 到用户态 callback 的源头仍在前进。 |
+| `stale_ms` | 距最近一次 frame-set callback 的 host steady-clock 间隔；接近 `liveness_timeout_ms` 时表示 source 已卡住。 |
+| `liveness_timeout_ms` | source liveness fail-closed 超时；启动成功后超过该时间仍无新 frame-set 会触发 fatal 并请求 producer 停止。 |
 
 上面显式 60Hz 示例表示：
 
@@ -301,7 +397,7 @@ worker fatal
 queue_full_rejects
 ```
 
-`trigger_sync` 是诊断进度行，不是单独的 PASS/FAIL 结论。只有当它伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
+`trigger_sync` 和 `source` 都是诊断进度行，不是单独的 PASS/FAIL 结论。启动成功后若 source 超时，进程会输出 `fatal: liveness stage=source_matcher ...` 并 fail-closed；其他情况下，只有当这些诊断伴随 frame-set 停止、四路 RTSP 停止、retryable burst 超限、结构性 fatal 或 timestamp 错配时，才需要按 T3/T4/T5 runbook 继续归因。
 
 
 ### SC132 四目相机 RTSP Demo
@@ -336,27 +432,28 @@ killall -q cam_demo 2>/dev/null || true
 ```text
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
---fps <25|30|40|50|60> 相机和编码帧率，默认 30；25/30/40/50 为 V1 稳定功能配置；60 为显式 stress-only 压力配置
+--fps <25|30|40|50|60> 相机和编码帧率，默认30；五档均为受支持配置；仅ROS1 bag全量JPEG保存把60fps归为stress档，MP4不适用该标签
 --codec <h264|h265> 编码格式，默认 h264
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25/40/50/60fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
+--rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
 --trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
---diagnostics      输出每路送帧耗时和时间戳 skew 诊断信息
+--diagnostics      输出source liveness、每路送帧耗时和时间戳 skew 诊断信息
 --max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认 `./cam_demo` 使用固定四路、30fps、H.264、正装方向 `1280x1088` 输出。`--fps 25/30/40/50` 是 V1 稳定功能配置；`--fps 60` 是显式 `stress-only` 压力配置，不是稳定发布 profile。`--codec h265` 使用相同的四路端口和 path。`--rotate 180` 仅支持 30fps 降载模式，不支持 25/40/50/60fps。RTSP 编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`；90/270 度不能继续沿用横屏画布。
+限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps 25/30/40/50/60`均为受支持的相机/RTSP配置；ROS1 bag全量JPEG保存单独把60fps归为stress档，H.264 MP4的60fps属于稳定发布矩阵。`--codec h265`使用相同的四路端口和path。`--rotate 180`仅支持30fps，不支持25/40/50/60fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
 
 ### H.265 客户端播放说明
 
-`--codec h265` 的板端编码和 RTSP 接口已经完成，可输出固定四路 H.265 码流。在显式 `stress-only` 的四路 `1280x1088@60fps` 配置下同时播放时，部分客户端可能因 H.265 接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或 RTSP 发送失败。
+`--codec h265`的板端编码和RTSP接口已经完成，可输出固定四路H.265码流。在四路`1280x1088@60fps`高吞吐配置下同时播放时，部分客户端可能因H.265接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或RTSP发送失败，也不把该配置降级为stress-only。
 
 排查时应同时观察板端和客户端：
 
 - 如果板端日志中四路 `fps` 接近目标值、`queue_full_rejects=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
-- 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法处理四路 60fps 压力配置。
+- 客户端应优先使用支持H.265硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法持续处理四路60fps高吞吐配置。
 - 如果客户端仍无法实时播放，可将 `--fps` 降为 `25/30/40/50` 中的较低档、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
 - H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
 
@@ -371,7 +468,7 @@ rtsp://<x5-ip>:556/PRR
 rtsp://<x5-ip>:557/PRR
 ```
 
-默认 RTSP 端口固定为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出，交付例程不提供端口重映射参数。
+默认端口为 `554/555/556/557`。camera 0/1/2/3 分别对应四路输出；需要隔离并行候选时可用 `--rtsp-base-port <port>` 整体重映射，四路实际端口为 `base+0..3`。
 
 ### 4.1 硬件检测：单颗 sensor 取图
 
@@ -455,10 +552,11 @@ avg_frame_rate=30/1
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时
 - `send_avg_ms` / `send_max_ms`：开启 `--diagnostics` 后输出，表示统计周期内 `prrtsp_stream_send()` 调用耗时
 - `rtsp_latest_skew_ms`：开启 `--diagnostics` 后输出，表示四路最近一次送出的相机时间戳最大差值
+- `source frame_sets_seen` / `stale_ms` / `liveness_timeout_ms`：开启 `--diagnostics` 后输出，表示 frame-set source 累计进度、距最近 frame-set 的间隔和 fail-closed 超时；source 超时会输出 `fatal: liveness stage=source_matcher ...`
 
 ### ICM ABI v2边界
 
-ICM发布身份继续保持ABI v2、`libicm42688.so.2`和`ICM42688_X5_2.0`。当前只支持`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0`、watermark 1和文档列出的ODR；旧`DIRECT=1`、旧`FIFO`枚举名、DIRECT寄存器读取路径及watermark 8已删除，不提供兼容shim。保持v2只表示导出函数、结构布局和ELF身份保持，不表示旧DIRECT配置可继续运行。当前header、SO和non-ROS demo必须成套部署，不要把该SO单独替换到未迁移程序；ROS2不在本轮范围。
+ICM发布身份为ABI 2.1、real SO `libicm42688.so.2.1.0`，SONAME继续保持`libicm42688.so.2`。v1.0.0已有函数继续使用`ICM42688_X5_2.0`节点，新增`icm42688_get_runtime_health()`使用`ICM42688_X5_2.1`节点，因此既有ABI 2 consumer保持兼容。当前只支持`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0`、watermark 1和文档列出的ODR；旧`DIRECT=1`、旧`FIFO`枚举名、DIRECT寄存器读取路径及watermark 8已删除。当前header、SO和consumer必须成套部署。
 
 完整决策见顶层`docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`。
 

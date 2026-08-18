@@ -19,6 +19,38 @@ void ReleaseSc132Frame(void* user) {
 
 }  // namespace
 
+RtspChannels::RtspChannels() {
+  for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
+    encoded_contexts_[camera_id].owner = this;
+    encoded_contexts_[camera_id].camera_id = camera_id;
+  }
+}
+
+bool RtspChannels::SetEncodedFrameObserver(EncodedFrameObserver observer,
+                                           void* user) noexcept {
+  if ((observer == nullptr && user != nullptr) || OpenHandleCount() != 0U) {
+    return false;
+  }
+  encoded_observer_ = observer;
+  encoded_observer_user_ = user;
+  return true;
+}
+
+void RtspChannels::EncodedFrameBridge(const prrtsp_encoded_frame_v2* frame,
+                                      void* user) noexcept {
+  try {
+    auto* context = static_cast<EncodedObserverContext*>(user);
+    if (frame == nullptr || context == nullptr || context->owner == nullptr ||
+        context->owner->encoded_observer_ == nullptr) {
+      return;
+    }
+    context->owner->encoded_observer_(context->camera_id, *frame,
+                                      context->owner->encoded_observer_user_);
+  } catch (...) {
+    // 编码observer是非阻塞旁路；异常不得跨越PRRTSP C callback边界。
+  }
+}
+
 bool RtspChannels::ValidPath(const std::string& path) noexcept {
   if (path.size() < 2U || path.size() > PRRTSP_PATH_CONTENT_MAX_BYTES_V2_0 ||
       path.front() != '/') {
@@ -64,7 +96,9 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
   }
 
   prrtsp_stream_config_v2 config{};
-  config.struct_size = PRRTSP_STREAM_CONFIG_V2_1_SIZE;
+  config.struct_size = encoded_observer_ == nullptr
+                           ? PRRTSP_STREAM_CONFIG_V2_1_SIZE
+                           : PRRTSP_STREAM_CONFIG_V2_2_SIZE;
   config.flags = PRRTSP_STREAM_FLAG_EXTERNAL_NV12;
   config.width = static_cast<uint32_t>(output_width);
   config.height = static_cast<uint32_t>(output_height);
@@ -75,6 +109,10 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
   config.port = static_cast<uint32_t>(port);
   config.operation_timeout_ms = 1000U;
   config.codec = codec;
+  if (encoded_observer_ != nullptr) {
+    config.encoded_frame_callback = EncodedFrameBridge;
+    config.encoded_frame_user = &encoded_contexts_[camera_id];
+  }
   std::memcpy(config.path, options.url.data(), options.url.size());
 
   prrtsp_stream_t* opened = nullptr;

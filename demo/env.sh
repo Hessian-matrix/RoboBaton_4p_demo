@@ -6,4 +6,10 @@ if [ -n "${LD_LIBRARY_PATH:-}" ]; then
 else
   export LD_LIBRARY_PATH="${DEMO_LD_LIBRARY_PATH}"
 fi
-unset DEMO_LD_LIBRARY_PATH
+DEMO_PATH_PREFIX="${DEMO_DIR}/bin:${DEMO_DIR}"
+if [ -n "${PATH:-}" ]; then
+  export PATH="${DEMO_PATH_PREFIX}:${PATH}"
+else
+  export PATH="${DEMO_PATH_PREFIX}"
+fi
+unset DEMO_LD_LIBRARY_PATH DEMO_PATH_PREFIX

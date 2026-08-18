@@ -61,6 +61,9 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   bool sc_start_attempted = false;
   bool consumer_quiescent = false;
+  bool rtsp_status_ok = true;
+  bool rtsp_close_ok = true;
+  bool rtsp_cleanup_done = false;
 
   // callback context 与关闭失败后仍被 producer 持有的 handle
   // 必须存活到进程结束，避免析构触发 restart/unload。
@@ -102,7 +105,7 @@ int main(int argc, char** argv) {
         continue;
       }
       const int32_t status =
-          rtsp->Open(camera_id, RtspPortForChannel(camera_id), options);
+          rtsp->Open(camera_id, RtspPortForChannel(options, camera_id), options);
       if (status != PRRTSP_OK) {
         throw std::runtime_error("prrtsp_stream_open failed for camera " +
                                  std::to_string(camera_id) + " status=" +
@@ -110,7 +113,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    pipeline->StartDiagnosticsIfEnabled();
+    pipeline->StartRuntimeMonitor();
     sc132_frame_set_config_t config = pipeline->MakeFrameSetConfig();
     // start 可能部分创建 producer threads；attempt 必须先锁存，失败也执行 drain/join/stop×2。
     sc_start_attempted = true;
@@ -119,6 +122,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("sc132_start_frame_set failed status=" +
                                std::to_string(start_status));
     }
+    pipeline->MarkSourceStarted();
 
     while (g_signal_stop == 0 && !g_stop_requested.load(std::memory_order_acquire) &&
            pipeline->FirstError() == 0) {
@@ -136,7 +140,11 @@ int main(int argc, char** argv) {
 
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
-      consumer_quiescent = FinishSc132Shutdown(pipeline, rtsp);
+      const Sc132ShutdownResult shutdown = FinishSc132ShutdownDetailed(pipeline, rtsp);
+      consumer_quiescent = shutdown.consumer_join_ok && shutdown.ownership_quiescent;
+      rtsp_status_ok = shutdown.rtsp_status_ok;
+      rtsp_close_ok = shutdown.rtsp_close_ok;
+      rtsp_cleanup_done = shutdown.sc132_cleanup_reached;
     } else {
       pipeline->BeginShutdown(false);
       consumer_quiescent = pipeline->Join();
@@ -155,13 +163,19 @@ int main(int argc, char** argv) {
     std::_Exit(1);
   }
 
-  if (!rtsp->CaptureStatuses()) {
+  if (!rtsp_cleanup_done) {
+    rtsp_status_ok = rtsp->CaptureStatuses();
+    rtsp_close_ok = rtsp->CloseReverse();
+  }
+  if (!rtsp_status_ok) {
     std::cerr << "fatal: prrtsp_stream_get_status failed\n";
     exit_code = 1;
   }
-  if (!rtsp->CloseReverse()) {
-    std::cerr << "fatal: RTSP handle remains after three close attempts\n";
-    exit_code = 1;
+  if (!rtsp_close_ok) {
+    std::cerr << "fatal: RTSP handle remains after three close attempts\n" << std::flush;
+    // SC132 request-stop does not quiesce callbacks. Preserve every callback owner
+    // and terminate without stack destruction when RTSP still owns retained frames.
+    std::_Exit(1);
   }
 
   std::cout << "SC132 v2 RTSP demo stopped exit_code=" << exit_code << "\n";

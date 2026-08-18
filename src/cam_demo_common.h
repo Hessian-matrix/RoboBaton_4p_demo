@@ -26,9 +26,11 @@ constexpr long long kDefaultBps = 4000;
 constexpr int kDefaultRotateDegrees = 0;
 constexpr int kMountRotateDegrees = 90;
 constexpr uint32_t kDefaultCameraMask = (1U << kMaxChannels) - 1U;
-constexpr int kBaseRtspPort = 554;
+constexpr int kDefaultRtspBasePort = 554;
+constexpr int kMaxRtspPort = 65535;
 constexpr size_t kQueueCapacity = 10;
 constexpr int kDefaultDiagnosticIntervalMs = 1000;
+constexpr uint32_t kDefaultSourceLivenessTimeoutMs = 2000U;
 constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
@@ -52,6 +54,10 @@ enum class ImuStartOrder : uint32_t {
   kImuFirst = 0U,
   kCameraFirst = 1U,
 };
+enum class RtspPreviewFailurePolicy : uint32_t {
+  kFailClosed = 0U,
+  kDegradePreview = 1U,
+};
 
 struct Options;
 
@@ -70,9 +76,11 @@ struct Options {
   long long bps = kDefaultBps;
   VideoCodec video_codec = VideoCodec::kH264;
   std::string url = "/PRR";
+  int rtsp_base_port = kDefaultRtspBasePort;
   int rotate_degrees = kDefaultRotateDegrees;
   bool diagnostics = false;
   int diagnostic_interval_ms = kDefaultDiagnosticIntervalMs;
+  uint32_t source_liveness_timeout_ms = kDefaultSourceLivenessTimeoutMs;
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
@@ -82,6 +90,11 @@ struct Options {
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
   const FrozenSystemClock* system_clock = nullptr;
+  uint32_t record_frame_skip = 0U;
+  std::string record_bag_path;
+  std::string record_mp4_directory;
+  RtspPreviewFailurePolicy rtsp_preview_failure_policy =
+      RtspPreviewFailurePolicy::kFailClosed;
 };
 
 // retained SC frame 由可移动、不可复制的 RAII job 独占。
@@ -128,11 +141,13 @@ struct ImuConsumerOptions {
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
   const FrozenSystemClock* system_clock = nullptr;
+  icm42688_runtime_health_t* final_health = nullptr;
 };
 
 #ifdef RELEASE008_TESTING
 void ResetImuIdleWaitCountForTest();
 uint32_t ImuIdleWaitCountForTest();
+std::size_t ImuPendingCapacityForTest();
 #endif
 
 using ImuSampleObserver = void (*)(const icm42688_sample_t& sample, void* user);
@@ -192,7 +207,7 @@ uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz);
 void PrintImuSample(const icm42688_sample_t& sample, void* user);
 
 uint64_t SteadyClockNowNs();
-int RtspPortForChannel(int channel);
+int RtspPortForChannel(const Options& options, int channel);
 uint32_t CameraMaskFromChannelCount(int channels);
 int CameraMaskPopCount(uint32_t camera_mask);
 bool CameraMaskContains(uint32_t camera_mask, int camera_id);

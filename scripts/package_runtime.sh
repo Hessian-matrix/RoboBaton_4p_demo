@@ -142,7 +142,7 @@ if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUT
 fi
 
 for library in \
-  libicm42688.so.2.0.0 libicm42688.so.2 libicm42688.so \
+  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
@@ -158,6 +158,11 @@ if [[ ! -f "${PROJECT_DIR}/config/sensor_config.yaml" ]]; then
   echo "Missing release sensor config: ${PROJECT_DIR}/config/sensor_config.yaml" >&2
   exit 1
 fi
+if [[ ! -f "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" ]]; then
+  echo "Missing runtime ffprobe helper: ${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" >&2
+  exit 1
+fi
+
 if [[ ! -f "${TOOLCHAIN_FILE}" ]]; then
   echo "Missing consumer toolchain file: ${TOOLCHAIN_FILE}" >&2
   exit 1
@@ -225,8 +230,9 @@ cp "${BUILD_DIR}/cam_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/imu_reader_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
+cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 for library in \
-  libicm42688.so.2.0.0 libicm42688.so.2 libicm42688.so \
+  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
@@ -248,7 +254,13 @@ if [ -n "${LD_LIBRARY_PATH:-}" ]; then
 else
   export LD_LIBRARY_PATH="${DEMO_LD_LIBRARY_PATH}"
 fi
-unset DEMO_LD_LIBRARY_PATH
+DEMO_PATH_PREFIX="${DEMO_DIR}/bin:${DEMO_DIR}"
+if [ -n "${PATH:-}" ]; then
+  export PATH="${DEMO_PATH_PREFIX}:${PATH}"
+else
+  export PATH="${DEMO_PATH_PREFIX}"
+fi
+unset DEMO_LD_LIBRARY_PATH DEMO_PATH_PREFIX
 EOF
 
 for name in cam_demo imu_reader_demo sensor_demo serial_port_demo; do
@@ -264,11 +276,18 @@ done
 
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo"
-chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo"
+chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe"
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
-python3 "${SCRIPT_DIR}/verify_runtime_package.py" --write-manifest "${STAGE_DIR}"
-chmod 644 "${STAGE_DIR}/manifest.sha256"
+python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
+  --write-provenance \
+  --write-manifest \
+  --compiler "${PRODUCER_GCC}" \
+  --triplet "${TARGET_TRIPLET}" \
+  --toolchain-file "${TOOLCHAIN_FILE}" \
+  --build-dir "${BUILD_DIR}" \
+  "${STAGE_DIR}"
+chmod 644 "${STAGE_DIR}/runtime-provenance.json" "${STAGE_DIR}/manifest.sha256"
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" "${STAGE_DIR}"
 
 if [[ -e "${OUTPUT_DIR}" ]]; then
