@@ -92,6 +92,7 @@ struct Options {
   const FrozenSystemClock* system_clock = nullptr;
   uint32_t record_frame_skip = 0U;
   std::string record_bag_path;
+  std::string record_mp4_directory;
   RtspPreviewFailurePolicy rtsp_preview_failure_policy =
       RtspPreviewFailurePolicy::kFailClosed;
 };
@@ -140,6 +141,7 @@ struct ImuConsumerOptions {
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
   const FrozenSystemClock* system_clock = nullptr;
+  icm42688_runtime_health_t* final_health = nullptr;
 };
 
 #ifdef RELEASE008_TESTING

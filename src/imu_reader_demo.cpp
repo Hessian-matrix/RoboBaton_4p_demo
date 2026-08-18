@@ -120,6 +120,9 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   // 策略通过 ABI v2 reserved[0] 传递，不能扩展公开 config 布局。
   config.reserved[ICM42688_CONFIG_SAMPLE_DROP_POLICY_INDEX] = options.sample_drop_policy;
 
+  if (options.final_health != nullptr) {
+    *options.final_health = ICM42688_RUNTIME_HEALTH_INIT;
+  }
   IcmCallbackContext context;
   context.observer = observer;
   context.observer_user = observer_user;
@@ -148,6 +151,26 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     return 1;
   }
 
+  bool count_reached = false;
+  const auto emit_sample = [&](icm42688_sample_t sample) noexcept {
+    try {
+      if (options.system_clock != nullptr) {
+        sample.host_timestamp_ns = options.system_clock->MapRawNs(sample.host_timestamp_ns);
+        sample.sample_timestamp_ns = options.system_clock->MapRawNs(sample.sample_timestamp_ns);
+      }
+      // observer在owner线程运行，producer callback不执行阻塞I/O。
+      if (context.observer != nullptr) {
+        context.observer(sample, context.observer_user);
+      }
+      context.emitted.fetch_add(1U, std::memory_order_acq_rel);
+      return true;
+    } catch (...) {
+      context.callback_failed.store(true, std::memory_order_release);
+      context.accepting.store(false, std::memory_order_release);
+      return false;
+    }
+  };
+
   while (g_imu_signal_stop == 0 &&
          (options.stop_requested == nullptr ||
           !options.stop_requested->load(std::memory_order_acquire)) &&
@@ -167,23 +190,12 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     }
     // 队列有积压时立即继续 drain，仅空队列进入短等待。
     if (has_sample) {
-      try {
-        if (options.system_clock != nullptr) {
-          sample.host_timestamp_ns = options.system_clock->MapRawNs(sample.host_timestamp_ns);
-          sample.sample_timestamp_ns = options.system_clock->MapRawNs(sample.sample_timestamp_ns);
-        }
-        // observer 在 owner 线程运行，producer callback 不执行阻塞 I/O。
-        if (context.observer != nullptr) {
-          context.observer(sample, context.observer_user);
-        }
-        context.emitted.fetch_add(1U, std::memory_order_acq_rel);
-      } catch (...) {
-        context.callback_failed.store(true, std::memory_order_release);
-        context.accepting.store(false, std::memory_order_release);
+      if (!emit_sample(sample)) {
         break;
       }
       if (options.count != 0U &&
           context.emitted.load(std::memory_order_acquire) >= options.count) {
+        count_reached = true;
         break;
       }
       continue;
@@ -205,12 +217,56 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 
-  context.accepting.store(false, std::memory_order_release);
-  // context 栈对象必须覆盖 blocking stop：fake/producer 可在 stop join 前完成已进入 callback，
-  // 但 admission 已关闭，因此不会再调用上层 observer。
+  const bool owner_stop_requested =
+      g_imu_signal_stop != 0 ||
+      (options.stop_requested != nullptr &&
+       options.stop_requested->load(std::memory_order_acquire));
+  const bool drain_after_stop =
+      owner_stop_requested && !count_reached &&
+      !context.callback_failed.load(std::memory_order_acquire);
+  const auto close_admission = [&]() noexcept {
+    std::lock_guard<std::mutex> lock(context.pending_mutex);
+    context.accepting.store(false, std::memory_order_release);
+  };
+
+  // Count/failure paths preserve the prior semantics: close callback admission before stop.
+  // Owner/signal stop keeps admission open until blocking stop joins the producer, then drains
+  // every sample that had already entered the adapter FIFO.
+  if (!drain_after_stop) {
+    close_admission();
+  }
   const int stop_result = icm42688_stop(handle);
+  if (drain_after_stop) {
+    close_admission();
+  }
+  if (drain_after_stop && stop_result == ICM42688_STATUS_OK &&
+      !context.callback_failed.load(std::memory_order_acquire)) {
+    while (true) {
+      icm42688_sample_t sample{};
+      {
+        std::lock_guard<std::mutex> lock(context.pending_mutex);
+        if (context.pending_size == 0U) {
+          break;
+        }
+        sample = context.pending_samples[context.pending_head];
+        context.pending_head =
+            (context.pending_head + 1U) % IcmCallbackContext::kPendingCapacity;
+        --context.pending_size;
+      }
+      if (!emit_sample(sample)) {
+        break;
+      }
+    }
+  }
+  int health_result = ICM42688_STATUS_OK;
+  if (options.final_health != nullptr) {
+    health_result = stop_result == ICM42688_STATUS_OK
+                        ? icm42688_get_runtime_health(handle, options.final_health)
+                        : ICM42688_STATUS_INVALID_STATE;
+  }
   const bool failed = context.callback_failed.load(std::memory_order_acquire) ||
-                      stop_result != ICM42688_STATUS_OK;
+                      stop_result != ICM42688_STATUS_OK ||
+                      health_result != ICM42688_STATUS_OK;
   icm42688_destroy(handle);
   return failed ? 1 : 0;
 }

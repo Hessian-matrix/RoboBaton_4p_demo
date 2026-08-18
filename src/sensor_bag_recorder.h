@@ -208,6 +208,7 @@ class SensorBagRecorder final {
 
   void WorkerEntry(int camera_id) noexcept;
   void WriterEntry() noexcept;
+  void RequestStop() noexcept;
   void StopWorkers() noexcept;
   bool PopFrame(int camera_id, SensorBagFrameJob* job) noexcept;
   bool PopNextEncodedFrame(EncodedFrameJob* encoded, uint64_t* order_wait_ns) noexcept;

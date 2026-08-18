@@ -485,8 +485,7 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
       workers_.emplace_back(&SensorBagRecorder::WorkerEntry, this, static_cast<int>(index));
     }
   } catch (...) {
-    stopping_.store(true, std::memory_order_release);
-    queue_condition_.notify_all();
+    RequestStop();
     imu_queue_condition_.notify_all();
     StopWorkers();
     writer_.Abort();
@@ -579,6 +578,7 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
     ++next_frame_order_;
   } catch (...) {
     job.raw_frame.Reset();
+    lock.unlock();
     SetFatalError("bag recorder frame queue allocation failed");
     throw;
   }
@@ -698,6 +698,7 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
         for (size_t release_index = 0U; release_index < retained_count; ++release_index) {
           sc132_frame_release(frame_handles[release_index]);
         }
+        lock.unlock();
         SetFatalError("bag recorder frame retain failed");
         return FrameSetAdmissionStatus::kFatal;
       }
@@ -724,6 +725,7 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
         jobs[index].raw_frame.Reset();
       }
+      lock.unlock();
       SetFatalError("bag recorder frame queue allocation failed");
       return FrameSetAdmissionStatus::kFatal;
     }
@@ -805,9 +807,8 @@ SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
     return finish_result_;
   }
   finish_result_ = SensorBagFinishResult{};
-  stopping_.store(true, std::memory_order_release);
+  RequestStop();
   jpeg_encoder_.NotifySlotWaiters();
-  queue_condition_.notify_all();
   imu_queue_condition_.notify_all();
   StopWorkers();
   {
@@ -879,9 +880,8 @@ SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
 }
 
 void SensorBagRecorder::Abort() noexcept {
-  stopping_.store(true, std::memory_order_release);
+  RequestStop();
   jpeg_encoder_.NotifySlotWaiters();
-  queue_condition_.notify_all();
   imu_queue_condition_.notify_all();
   StopWorkers();
   {
@@ -1231,8 +1231,6 @@ void SensorBagRecorder::WorkerEntry(int camera_id) noexcept {
         }
       }
       SetFatalError(error.what());
-      stopping_.store(true, std::memory_order_release);
-      queue_condition_.notify_all();
       imu_queue_condition_.notify_all();
       encoded_condition_.notify_all();
       NotifyWriter(&writer_wakeup_mutex_, &writer_condition_, &writer_wakeup_generation_);
@@ -1408,6 +1406,16 @@ void SensorBagRecorder::WriterEntry() noexcept {
   }
 }
 
+
+void SensorBagRecorder::RequestStop() noexcept {
+  {
+    // Publish the wait predicate under its mutex so notify cannot be lost between
+    // PopFrame's predicate check and the condition-variable sleep transition.
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    stopping_.store(true, std::memory_order_release);
+  }
+  queue_condition_.notify_all();
+}
 
 void SensorBagRecorder::StopWorkers() noexcept {
   for (std::thread& worker : workers_) {
@@ -1924,11 +1932,10 @@ void SensorBagRecorder::SetFatalError(const std::string& message) noexcept {
     if (!fatal_error_.load(std::memory_order_relaxed)) {
       error_message_ = message;
       fatal_error_.store(true, std::memory_order_release);
-      stopping_.store(true, std::memory_order_release);
       g_stop_requested.store(true, std::memory_order_release);
     }
   }
-  queue_condition_.notify_all();
+  RequestStop();
   imu_queue_condition_.notify_all();
   encoded_condition_.notify_all();
   jpeg_encoder_.NotifySlotWaiters();

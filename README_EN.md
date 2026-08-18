@@ -15,7 +15,7 @@ open_source_demo/
 │   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── config/              # sensor_demo YAML config
-│   ├── bin/                 # AArch64 executables
+│   ├── bin/                 # AArch64 executables and MP4 ffprobe helper
 │   └── lib/                 # Shared libraries matched to the runtime package
 ├── image/                   # Wiring images used by the README files
 ├── config/                  # Default sensor_demo YAML config
@@ -33,13 +33,15 @@ open_source_demo/
 │   ├── cam_demo_regression.sh
 │   ├── rosbag_info.py
 │   ├── rosbag_extract.py
+│   ├── mp4_extract.py
 │   ├── package_runtime.sh
+│   ├── runtime_ffprobe_frame_count.sh
 │   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── rosbag_v2_writer.* / sensor_bag_recorder.*
+    ├── rosbag_v2_writer.* / sensor_bag_recorder.* / h264_mp4_recorder.*
     ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
@@ -75,6 +77,8 @@ demo/serial_port_demo --version
 `cam_demo` and `sensor_demo` also report the product and ABI versions of the `libsc132`, `libprrtsp`, and `libicm42688` objects actually loaded by the process, which detects mixed packages. The three project-owned shared libraries expose `sc132_get_version()`, `prrtsp_get_version()`, and `icm42688_get_version()` C APIs. Each returns process-static read-only storage that must not be freed. Product SemVer is independent of a shared library's SONAME/ABI version.
 
 Features, fixes, and known limitations are maintained in the [public changelog](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md).
+
+The public documentation repository provides a single Chinese [data persistence application guide](https://github.com/Hessian-matrix/4P_doc/blob/main/source/save-data-application-guide.md) for package integrity, board operation, mutually exclusive ROS1 bag/MP4 configuration, graceful shutdown, completeness acceptance, offline conversion, and recovery.
 
 ## 2. Build
 
@@ -182,7 +186,7 @@ scripts/package_runtime.sh
 
 `scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's four demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
 
-The runtime package contains the top-level launchers, `env.sh`, `config/sensor_config.yaml`, `bin/`, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable, one `.so` file, or omit the config file.
+The runtime package contains the top-level launchers, `env.sh`, `config/sensor_config.yaml`, `bin/ffprobe`, the four `bin/` ELFs, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable, one `.so` file, or omit the config file.
 
 Deploy it to X5:
 
@@ -209,7 +213,8 @@ Runtime layout on X5:
 │   ├── cam_demo
 │   ├── sensor_demo
 │   ├── imu_reader_demo
-│   └── serial_port_demo
+│   ├── serial_port_demo
+│   └── ffprobe
 └── lib/
     ├── libicm42688.so
     ├── libsc132.so
@@ -226,10 +231,11 @@ cd /root/demo
 ./serial_port_demo
 ```
 
-The top-level `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set:
+The top-level `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set the library path and prepend the packaged tools to `PATH`:
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
+PATH=/root/demo/bin:/root/demo:$PATH
 ```
 
 The real ELF binaries are under `bin/`. To run a `bin/` binary directly, load the environment first:
@@ -242,7 +248,7 @@ cd /root/demo
 
 All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, IMU sample rate, or other runtime parameters.
 
-`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, `imu`, and `save_data` sections and supports `camera.width`, `camera.height`, `camera.fps`, `camera.rotate`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, `imu.print_metrics`, `save_data.save`, `save_data.save_path`, and `save_data.skip`. `camera.width`/`camera.height` are fixed at `1280`/`1088` to expose the current resolution contract; changing them is rejected. `save_data.save_path` must be an absolute `.bag` path, and `save_data.skip: true` is equivalent to `--record-frame-skip 1`. The default YAML no longer selects the camera mask: the full four-camera path stays fixed at `0xf`, and single-sensor diagnostics should still use `cam_demo --camera-id`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only. `cam_demo` does not read this YAML.
+`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, `imu`, and `save_data` sections and supports `camera.width`, `camera.height`, `camera.fps`, `camera.rotate`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, `imu.print_metrics`, `save_data.save`, `save_data.format`, `save_data.save_path`, and `save_data.skip`. `camera.width`/`camera.height` are fixed at `1280`/`1088` to expose the current resolution contract; changing them is rejected. `save_data.format` is `rosbag` or `mp4` and defaults to `rosbag`; `save_data.save_path` must be absolute, points to a `.bag` file in `rosbag` mode, and points to an output directory in `mp4` mode. `save_data.skip: true` applies only to `rosbag` and is equivalent to `--record-frame-skip 1`. The default YAML no longer selects the camera mask: the full four-camera path stays fixed at `0xf`, and single-sensor diagnostics should still use `cam_demo --camera-id`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only. `cam_demo` does not read this YAML.
 
 ## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
 
@@ -350,6 +356,7 @@ Or enable it in `config/sensor_config.yaml`:
 ```yaml
 save_data:
   save: true
+  format: rosbag
   save_path: /root/save_demo/record.bag
   skip: false
 ```
@@ -376,9 +383,47 @@ python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
 
 The output directory must not exist. On success it contains `imu.csv`, `camera_params.yaml`, `conversion_summary.json`, and `camera0` through `camera3`. `imu.csv` preserves the message timestamp, sequence, frame ID, orientation placeholder, angular velocity, linear acceleration, and all covariance fields. JPEG files use `<image-message-timestamp-ns>.jpg`; a repeated timestamp for the same camera receives the message sequence suffix. `camera_params.yaml` reflects the recorded `CameraInfo` exactly, so bags recorded without calibration still contain zero calibration matrices. The tool uses only the Python standard library and supports the current uncompressed, indexed ROS1 bag v2.0 output.
 
-Host fakes, AArch64 build, and package ABI validation pass. Concurrent four-JPEG plus four-RTSP hardware capacity, sustained throughput, and JPEG quality remain board-pending; Host/package PASS is not board PASS.
+### H.264 MP4 Persistence and Offline JPEG
 
-The joint entry keeps the existing `libprrtsp.so.2` and PRRTSP v2 ABI; it does not add a new PRRTSP API or SONAME.
+`sensor_demo` can also reuse each RTSP channel's already encoded H.264 access units and save four MP4 files, four timestamp indexes, and IMU CSV:
+
+```bash
+./sensor_demo --record-mp4-dir /data/run_mp4
+```
+
+Or enable it in `config/sensor_config.yaml`:
+
+```yaml
+save_data:
+  save: true
+  format: mp4
+  save_path: /root/save_demo/mp4_session
+  skip: false
+```
+
+- `--record-mp4-dir` is mutually exclusive with `--record-bag`; MP4 mode requires H.264 and the full four-camera mask `0x0f`, and does not support `record-frame-skip`. The configured final output directory must not end with the reserved `.partial` suffix. If that directory or its matching `.partial` already exists, the actual output automatically falls back to a sibling `<name>-YYYYMMDDTHHMMSSZ[-NNNN]` directory; `SENSOR_MP4_RESULT path=` reports the real path.
+- MP4 packets use nominal H.264 frame timing. The authoritative exact nanosecond camera timestamps are in the same-session `cameraN_timestamps.csv` files and are tied to the video by `frame_index` plus the start timestamp metadata.
+- IMU is saved separately as `imu.csv` in the same session directory. Owner/signal stop first stops and joins the producer, then drains the tail already admitted to the adapter FIFO. A complete session also requires contiguous sample sequence, zero GPIO gaps/FIFO overflows/mapper drops, no timestamp duplicates or regressions, and at most 200 µs timestamp uncertainty for published samples.
+- Recording publishes from a temporary directory only after the session status, MP4 files, timestamp indexes, IMU CSV, and publication receipt are durable. Incomplete sessions are saved as `.partial` directories and exit with code `2`.
+
+Convert an MP4 session into timestamp-named JPEGs:
+
+```bash
+python3 scripts/mp4_extract.py /data/run_mp4 /data/run_mp4_dataset
+python3 scripts/mp4_extract.py /data/run_mp4.partial /data/run_mp4_partial_dataset
+```
+
+Complete-source acceptance is bound to four-camera `camera_mask=0x0f`, the exact four MP4/index entries in the receipt, and the default `--expected-cameras 0,1,2,3`. A subset extraction or tampered inventory is not accepted as complete. Final output promotion is atomic no-replace and never overwrites a concurrently created path.
+
+MP4 completeness also requires a valid ICM final-health snapshot after producer stop/join: producer-published samples must equal consumer-observed samples, and final mapper/GPIO/FIFO/uncertainty-drop counters must all be zero. The public C ABI exposes this snapshot through `icm42688_get_runtime_health()` without changing existing sample/config layouts or SONAME 2.
+
+If an RTSP handle fails all three close attempts, the process terminates immediately with exit 1 to preserve camera callback ownership. Treat that run only as recovery data from `.partial`/staging.
+
+The output directory must not exist. On success it contains `imu.csv`, `camera_params.yaml`, `session_status.json`, `publication_receipt.json`, `conversion_summary.json`, `camera0_timestamps.csv` through `camera3_timestamps.csv`, and `camera0` through `camera3`. A `published_complete` source must have a matching `publication_receipt.json`; `.partial` sources can be converted, but the summary preserves `source_outcome` and sets `source_data_complete=false`.
+
+MP4 recording still requires an executable `ffmpeg` in the runtime `PATH`. The package ships a `bin/ffprobe` compatibility helper for the recorder's frame-count call; it is not a full `ffprobe` replacement. The top-level launchers plus `env.sh` prepend it to `PATH` so recording does not fail on board images without system `ffprobe`. Before recording, check with `. ./env.sh && command -v ffmpeg && command -v ffprobe`. Offline `scripts/mp4_extract.py` conversion still requires full `ffmpeg` and `ffprobe` on the Host `PATH`. Each external tool used by offline extraction has a 1800-second default timeout, adjustable with `--tool-timeout-seconds`; timeout cleanup targets the whole process group. Sustainable recording rates and pressure limits depend on target-board validation.
+
+MP4 mode keeps the five existing PRRTSP v2 exported functions and the `libprrtsp.so.2` SONAME. Encoded-AU observation is enabled through optional tail fields in `prrtsp_stream_config_v2`.
 
 ### 4.1 SC132 4-Camera RTSP Demo
 
@@ -412,7 +457,7 @@ Common options:
 ```text
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
---fps <25|30|40|50|60> Camera and encoder fps, default 30; 25/30/40/50 are V1 stable functional modes; 60 is explicit stress-only
+--fps <25|30|40|50|60> Camera and encoder fps, default 30; all five are supported; only full-JPEG ROS1 bag persistence classifies 60fps as stress, while MP4 does not
 --codec <h264|h265> Video codec, default h264
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25/40/50/60fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
@@ -424,16 +469,16 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps 25/30/40/50` are V1 stable functional configurations; `--fps 60` is an explicit stress-only configuration, not a stable release profile. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only in the reduced-load 30fps mode and is not supported at 25/40/50/60fps.
+Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps 25/30/40/50/60` are supported camera/RTSP configurations. Only full-JPEG ROS1 bag persistence classifies 60fps as stress; H.264 MP4 at 60fps is in the stable release matrix. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only at 30fps and is rejected at 25/40/50/60fps.
 
 ### H.265 Client Playback Notes
 
-The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. In the explicit stress-only four-stream `1280x1088@60fps` configuration, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not by itself indicate a board-side encoder or RTSP transmission failure.
+The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. In the high-throughput four-stream `1280x1088@60fps` configuration, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not indicate a board-side encoder or RTSP failure and does not make the configuration stress-only.
 
 Check both sides when diagnosing playback:
 
 - If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
-- Prefer a player with H.265 hardware decoding and verify that hardware decoding is actually active. Older players or software-only decoding may not sustain the four-stream 60fps stress configuration.
+- Prefer a player with H.265 hardware decoding and verify that hardware decoding is active. Older players or software-only decoding may not sustain the four-stream 60fps high-throughput configuration.
 - If the client still cannot play in real time, reduce `--fps` to a lower `25/30/40/50` mode, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
 - With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
 
@@ -535,7 +580,7 @@ Log fields:
 
 ### ICM ABI v2 Boundary
 
-The ICM delivery keeps ABI major 2, `libicm42688.so.2`, and `ICM42688_X5_2.0`. The only supported mode is `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0` with watermark 1 and a documented ODR. Legacy `DIRECT=1`, the old `FIFO` enum name, the direct-register path, and watermark 8 are retired without a compatibility shim. Keeping v2 means the exported functions, struct layout, and ELF identity remain stable; it does not mean legacy DIRECT configurations remain drop-in compatible. Ship the current header, SO, and non-ROS demos as one generation. ROS2 is outside this change.
+The ICM delivery is ABI 2.1 with real SO `libicm42688.so.2.1.0` while retaining SONAME `libicm42688.so.2`. Functions available in v1.0.0 remain on `ICM42688_X5_2.0`; the additive `icm42688_get_runtime_health()` export uses `ICM42688_X5_2.1`, preserving compatibility for existing ABI-major-2 consumers. The only supported mode is `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0` with watermark 1 and a documented ODR. Legacy `DIRECT=1`, the old `FIFO` enum name, the direct-register path, and watermark 8 remain retired. Ship the current header, SO, and consumers as one generation.
 
 See the top-level decision `docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`.
 

@@ -22,23 +22,27 @@ RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42688_X5_2.0"},
-    "bin/sensor_demo": {"ICM42688_X5_2.0", "LIBSC132_2.0", "LIBPRRTSP_2.0"},
+    "bin/imu_reader_demo": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
+    "bin/sensor_demo": {"ICM42688_X5_2.0", "ICM42688_X5_2.1",
+                        "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42688.so.2.0.0": "ICM42688_X5_2.0",
-    "lib/libsc132.so.2.0.0": "LIBSC132_2.0",
-    "lib/libprrtsp.so.2.0.0": "LIBPRRTSP_2.0",
+    "lib/libicm42688.so.2.1.0": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
+    "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
+    "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42688.so.2.0.0": "libicm42688.so.2",
+    "lib/libicm42688.so.2.1.0": "libicm42688.so.2",
     "lib/libsc132.so.2.0.0": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
 }
 EXPECTED_LIBRARY_COPIES = {
-    "lib/libicm42688.so.2.0.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
+    "lib/libicm42688.so.2.1.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
     "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
     "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
+}
+EXPECTED_SCRIPT_COPIES = {
+    "scripts/runtime_ffprobe_frame_count.sh": "bin/ffprobe",
 }
 EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
@@ -47,7 +51,7 @@ EXPECTED_NEEDED = {
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42688.so.2.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42688.so.2.1.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
@@ -64,6 +68,7 @@ REQUIRED_FILES = {
     "bin/imu_reader_demo",
     "bin/sensor_demo",
     "bin/serial_port_demo",
+    "bin/ffprobe",
     *EXPECTED_VERSION_DEFINITIONS,
     *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
 }
@@ -145,6 +150,7 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
         repo_root / "include/prrtsp_v2.h",
         repo_root / "scripts/package_runtime.sh",
         repo_root / "scripts/verify_runtime_package.py",
+        repo_root / "scripts/runtime_ffprobe_frame_count.sh",
     ]
     paths.extend(sorted((repo_root / "src").glob("*")))
     paths.extend(sorted((repo_root / "lib").glob("lib*.so*")))
@@ -332,7 +338,7 @@ def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
     if (package_dir / "VERSION").read_text(encoding="utf-8").strip() != RELEASE_VERSION:
         raise AssertionError("runtime VERSION does not match the release version")
 
-    for relative in ["cam_demo", "imu_reader_demo", "sensor_demo", "serial_port_demo", *EXPECTED_VERSION_NEEDS]:
+    for relative in ["cam_demo", "imu_reader_demo", "sensor_demo", "serial_port_demo", "bin/ffprobe", *EXPECTED_VERSION_NEEDS]:
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")
@@ -369,11 +375,14 @@ def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
                 f"old={sorted(old_versions)}"
             )
 
-    for relative, expected_version in EXPECTED_VERSION_DEFINITIONS.items():
+    for relative, expected_versions in EXPECTED_VERSION_DEFINITIONS.items():
         path = package_dir / relative
         versions = version_names(path)
-        if expected_version not in versions:
-            raise AssertionError(f"{relative} does not define {expected_version}: {sorted(versions)}")
+        missing_versions = expected_versions - versions
+        if missing_versions:
+            raise AssertionError(
+                f"{relative} does not define {sorted(missing_versions)}: {sorted(versions)}"
+            )
         actual_soname = soname(path)
         if actual_soname != EXPECTED_SONAMES[relative]:
             raise AssertionError(
@@ -381,7 +390,7 @@ def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
             )
 
     version_getters = {
-        "lib/libicm42688.so.2.0.0": "icm42688_get_version",
+        "lib/libicm42688.so.2.1.0": "icm42688_get_version",
         "lib/libsc132.so.2.0.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
     }
@@ -394,6 +403,10 @@ def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
         for copy_relative in copies:
             if sha256(package_dir / copy_relative) != expected_hash:
                 raise AssertionError(f"producer copy drift: {copy_relative} != {real_relative}")
+
+    for source_relative, package_relative in EXPECTED_SCRIPT_COPIES.items():
+        if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):
+            raise AssertionError(f"runtime script copy drift: {package_relative} != {source_relative}")
 
 
 def main() -> int:

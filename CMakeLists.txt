@@ -21,9 +21,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.0.0")
+set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.0")
 if(NOT EXISTS "${ICM42688_SO}")
-  message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.1.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
 set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0")
@@ -110,6 +110,7 @@ add_executable(sensor_demo
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
   src/frozen_system_clock.cpp
+  src/h264_mp4_recorder.cpp
   src/rosbag_v2_writer.cpp
   src/sensor_bag_recorder.cpp
   src/x5_jpeg_encoder.cpp
@@ -205,7 +206,7 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo
 )
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.0"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0"

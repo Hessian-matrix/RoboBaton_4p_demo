@@ -15,7 +15,7 @@ open_source_demo/
 │   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
 │   ├── config/              # sensor_demo YAML 配置
-│   ├── bin/                 # AArch64 可执行文件
+│   ├── bin/                 # AArch64 可执行文件和 MP4 ffprobe helper
 │   └── lib/                 # 与运行包匹配的三套动态库
 ├── image/                   # README 接线图片
 ├── config/                  # sensor_demo 默认 YAML 配置
@@ -33,13 +33,15 @@ open_source_demo/
 │   ├── cam_demo_regression.sh
 │   ├── rosbag_info.py
 │   ├── rosbag_extract.py
+│   ├── mp4_extract.py
 │   ├── package_runtime.sh
+│   ├── runtime_ffprobe_frame_count.sh
 │   └── verify_runtime_package.py
 └── src/
     ├── cam_demo.cpp / sensor_demo.cpp
     ├── cam_demo_common.* / cam_demo_config.*
     ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── rosbag_v2_writer.* / sensor_bag_recorder.*
+    ├── rosbag_v2_writer.* / sensor_bag_recorder.* / h264_mp4_recorder.*
     ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
     └── serial_port_demo.cpp
 ```
@@ -75,6 +77,8 @@ demo/serial_port_demo --version
 `cam_demo`和`sensor_demo`还会输出进程实际加载的`libsc132`、`libprrtsp`和`libicm42688`产品版本及ABI版本，用于发现程序与SO混装。三个自研SO分别提供`sc132_get_version()`、`prrtsp_get_version()`和`icm42688_get_version()` C API；返回值是进程静态只读字符串，不得释放。产品SemVer与SO的SONAME/ABI版本相互独立。
 
 功能新增、问题修复和已知限制统一记录在[公开版本更新记录](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md)中。
+
+保存数据的整包校验、板端运行、ROS1 bag/MP4互斥配置、优雅退出、完整性验收、离线转换和恢复步骤见公开文档仓的[保存数据应用说明](https://github.com/Hessian-matrix/4P_doc/blob/main/source/save-data-application-guide.md)。
 
 ## 2. 构建
 
@@ -171,7 +175,7 @@ scripts/package_runtime.sh
 
 `scripts/package_runtime.sh` 是发布仓 consumer 构建和打包入口：它只从本仓库已经提供的 `./lib` 和 `./include` 读取 producer 运行库与公开头，重新配置并编译本仓库的四个 demo target，最后原子发布并验证 `./demo`。它不会编译 `icm42688_driver.cpp`，也不会访问或依赖主仓库的 producer 源码。
 
-运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/` 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
+运行包包含顶层启动脚本、`env.sh`、`config/sensor_config.yaml`、`bin/ffprobe`、四个 `bin/` ELF 和 `lib/`。部署时请完整拷贝 `demo/` 的内容到板端，不要只拷贝单个可执行文件、单个 `.so` 或漏拷配置文件。
 
 部署到 X5：
 
@@ -198,7 +202,8 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo
 │   ├── cam_demo
 │   ├── sensor_demo
 │   ├── imu_reader_demo
-│   └── serial_port_demo
+│   ├── serial_port_demo
+│   └── ffprobe
 └── lib/
     ├── libicm42688.so
     ├── libsc132.so
@@ -214,10 +219,11 @@ cd /root/demo
 ./serial_port_demo
 ```
 
-顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置：
+顶层 `sensor_demo`、`cam_demo`、`imu_reader_demo`、`serial_port_demo` 是启动脚本，会先设置运行库路径，并把运行包自带工具目录放到 `PATH` 前缀：
 
 ```bash
 LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
+PATH=/root/demo/bin:/root/demo:$PATH
 ```
 
 真实 ELF 在 `bin/` 下。如果要直接运行 `bin/` 下的 ELF，需要先加载环境：
@@ -230,7 +236,7 @@ cd /root/demo
 
 四个 demo 都带有默认配置，普通功能验证时：`./sensor_demo`用于联合相机/RTSP和INT1 IMU，`./cam_demo`只用于相机/RTSP，`./imu_reader_demo`用于独立INT1 IMU，`./serial_port_demo`用于串口。需要修改帧率、码率、串口号、采样次数或IMU采样率时，再通过命令行参数覆盖默认值。
 
-`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu`、`save_data` 四个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz`、`imu.print_metrics`、`save_data.save`、`save_data.save_path` 和 `save_data.skip`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；`save_data.save_path` 必须是绝对 `.bag` 路径，`save_data.skip: true` 等价于 `--record-frame-skip 1`。默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
+`sensor_demo` 启动时先读取 `${DEMO_DIR:-当前目录}/config/sensor_config.yaml`；缺失时自动写入默认配置。该 YAML 使用 `camera`、`rtsp`、`imu`、`save_data` 四个 section，支持 `camera.width`、`camera.height`、`camera.fps`、`camera.rotate`、`rtsp.bps`、`rtsp.codec`、`rtsp.url`、`imu.sample_rate_hz`、`imu.print_rate_hz`、`imu.print_metrics`、`save_data.save`、`save_data.format`、`save_data.save_path` 和 `save_data.skip`。其中 `camera.width`/`camera.height` 固定为 `1280`/`1088`，仅用于暴露当前分辨率合同，修改会被拒绝；`save_data.format` 可选 `rosbag` 或 `mp4`，默认 `rosbag`；`save_data.save_path` 必须是绝对路径，`rosbag` 模式使用 `.bag` 文件，`mp4` 模式使用输出目录；`save_data.skip: true` 只适用于 `rosbag`，等价于 `--record-frame-skip 1`。默认 YAML 不再选择相机 mask，完整四目路径固定为 `0xf`，单颗 sensor 诊断请继续使用 `cam_demo --camera-id`。命令行参数优先，只覆盖显式项；`camera_id`、`diagnostics`、`diag_interval_ms`、`max_skew_ns`、`frame_timeout_ms`、`trigger_mode`、`imu_sample_drop_policy` 和 `imu_start_order` 仍为 CLI 配置项。`cam_demo` 不读取该 YAML。
 
 ## 4. sensor_demo 联合相机与IMU
 
@@ -264,6 +270,7 @@ cd /root/demo
 ```yaml
 save_data:
   save: true
+  format: rosbag
   save_path: /root/save_demo/record.bag
   skip: false
 ```
@@ -290,7 +297,47 @@ python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
 
 输出目录必须不存在；脚本成功后生成 `imu.csv`、`camera_params.yaml`、`conversion_summary.json` 和 `camera0` 到 `camera3` 四个目录。`imu.csv` 保存消息时间戳、sequence、frame ID、姿态占位值、角速度、线加速度及其协方差。JPEG 默认命名为 `<图像消息时间戳ns>.jpg`；同一相机时间戳重复时追加消息 sequence。`camera_params.yaml` 直接反映 bag 中的 `CameraInfo`，当前未标定录包仍会输出零标定矩阵。脚本只依赖 Python 标准库，支持当前未压缩且已完成索引的 ROS1 bag v2.0。
 
-当前 Host fake、AArch64 构建和运行包 ABI 校验已经通过；四路 JPEG context 与四路 RTSP encoder 的板端并发、持续吞吐和 JPEG 质量仍待目标板验收，不能把 Host/package PASS 当作 board PASS。
+### H.264 MP4 持久化与离线 JPEG
+
+`sensor_demo` 也可以复用每路 RTSP 已编码的 H.264 AU，保存四个 MP4、四个 timestamp index 和 IMU CSV：
+
+```bash
+./sensor_demo --record-mp4-dir /data/run_mp4
+```
+
+也可以在 `config/sensor_config.yaml` 中启用：
+
+```yaml
+save_data:
+  save: true
+  format: mp4
+  save_path: /root/save_demo/mp4_session
+  skip: false
+```
+
+- `--record-mp4-dir` 与 `--record-bag` 互斥，且 MP4 模式只支持 H.264、要求完整四路 camera mask `0x0f`、不支持 `record-frame-skip`；配置的 final 输出目录不得以保留后缀 `.partial` 结尾。若目标目录或同名 `.partial` 已存在，实际输出自动切到同级 `<目录名>-YYYYMMDDTHHMMSSZ[-NNNN]`，`SENSOR_MP4_RESULT path=` 给出真实路径。
+- MP4 packet 使用名义 H.264 frame timing；同一 session 下 `cameraN_timestamps.csv` 中的精确纳秒相机时间戳才是权威时间，按 `frame_index` 和 MP4 metadata 中的 start timestamp 对齐。
+- IMU 单独保存为同一 session 下的 `imu.csv`。owner/signal stop会先停止并join producer，再drain已进入adapter FIFO的tail；complete 还要求 sample sequence 连续、GPIO gap/FIFO overflow/mapper drop 为 0、无 timestamp duplicate/regression，且已发布样本的最大 timestamp uncertainty 不超过 200 µs。
+- 输出先写入临时目录，只有 session 状态、MP4、timestamp index、IMU CSV 和发布 receipt 都完成耐久化后才发布；不完整 session 会以 `.partial` 目录保存，进程退出码为 `2`。
+
+将 MP4 session 转成时间戳命名 JPEG：
+
+```bash
+python3 scripts/mp4_extract.py /data/run_mp4 /data/run_mp4_dataset
+python3 scripts/mp4_extract.py /data/run_mp4.partial /data/run_mp4_partial_dataset
+```
+
+完整源判定固定绑定四路 `camera_mask=0x0f`、receipt 中四路 MP4/index inventory 和默认 `--expected-cameras 0,1,2,3`；只提取子集或 inventory 被篡改时不会接受为 complete。最终输出目录使用no-replace原子promotion，不覆盖并发创建的路径。
+
+MP4 complete还要求stop/join后的ICM final-health snapshot有效：producer published数量必须等于consumer已观察数量，且final mapper/GPIO/FIFO/uncertainty-drop计数全部为0。公开C ABI通过`icm42688_get_runtime_health()`查询该快照，不改变既有sample/config布局和SONAME 2。
+
+若RTSP handle连续三次close失败，进程会以exit 1立即终止以保留相机callback ownership；该次数据只能从`.partial`/staging按恢复数据处理。
+
+输出目录必须不存在；脚本成功后生成 `imu.csv`、`camera_params.yaml`、`session_status.json`、`publication_receipt.json`、`conversion_summary.json`、`camera0_timestamps.csv` 到 `camera3_timestamps.csv`，以及 `camera0` 到 `camera3` 四个 JPEG 目录。`published_complete` 输入必须带有匹配的 `publication_receipt.json`；`.partial` 输入可转换，但 summary 中会保留 `source_outcome` 且 `source_data_complete=false`。
+
+MP4 录制模式仍依赖运行环境 PATH 中可执行的 `ffmpeg`；运行包自带的 `bin/ffprobe` 是录制链路 frame-count 调用的兼容 helper，不是完整 `ffprobe` 替代品。顶层启动脚本和 `env.sh` 会把它放到 `PATH` 前缀，避免板端系统缺少 `ffprobe` 时录制失败。启动录制前可用 `. ./env.sh && command -v ffmpeg && command -v ffprobe` 检查。`scripts/mp4_extract.py` 离线转换仍要求 Host PATH 中有完整 `ffmpeg` 和 `ffprobe`。离线转换的每个外部工具默认 1800 秒超时，可用 `--tool-timeout-seconds` 调整；超时会清理整个进程组。实际可持续保存帧率和压力边界以目标板验证结果为准。
+
+MP4 模式保持 PRRTSP v2 的五个导出函数和 `libprrtsp.so.2` SONAME；编码 AU 观察器通过 `prrtsp_stream_config_v2` 的可选尾部字段启用。
 
 退出日志包含：
 
@@ -385,7 +432,7 @@ killall -q cam_demo 2>/dev/null || true
 ```text
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
---fps <25|30|40|50|60> 相机和编码帧率，默认 30；25/30/40/50 为 V1 稳定功能配置；60 为显式 stress-only 压力配置
+--fps <25|30|40|50|60> 相机和编码帧率，默认30；五档均为受支持配置；仅ROS1 bag全量JPEG保存把60fps归为stress档，MP4不适用该标签
 --codec <h264|h265> 编码格式，默认 h264
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25/40/50/60fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
@@ -397,16 +444,16 @@ killall -q cam_demo 2>/dev/null || true
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认 `./cam_demo` 使用固定四路、30fps、H.264、正装方向 `1280x1088` 输出。`--fps 25/30/40/50` 是 V1 稳定功能配置；`--fps 60` 是显式 `stress-only` 压力配置，不是稳定发布 profile。`--codec h265` 使用相同的四路端口和 path。`--rotate 180` 仅支持 30fps 降载模式，不支持 25/40/50/60fps。RTSP 编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`；90/270 度不能继续沿用横屏画布。
+限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps 25/30/40/50/60`均为受支持的相机/RTSP配置；ROS1 bag全量JPEG保存单独把60fps归为stress档，H.264 MP4的60fps属于稳定发布矩阵。`--codec h265`使用相同的四路端口和path。`--rotate 180`仅支持30fps，不支持25/40/50/60fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
 
 ### H.265 客户端播放说明
 
-`--codec h265` 的板端编码和 RTSP 接口已经完成，可输出固定四路 H.265 码流。在显式 `stress-only` 的四路 `1280x1088@60fps` 配置下同时播放时，部分客户端可能因 H.265 接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或 RTSP 发送失败。
+`--codec h265`的板端编码和RTSP接口已经完成，可输出固定四路H.265码流。在四路`1280x1088@60fps`高吞吐配置下同时播放时，部分客户端可能因H.265接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或RTSP发送失败，也不把该配置降级为stress-only。
 
 排查时应同时观察板端和客户端：
 
 - 如果板端日志中四路 `fps` 接近目标值、`queue_full_rejects=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
-- 客户端应优先使用支持 H.265 硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法处理四路 60fps 压力配置。
+- 客户端应优先使用支持H.265硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法持续处理四路60fps高吞吐配置。
 - 如果客户端仍无法实时播放，可将 `--fps` 降为 `25/30/40/50` 中的较低档、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
 - H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
 
@@ -509,7 +556,7 @@ avg_frame_rate=30/1
 
 ### ICM ABI v2边界
 
-ICM发布身份继续保持ABI v2、`libicm42688.so.2`和`ICM42688_X5_2.0`。当前只支持`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0`、watermark 1和文档列出的ODR；旧`DIRECT=1`、旧`FIFO`枚举名、DIRECT寄存器读取路径及watermark 8已删除，不提供兼容shim。保持v2只表示导出函数、结构布局和ELF身份保持，不表示旧DIRECT配置可继续运行。当前header、SO和non-ROS demo必须成套部署，不要把该SO单独替换到未迁移程序；ROS2不在本轮范围。
+ICM发布身份为ABI 2.1、real SO `libicm42688.so.2.1.0`，SONAME继续保持`libicm42688.so.2`。v1.0.0已有函数继续使用`ICM42688_X5_2.0`节点，新增`icm42688_get_runtime_health()`使用`ICM42688_X5_2.1`节点，因此既有ABI 2 consumer保持兼容。当前只支持`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0`、watermark 1和文档列出的ODR；旧`DIRECT=1`、旧`FIFO`枚举名、DIRECT寄存器读取路径及watermark 8已删除。当前header、SO和consumer必须成套部署。
 
 完整决策见顶层`docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`。
 

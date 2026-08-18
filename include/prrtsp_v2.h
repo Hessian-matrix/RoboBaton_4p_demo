@@ -32,6 +32,8 @@ extern "C" {
 
 #define PRRTSP_STREAM_CONFIG_V2_0_SIZE ((uint32_t)232)
 #define PRRTSP_STREAM_CONFIG_V2_1_SIZE ((uint32_t)240)
+#define PRRTSP_STREAM_CONFIG_V2_2_SIZE ((uint32_t)256)
+#define PRRTSP_ENCODED_FRAME_V2_0_SIZE ((uint32_t)104)
 #define PRRTSP_NV12_FRAME_V2_0_SIZE ((uint32_t)152)
 #define PRRTSP_STREAM_STATUS_V2_0_SIZE ((uint32_t)104)
 #define PRRTSP_PATH_CAPACITY_BYTES ((uint32_t)128)
@@ -44,8 +46,28 @@ extern "C" {
 #define PRRTSP_CODEC_H264 ((uint32_t)1)
 #define PRRTSP_CODEC_H265 ((uint32_t)2)
 
+#define PRRTSP_ENCODED_FRAME_FLAG_KEY_FRAME ((uint32_t)1)
+
 typedef struct prrtsp_stream prrtsp_stream_t;
 typedef void (*prrtsp_frame_release_callback)(void *user);
+
+typedef struct prrtsp_encoded_frame_v2 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t codec;
+    uint32_t reserved0;
+    uint64_t data_address;
+    uint64_t size_bytes;
+    uint64_t timestamp_ns;
+    uint64_t reserved[8];
+} prrtsp_encoded_frame_v2;
+
+/*
+ * callback中的编码AU只借用到callback返回；不得保存data_address、阻塞或重入同一stream。
+ * timestamp_ns保持对应输入帧的原始ns值，不使用编码器微秒PTS反推。
+ */
+typedef void (*prrtsp_encoded_frame_callback)(
+    const prrtsp_encoded_frame_v2 *frame, void *user);
 
 typedef struct prrtsp_stream_config_v2 {
     uint32_t struct_size;
@@ -62,6 +84,8 @@ typedef struct prrtsp_stream_config_v2 {
     uint64_t reserved[8];
     uint32_t codec;
     uint32_t reserved_v2_1;
+    prrtsp_encoded_frame_callback encoded_frame_callback;
+    void *encoded_frame_user;
 } prrtsp_stream_config_v2;
 
 typedef struct prrtsp_nv12_frame_v2 {

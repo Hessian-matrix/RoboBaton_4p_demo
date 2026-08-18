@@ -172,8 +172,10 @@ int main(int argc, char** argv) {
     exit_code = 1;
   }
   if (!rtsp_close_ok) {
-    std::cerr << "fatal: RTSP handle remains after three close attempts\n";
-    exit_code = 1;
+    std::cerr << "fatal: RTSP handle remains after three close attempts\n" << std::flush;
+    // SC132 request-stop does not quiesce callbacks. Preserve every callback owner
+    // and terminate without stack destruction when RTSP still owns retained frames.
+    std::_Exit(1);
   }
 
   std::cout << "SC132 v2 RTSP demo stopped exit_code=" << exit_code << "\n";

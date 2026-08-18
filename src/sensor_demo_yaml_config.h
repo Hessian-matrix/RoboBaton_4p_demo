@@ -9,6 +9,7 @@ namespace robobaton_demo {
 struct SensorDemoYamlConfigState {
   bool imu_print_rate_was_set = false;
   bool save_data_enabled = false;
+  std::string save_data_format = "rosbag";
   std::string save_data_path = "/root/save_demo/record.bag";
 };
 

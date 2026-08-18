@@ -203,6 +203,7 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  print_metrics: false\n"
          << "save_data:\n"
          << "  save: false\n"
+         << "  format: rosbag\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.save_data_path << "\n"
          << "  skip: false\n";
   return output.str();
@@ -218,6 +219,19 @@ void EnsureSensorDemoYamlConfigFile(const std::string& path) {
     throw std::runtime_error("create sensor_demo config failed: " + path);
   }
   output << DefaultSensorDemoYamlConfigText();
+}
+
+void ApplySaveDataSelection(Options* options, const SensorDemoYamlConfigState& state) {
+  options->record_bag_path.clear();
+  options->record_mp4_directory.clear();
+  if (!state.save_data_enabled) {
+    return;
+  }
+  if (state.save_data_format == "rosbag") {
+    options->record_bag_path = state.save_data_path;
+  } else if (state.save_data_format == "mp4") {
+    options->record_mp4_directory = state.save_data_path;
+  }
 }
 
 bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
@@ -250,16 +264,20 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     options->imu_print_metrics = ParseBool(value, name.c_str());
   } else if (key == "save_data.save") {
     state->save_data_enabled = ParseBool(value, name.c_str());
-    options->record_bag_path =
-        state->save_data_enabled ? state->save_data_path : std::string();
+    ApplySaveDataSelection(options, *state);
+  } else if (key == "save_data.format") {
+    state->save_data_format = ToLower(value);
+    if (state->save_data_format != "rosbag" &&
+        state->save_data_format != "mp4") {
+      throw std::invalid_argument("save_data.format must be rosbag or mp4");
+    }
+    ApplySaveDataSelection(options, *state);
   } else if (key == "save_data.save_path") {
     if (value.empty() || value.front() != '/') {
       throw std::invalid_argument("save_data.save_path must be an absolute path");
     }
     state->save_data_path = value;
-    if (state->save_data_enabled) {
-      options->record_bag_path = state->save_data_path;
-    }
+    ApplySaveDataSelection(options, *state);
   } else if (key == "save_data.skip") {
     options->record_frame_skip = ParseBool(value, name.c_str()) ? 1U : 0U;
   } else {

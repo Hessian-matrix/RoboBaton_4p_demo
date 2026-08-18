@@ -20,6 +20,8 @@ struct ParseState {
   bool channels_set = false;
   bool camera_selector_set = false;
   bool record_frame_skip_set = false;
+  bool record_bag_set = false;
+  bool record_mp4_set = false;
   int requested_channels = kMaxChannels;
 };
 
@@ -54,6 +56,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
     std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
     std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
+    std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
     std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
   }
   std::cout << "  -h, --help        Show this help\n";
@@ -318,8 +321,22 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   if (!options.record_bag_path.empty() && options.record_bag_path.front() != '/') {
     throw std::invalid_argument("--record-bag/save_data.save_path path must be absolute");
   }
+  if (!options.record_mp4_directory.empty() &&
+      options.record_mp4_directory.front() != '/') {
+    throw std::invalid_argument("--record-mp4-dir/save_data.save_path path must be absolute");
+  }
+  if (!options.record_bag_path.empty() && !options.record_mp4_directory.empty()) {
+    throw std::invalid_argument("ROS bag and MP4 recording are mutually exclusive");
+  }
   if (record_frame_skip_set && options.record_bag_path.empty()) {
     throw std::invalid_argument("--record-frame-skip requires --record-bag");
+  }
+  if (!options.record_mp4_directory.empty() && options.record_frame_skip != 0U) {
+    throw std::invalid_argument("MP4 recording does not support frame skip");
+  }
+  if (!options.record_mp4_directory.empty() &&
+      options.video_codec != VideoCodec::kH264) {
+    throw std::invalid_argument("MP4 recording requires --codec h264");
   }
   if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
@@ -409,10 +426,27 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
     } else if (accept_imu_options && arg == "--print-metrics") {
       options.imu_print_metrics = true;
     } else if (accept_imu_options && arg == "--record-bag") {
+      if (cli_parse_state.record_mp4_set) {
+        throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
+      }
       options.record_bag_path = RequireValue(argc, argv, &i, "--record-bag");
       if (options.record_bag_path.empty() || options.record_bag_path.front() != '/') {
         throw std::invalid_argument("--record-bag path must be absolute");
       }
+      options.record_mp4_directory.clear();
+      cli_parse_state.record_bag_set = true;
+    } else if (accept_imu_options && arg == "--record-mp4-dir") {
+      if (cli_parse_state.record_bag_set) {
+        throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
+      }
+      options.record_mp4_directory =
+          RequireValue(argc, argv, &i, "--record-mp4-dir");
+      if (options.record_mp4_directory.empty() ||
+          options.record_mp4_directory.front() != '/') {
+        throw std::invalid_argument("--record-mp4-dir path must be absolute");
+      }
+      options.record_bag_path.clear();
+      cli_parse_state.record_mp4_set = true;
     } else if (accept_imu_options && arg == "--record-frame-skip") {
       options.record_frame_skip =
           ParseUint32(RequireValue(argc, argv, &i, "--record-frame-skip"),
