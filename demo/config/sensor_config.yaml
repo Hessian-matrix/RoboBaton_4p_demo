@@ -10,7 +10,7 @@ rtsp:
   codec: h264
   url: /PRR
 imu:
-  sample_rate_hz: 1000
+  sample_rate_hz: 30
   print_rate_hz: 10
   print_metrics: false
 save_data:

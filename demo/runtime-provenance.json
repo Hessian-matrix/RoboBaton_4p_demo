@@ -1,31 +1,52 @@
 {
-  "git": {
-    "dirty": true,
-    "head": "434300378a05dcbe944905d69e6e9c2f41e309f0"
+  "artifact": {
+    "files": {
+      "VERSION": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8",
+      "bin/cam_demo": "c987dd17e23caee3d10be50802dce2767678c091eeacf182894d19d2e16af462",
+      "bin/ffprobe": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
+      "bin/imu_reader_demo": "fe4dd0a67f681d9e45c91519e0e8f74793a4bc1c5411e65397fefc03fbd142f1",
+      "bin/sensor_demo": "ca0ece167797bfd2ce5be18a1a188c8cf01bc671da92896087baf0ae4f2fdbc0",
+      "bin/serial_port_demo": "070c9dd5e274dcc14d1bc83f24899939b456f3a68a6c5011a5eef65bf1a7e0c2",
+      "cam_demo": "99f2bb3caae5e0b396d2f1e4ae2df2871e9fe5e5de058c35632b401b459befb5",
+      "config/sensor_config.yaml": "a54c0295f59b3ec196f724ecb4fcf1d0a9798e3b57a2eea0a93d094c8ad9a058",
+      "env.sh": "ea1343c9ae403e81a8f05ad22789a51b1d0424cbb8c4a75120fdebb7352ac166",
+      "imu_reader_demo": "1afb150a209806fde8b0528139060934dc4dbbc3c60b6bb3ff8458acc792c6e0",
+      "lib/libicm42688.so": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+      "lib/libicm42688.so.2": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+      "lib/libicm42688.so.2.1.0": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+      "lib/libprrtsp.so": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+      "lib/libprrtsp.so.2": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+      "lib/libprrtsp.so.2.0.0": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+      "lib/libsc132.so": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+      "lib/libsc132.so.2": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+      "lib/libsc132.so.2.0.0": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+      "sensor_demo": "391176354b05f90932b1ed03e7937f7156f500ea8e69deb24e7708b102ef0e87",
+      "serial_port_demo": "ae6a119db70599483c6a636542715986984dd8a7f14745843583ea24aa4e87be"
+    }
   },
   "inputs": {
     "CMakeLists.txt": "643c31c482a96c6a1caad9bacc1757b2a9831e077377a5807b53c646d686692f",
     "VERSION": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8",
-    "config/sensor_config.yaml": "ff9bea049abc1738cc84477e44b8b1f878a773981f8278eafb339a57a0dc8c01",
-    "include/icm42688_driver.h": "4efa09400da7eeeec413432f737331d08e433196fdd7d31d7bee671d2ba27161",
+    "config/sensor_config.yaml": "a54c0295f59b3ec196f724ecb4fcf1d0a9798e3b57a2eea0a93d094c8ad9a058",
+    "include/icm42688_driver.h": "513990dcc9c8e0abee41523b339185ab82f2c0e55947152ebf4faea4a424a814",
     "include/prrtsp_v2.h": "1662152001b05ba28dbae924ab212be5695d6927d9e01f33ad216161a356d1bb",
     "include/sc132camera.h": "1bb5bb1b1e8f3d607403db526af441849cadf0864ed87a748450500fde25f240",
-    "lib/libicm42688.so": "48fe644f49032d77201e1d404a7f90e211ec5cb3f952a75d650a837ea599de5c",
-    "lib/libicm42688.so.2": "48fe644f49032d77201e1d404a7f90e211ec5cb3f952a75d650a837ea599de5c",
-    "lib/libicm42688.so.2.1.0": "48fe644f49032d77201e1d404a7f90e211ec5cb3f952a75d650a837ea599de5c",
-    "lib/libprrtsp.so": "4ebd9eb3eaadb0e3dd82d679d71d8f8553e8b7f0f839a559e03ef546e0b7c9b9",
-    "lib/libprrtsp.so.2": "4ebd9eb3eaadb0e3dd82d679d71d8f8553e8b7f0f839a559e03ef546e0b7c9b9",
-    "lib/libprrtsp.so.2.0.0": "4ebd9eb3eaadb0e3dd82d679d71d8f8553e8b7f0f839a559e03ef546e0b7c9b9",
-    "lib/libsc132.so": "c3d3587310663504f6eef7803eaa0e0365a2e23d0e0bca3caa5019a463fec6a8",
-    "lib/libsc132.so.2": "c3d3587310663504f6eef7803eaa0e0365a2e23d0e0bca3caa5019a463fec6a8",
-    "lib/libsc132.so.2.0.0": "c3d3587310663504f6eef7803eaa0e0365a2e23d0e0bca3caa5019a463fec6a8",
-    "scripts/package_runtime.sh": "118aed643f7c41bad2a38e78512b62c216c97add8490f9b4e8d1d46d4a405070",
+    "lib/libicm42688.so": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+    "lib/libicm42688.so.2": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+    "lib/libicm42688.so.2.1.0": "eae38c43d7f5b7c3b68c9df6f983cd436c6c932178d38ab5c8b1b4e3dd2d458b",
+    "lib/libprrtsp.so": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+    "lib/libprrtsp.so.2": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+    "lib/libprrtsp.so.2.0.0": "6eab837634ee4f97d870e3be2febf14cc6915138b663fc33548b0a17cf7aec2a",
+    "lib/libsc132.so": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+    "lib/libsc132.so.2": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+    "lib/libsc132.so.2.0.0": "8bbb4ce97e334f6d5c300f177fa8841a86a2ba752201bac1bd2077b4e55217a1",
+    "scripts/package_runtime.sh": "3af34d75244b7105b9f3d213dc2d060d0f0bfc051e65c0bd85a3b5f33948e992",
     "scripts/runtime_ffprobe_frame_count.sh": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
-    "scripts/verify_runtime_package.py": "7c088abab7ac2b1482cad99623490b007fc6d13ebca45f87c9595aaf4ccf25c3",
+    "scripts/verify_runtime_package.py": "b6c6a1dd47c57ba03146fd75cdd055b497721740a56adbc9392eb31243c44be4",
     "src/cam_demo.cpp": "aaada2c62f9675f33539098b562a82b1c49bc96d98b521df69f2e7184074ea0a",
     "src/cam_demo_common.cpp": "4d0a786eec959bb6888f79281554f3b90f288c6bd61d031e8cff7146a7fd2b73",
-    "src/cam_demo_common.h": "02d1cbe3bc512f0f3c4d13b2814fd7ae8c5fbf2803a02cd09f2fd6efb6eed8ef",
-    "src/cam_demo_config.cpp": "71f2de37e1f6d65b96def5673a7da9efe5d8d38f7ef763f0a9357ecd8d47aafe",
+    "src/cam_demo_common.h": "5d4cd0a40f1e81f0548fbc1491981172847fd460eab531668023cdeee99b50e2",
+    "src/cam_demo_config.cpp": "78c22280bb591ebe65d13145e2fba8f5cfc9b0f6a62096b875e1406c986359ac",
     "src/cam_demo_config.h": "2e4f7174695845079fd3a5efc24a82488fa02d83147ad332163d778cfbe5efe6",
     "src/cam_demo_pipeline.cpp": "e4a8696360eb45ab3d9bf3f3493b8cadfe98148fb9fd877536efa232b57d90bc",
     "src/cam_demo_pipeline.h": "ad1b5c4a3e04399a214cf08f7c2227350e85eac292b95ad96398305ae7dc422e",
@@ -35,7 +56,7 @@
     "src/frozen_system_clock.h": "4299f43548d5083f413cd87e445f4d5b3996459e55b6725b52572a53086c9885",
     "src/h264_mp4_recorder.cpp": "185f899736f5f61cb2373e59cbc5c5c5154527b7bdce4c9ccdf033a8bbca8144",
     "src/h264_mp4_recorder.h": "c176bac20f6e8fc553e8a2d7f9123248e938dde12b7c283d7d4b05f946bf47e6",
-    "src/imu_reader_demo.cpp": "c458477c23a6687441fcc8424da14b6b00e9aea45b34a4f706e2bbc4e5a55f30",
+    "src/imu_reader_demo.cpp": "d4ce8ce837a4401e90c87e6a89e9f436d8091a07419b022ee9885e4971682c25",
     "src/rosbag_v2_writer.cpp": "3d606d346e6670d036d010d7224bd77f9ee615cbc0303f3a10ef668cefa5d96b",
     "src/rosbag_v2_writer.h": "12ef5ce8d496f432b8b36b4ed03da93ce9c0d0697f5beb3d38bcc775b10110a2",
     "src/sensor_bag_recorder.cpp": "353f1d973534a9a66e69824404d1577b9c73e5e402cfdb466d8beb0c8937443c",
@@ -48,11 +69,27 @@
     "src/x5_jpeg_encoder.h": "748bff22e4a2274c01bf5672f64c478b3d5945625486492f6a35ac5c06754217"
   },
   "release_version": "1.1.0",
-  "repo_root": "/root/x5/4cam_function_2/sub_module/RoboBaton_4p_demo",
-  "schema": "robobaton-non-ros-runtime-provenance-v1",
+  "repository_states": {
+    "runtime_source": {
+      "commit": "500232268a9d2e4ccb6d497d65c69c44109e7b9e",
+      "status": ""
+    },
+    "superproject": {
+      "commit": "0e1959025aceb5d57408e9c84888f4ced1c7d3d9",
+      "status": ""
+    }
+  },
+  "schema": "robobaton-non-ros-runtime-provenance-v2",
+  "source": {
+    "repository_commit": "500232268a9d2e4ccb6d497d65c69c44109e7b9e",
+    "repository_path": "sub_module/RoboBaton_4p_demo",
+    "superproject_commit": "0e1959025aceb5d57408e9c84888f4ced1c7d3d9",
+    "superproject_gitlink_commit": "500232268a9d2e4ccb6d497d65c69c44109e7b9e"
+  },
   "toolchain": {
-    "build_dir": "/root/x5/4cam_function_2/sub_module/RoboBaton_4p_demo/build_x5",
-    "compiler": "/usr/bin/aarch64-linux-gnu-gcc",
+    "build_dir": "/tmp/4cam-v110-package-source-20260819/sub_module/RoboBaton_4p_demo/build_x5",
+    "compiler": "/usr/bin/aarch64-linux-gnu-gcc-11",
+    "compiler_sha256": "70a2d6626629079a8d94b97184b121d4e3a1bfe880c44e7db30670bb73e4028e",
     "toolchain_file": "/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake",
     "toolchain_file_sha256": "e3eb4d51917c461c8d11781c064f954dcae7ea28c04eb9a605f8750f60d31489",
     "triplet": "aarch64-linux-gnu"
