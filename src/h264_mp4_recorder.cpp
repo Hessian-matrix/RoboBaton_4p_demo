@@ -70,6 +70,16 @@ std::string ErrnoText(const char* operation) {
   return std::string(operation) + ": " + std::strerror(errno);
 }
 
+void AppendFinishError(std::string* target,
+                       const std::string& message) noexcept {
+  if (target == nullptr || message.empty()) return;
+  try {
+    if (!target->empty()) target->append("; ");
+    target->append(message);
+  } catch (...) {
+  }
+}
+
 std::string JsonEscape(const std::string& text) {
   std::ostringstream output;
   for (unsigned char value : text) {
@@ -948,7 +958,8 @@ class H264Mp4Recorder::Impl {
     if (!session_success && result.error.empty()) result.error = "sensor session failed";
 
     const fs::path destination = data_complete ? output_path_ : partial_path_;
-    const bool status_ok = WriteSessionStatus(result);
+    const bool status_ok = WriteSessionStatus(
+        staging_path_ / "session_status.json", result);
     bool durable = status_ok && SyncStagingFiles();
     bool renamed_to_destination = false;
     std::error_code rename_error;
@@ -973,11 +984,17 @@ class H264Mp4Recorder::Impl {
     if (durable && renamed_to_destination) {
       durable = WritePublicationReceipt(destination, result);
       if (durable) {
-        // All data/status/receipt bytes and directory entries are already durable.
-        // Marker unlink is the final commit action. If a crash loses this unlink, the
-        // marker reappears and consumers conservatively treat the session as recovery-only.
+        // 数据、状态和收据均已落盘；marker 删除是唯一提交动作。
         std::error_code marker_error;
+#ifdef RELEASE008_TESTING
+        if (fail_marker_removal_) {
+          marker_error = std::make_error_code(std::errc::io_error);
+        } else {
+          fs::remove(destination / kPublicationIncompleteMarker, marker_error);
+        }
+#else
         fs::remove(destination / kPublicationIncompleteMarker, marker_error);
+#endif
         durable = !marker_error;
         if (!durable && result.error.empty()) {
           result.error = marker_error.message();
@@ -1024,6 +1041,15 @@ class H264Mp4Recorder::Impl {
       result.data_complete = false;
       if (result.error.empty()) {
         result.error = rename_error ? rename_error.message() : "publish durability failed";
+      }
+    }
+    if (!durable && renamed_to_destination &&
+        result.published_path == partial_path_.string()) {
+      // 隔离目录先撤销已接受的收据和旧状态，再发布与返回值一致的失败状态。
+      std::string downgrade_error;
+      if (!RewriteSessionStatus(partial_path_, result, &downgrade_error)) {
+        AppendFinishError(&result.error, "session status downgrade failed");
+        AppendFinishError(&result.error, downgrade_error);
       }
     }
     {
@@ -1109,6 +1135,31 @@ class H264Mp4Recorder::Impl {
     std::lock_guard<std::mutex> lock(mutex_);
     fail_parent_sync_after_rename_ = true;
   }
+  void FailPublicationMarkerRemovalForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_marker_removal_ = true;
+  }
+
+  void FailSessionStatusRewriteWriteForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_status_rewrite_write_ = true;
+  }
+
+  void FailSessionStatusRewriteFsyncForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_status_rewrite_fsync_ = true;
+  }
+
+  void FailSessionStatusRewriteRenameForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_status_rewrite_rename_ = true;
+  }
+
+  void FailSessionStatusRewriteDirectorySyncForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_status_rewrite_directory_sync_ = true;
+  }
+
 
   void FailSessionStatusCloseForTest() noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1357,7 +1408,8 @@ class H264Mp4Recorder::Impl {
     return true;
   }
 
-  bool WriteSessionStatus(const H264Mp4FinishResult& preliminary) noexcept {
+  bool WriteSessionStatus(const fs::path& status_path,
+                          const H264Mp4FinishResult& preliminary) noexcept {
     try {
       const H264Mp4RecorderStats stats = SnapshotStats();
       H264Mp4SourceHealth source_health;
@@ -1367,7 +1419,7 @@ class H264Mp4Recorder::Impl {
         source_health = source_health_;
         source_health_set = source_health_set_;
       }
-      std::ofstream output(staging_path_ / "session_status.json", std::ios::trunc);
+      std::ofstream output(status_path, std::ios::trunc);
       if (!output) return false;
       output << "{\n"
              << "  \"schema\": \"" << kSessionSchema << "\",\n"
@@ -1456,6 +1508,130 @@ class H264Mp4Recorder::Impl {
       return false;
     }
   }
+  // 隔离目录必须先撤销 complete 元数据，再以原子替换发布失败状态。
+  bool RewriteSessionStatus(const fs::path& directory,
+                            const H264Mp4FinishResult& final_result,
+                            std::string* failure) noexcept {
+    const fs::path temporary = directory / ".session_status.json.tmp";
+    const fs::path status = directory / "session_status.json";
+    const fs::path failed_status = directory / ".session_status.failed";
+    const fs::path receipt = directory / "publication_receipt.json";
+    const fs::path failed_receipt = directory / ".publication_receipt.failed";
+    const auto remove_temporary = [&temporary]() noexcept {
+      std::error_code ignored;
+      fs::remove(temporary, ignored);
+    };
+
+    try {
+      // 收据必须先退出消费者认可的文件名；失败时保留匹配的旧状态和 marker。
+      std::error_code error;
+      const bool receipt_exists = fs::exists(receipt, error);
+      if (error) {
+        AppendFinishError(failure,
+                          "inspect publication receipt failed: " + error.message());
+        return false;
+      }
+      if (receipt_exists) {
+        (void)RenameNoReplace(receipt, failed_receipt, &error);
+        if (error) {
+          AppendFinishError(failure,
+                            "quarantine publication receipt failed: " +
+                                error.message());
+          return false;
+        }
+        std::string sync_error;
+        if (!FsyncDirectory(directory, &sync_error)) {
+          AppendFinishError(failure,
+                            "sync quarantined publication receipt failed: " +
+                                sync_error);
+          return false;
+        }
+      }
+
+      // 旧 complete 状态保留为诊断证据，但不能继续占用标准状态文件名。
+      error.clear();
+      const bool status_exists = fs::exists(status, error);
+      if (error || !status_exists) {
+        AppendFinishError(
+            failure, error ? "inspect session status failed: " + error.message()
+                           : "session status missing before downgrade");
+        return false;
+      }
+      (void)RenameNoReplace(status, failed_status, &error);
+      if (error) {
+        AppendFinishError(failure,
+                          "quarantine session status failed: " + error.message());
+        return false;
+      }
+      std::string sync_error;
+      if (!FsyncDirectory(directory, &sync_error)) {
+        AppendFinishError(failure,
+                          "sync quarantined session status failed: " + sync_error);
+        return false;
+      }
+
+      // 新状态先写同目录临时文件并同步，再用无覆盖 rename 建立唯一标准状态。
+#ifdef RELEASE008_TESTING
+      if (fail_status_rewrite_write_) {
+        AppendFinishError(failure, "write failed (injected)");
+        remove_temporary();
+        return false;
+      }
+#endif
+      if (!WriteSessionStatus(temporary, final_result)) {
+        AppendFinishError(failure, "write failed");
+        remove_temporary();
+        return false;
+      }
+#ifdef RELEASE008_TESTING
+      if (fail_status_rewrite_fsync_) {
+        AppendFinishError(failure, "file sync failed (injected)");
+        remove_temporary();
+        return false;
+      }
+#endif
+      if (!FsyncFile(temporary, &sync_error)) {
+        AppendFinishError(failure, sync_error);
+        remove_temporary();
+        return false;
+      }
+      error.clear();
+#ifdef RELEASE008_TESTING
+      if (fail_status_rewrite_rename_) {
+        error = std::make_error_code(std::errc::io_error);
+      } else {
+        (void)RenameNoReplace(temporary, status, &error);
+      }
+#else
+      (void)RenameNoReplace(temporary, status, &error);
+#endif
+      if (error) {
+        AppendFinishError(failure, "rename failed: " + error.message());
+        remove_temporary();
+        return false;
+      }
+#ifdef RELEASE008_TESTING
+      if (fail_status_rewrite_directory_sync_) {
+        AppendFinishError(failure, "directory sync failed (injected)");
+        return false;
+      }
+#endif
+      if (!FsyncDirectory(directory, &sync_error)) {
+        AppendFinishError(failure, sync_error);
+        return false;
+      }
+      return true;
+    } catch (const std::exception& exception) {
+      remove_temporary();
+      AppendFinishError(failure, exception.what());
+      return false;
+    } catch (...) {
+      remove_temporary();
+      AppendFinishError(failure, "unknown status downgrade failure");
+      return false;
+    }
+  }
+
 
   bool WritePublicationReceipt(const fs::path& destination,
                                const H264Mp4FinishResult& final_result) noexcept {
@@ -1610,6 +1786,11 @@ class H264Mp4Recorder::Impl {
   bool fail_receipt_after_rename_ = false;
   bool fail_cleanup_and_quarantine_ = false;
   bool fail_parent_sync_after_rename_ = false;
+  bool fail_marker_removal_ = false;
+  bool fail_status_rewrite_write_ = false;
+  bool fail_status_rewrite_fsync_ = false;
+  bool fail_status_rewrite_rename_ = false;
+  bool fail_status_rewrite_directory_sync_ = false;
   bool fail_session_status_close_ = false;
   bool fail_receipt_close_ = false;
   bool fail_output_close_ = false;
@@ -1704,6 +1885,27 @@ void H264Mp4Recorder::FailPublicationCleanupAndQuarantineForTest() noexcept {
 void H264Mp4Recorder::FailParentDirectorySyncAfterRenameForTest() noexcept {
   impl_->FailParentDirectorySyncAfterRenameForTest();
 }
+
+void H264Mp4Recorder::FailPublicationMarkerRemovalForTest() noexcept {
+  impl_->FailPublicationMarkerRemovalForTest();
+}
+
+void H264Mp4Recorder::FailSessionStatusRewriteWriteForTest() noexcept {
+  impl_->FailSessionStatusRewriteWriteForTest();
+}
+
+void H264Mp4Recorder::FailSessionStatusRewriteFsyncForTest() noexcept {
+  impl_->FailSessionStatusRewriteFsyncForTest();
+}
+
+void H264Mp4Recorder::FailSessionStatusRewriteRenameForTest() noexcept {
+  impl_->FailSessionStatusRewriteRenameForTest();
+}
+
+void H264Mp4Recorder::FailSessionStatusRewriteDirectorySyncForTest() noexcept {
+  impl_->FailSessionStatusRewriteDirectorySyncForTest();
+}
+
 
 void H264Mp4Recorder::FailSessionStatusCloseForTest() noexcept {
   impl_->FailSessionStatusCloseForTest();

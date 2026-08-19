@@ -112,6 +112,11 @@ class H264Mp4Recorder final {
   void FailPublicationReceiptAfterRenameForTest() noexcept;
   void FailPublicationCleanupAndQuarantineForTest() noexcept;
   void FailParentDirectorySyncAfterRenameForTest() noexcept;
+  void FailPublicationMarkerRemovalForTest() noexcept;
+  void FailSessionStatusRewriteWriteForTest() noexcept;
+  void FailSessionStatusRewriteFsyncForTest() noexcept;
+  void FailSessionStatusRewriteRenameForTest() noexcept;
+  void FailSessionStatusRewriteDirectorySyncForTest() noexcept;
   void FailSessionStatusCloseForTest() noexcept;
   void FailPublicationReceiptCloseForTest() noexcept;
   void FailOutputCloseForTest() noexcept;
