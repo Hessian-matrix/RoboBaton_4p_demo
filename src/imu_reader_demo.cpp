@@ -422,8 +422,8 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       options.sample_rate_hz =
           ParseUint32Argument(RequireValue(argc, argv, &index, "--sample-rate-hz"),
                               "--sample-rate-hz");
-      if (options.sample_rate_hz == 0U) {
-        throw std::invalid_argument("--sample-rate-hz must be positive");
+      if (options.sample_rate_hz != 25U && options.sample_rate_hz != 30U) {
+        throw std::invalid_argument("--sample-rate-hz must be 25 or 30");
       }
     } else if (argument == "--count") {
       options.count =
@@ -437,7 +437,7 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       print_metrics_enabled = true;
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: imu_reader_demo [options]:\n"
-                << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+                << "  --sample-rate-hz <25|30> IMU sample rate, default "
                 << robobaton_demo::kDefaultImuSampleRateHz << "\n"
                 << "  --count N Number of IMU samples to consume before exit, default 0 (run until signal)\n"
                 << "  --print-rate-hz HZ Terminal output rate, default min(sample-rate-hz, 10); 0 disables output\n"

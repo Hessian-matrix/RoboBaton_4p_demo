@@ -274,7 +274,7 @@ ICM FIFO TMST
   -> sample_timestamp_ns / icm42688 sample callback
 ```
 
-Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25` or `30` and defaults to `30`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
 
 `sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
 
@@ -340,7 +340,7 @@ cd /root/demo
 ```
 
 ```bash
-./sensor_demo --sample-rate-hz 2000
+./sensor_demo --sample-rate-hz 25
 ```
 
 On exit it prints an IMU summary such as:
@@ -348,7 +348,7 @@ On exit it prints an IMU summary such as:
 ```text
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
-`effective_hz` is gated as a ppm error against the 1000Hz target. The V1 limit is absolute error `<=12000ppm`, equivalent to an approximate stable window of `988.0-1012.0Hz`.
+`effective_hz` is gated as a ppm error against the configured target. The V1 absolute-error limit is `<=12000ppm`.
 
 ### ROS1 bag persistence and X5 hardware JPEG
 
@@ -465,9 +465,9 @@ Common options:
 ```text
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
---fps <25|30|40|50|60> Camera and encoder fps, default 30; all five are supported; only full-JPEG ROS1 bag persistence classifies 60fps as stress, while MP4 does not
+--fps <25|30>       Camera and encoder fps, default 30; only 25fps and 30fps are supported
 --codec <h264|h265> Video codec, default h264
---rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25/40/50/60fps
+--rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
 --url <path>       RTSP path, default /PRR
 --rtsp-base-port <port> RTSP base port, default 554; cameras 0..3 use base+0..3
@@ -477,17 +477,17 @@ Common options:
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps 25/30/40/50/60` are supported camera/RTSP configurations. Only full-JPEG ROS1 bag persistence classifies 60fps as stress; H.264 MP4 at 60fps is in the stable release matrix. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only at 30fps and is rejected at 25/40/50/60fps.
+Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps` supports only `25` and `30`; other values are rejected before startup side effects. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only at 30fps and is rejected at 25fps.
 
 ### H.265 Client Playback Notes
 
-The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. In the high-throughput four-stream `1280x1088@60fps` configuration, some clients may stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not indicate a board-side encoder or RTSP failure and does not make the configuration stress-only.
+The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. Some clients may still stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not indicate a board-side encoder or RTSP failure.
 
 Check both sides when diagnosing playback:
 
 - If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
-- Prefer a player with H.265 hardware decoding and verify that hardware decoding is active. Older players or software-only decoding may not sustain the four-stream 60fps high-throughput configuration.
-- If the client still cannot play in real time, reduce `--fps` to a lower `25/30/40/50` mode, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
+- Prefer a player with H.265 hardware decoding and verify that hardware decoding is active. Older players or software-only decoding may not sustain all four streams.
+- If the client still cannot play in real time, reduce `--fps` from 30 to 25, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
 - With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
 
 H.265 acceptance must therefore verify both that the board continuously publishes a valid bitstream and that the target client can decode and render it in real time. Do not use one player's visual smoothness as the sole indicator of board-side interface health.
@@ -603,10 +603,10 @@ Default run:
 Example:
 
 ```bash
-./imu_reader_demo --sample-rate-hz 2000 --count 10000
+./imu_reader_demo --sample-rate-hz 25 --count 300
 ```
 
-Supported IMU sample rates are `25/50/100/200/500/1000/2000 Hz`; the default remains `1000 Hz`.
+Supported IMU sample rates are `25 Hz` and `30 Hz`; the default is `30 Hz`.
 
 Terminal output defaults to `10 Hz` while the program still consumes and counts every
 IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
@@ -793,7 +793,7 @@ The top-level launchers set `LD_LIBRARY_PATH` automatically. If you run a `bin/`
 ```bash
 cd /root/demo
 . ./env.sh
-./bin/imu_reader_demo --sample-rate-hz 2000 --count 10
+./bin/imu_reader_demo --sample-rate-hz 25 --count 10
 ```
 
 ### 9.2 IMU Startup Failure

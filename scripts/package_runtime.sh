@@ -141,6 +141,8 @@ if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUT
   exit 1
 fi
 
+python3 "${SCRIPT_DIR}/verify_runtime_package.py" --check-source --repo-root "${PROJECT_DIR}"
+
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.0 libsc132.so.2 libsc132.so \

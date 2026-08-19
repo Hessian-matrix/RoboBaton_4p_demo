@@ -13,7 +13,7 @@ namespace {
 
 constexpr const char* kSc132SensorProfileEnv = "SC132_SENSOR_PROFILE";
 constexpr const char* kSc132TriggerModeEnv = "SC132_TRIGGER_MODE";
-constexpr const char* kSc132Single60FpsProfile =
+constexpr const char* kSc132Single25FpsBaseProfile =
     "sc132gs_linear_1088x1280_raw10_60fps_1lane";
 
 struct ParseState {
@@ -32,7 +32,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
             << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
             << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
-            << "  --fps <25|30|40|50|60> Camera and encoder fps, default 30\n"
+            << "  --fps <25|30>       Camera and encoder fps, default 30\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --codec <h264|h265> Encoder format, default h264\n"
@@ -49,7 +49,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
   if (include_imu_options) {
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
               << " YAML config is loaded before CLI options; missing file is created with defaults\n";
-    std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+    std::cout << "  --sample-rate-hz <25|30> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
     std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
@@ -226,32 +226,12 @@ void FinalizeParsedOptions(Options* options, const ParseState& config_state,
 // 输入：sample_rate_hz 为用户命令行值。
 // 输出：支持则 true，否则 false。
 bool IsSupportedImuSampleRateHz(uint32_t sample_rate_hz) {
-  switch (sample_rate_hz) {
-    case 25U:
-    case 50U:
-    case 100U:
-    case 200U:
-    case 500U:
-    case 1000U:
-    case 2000U:
-      return true;
-    default:
-      return false;
-  }
+  return sample_rate_hz == 25U || sample_rate_hz == 30U;
 }
 
-// 功能：按 libsc132 当前公开的离散帧率表校验相机帧率。
+// 功能：按libsc132当前公开的离散帧率表校验相机帧率。
 bool IsSupportedCameraFps(int fps) {
-  switch (fps) {
-    case 25:
-    case 30:
-    case 40:
-    case 50:
-    case 60:
-      return true;
-    default:
-      return false;
-  }
+  return fps == 25 || fps == 30;
 }
 
 
@@ -273,7 +253,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--width and --height must produce positive even NV12 dimensions");
   }
   if (!IsSupportedCameraFps(options.fps)) {
-    throw std::invalid_argument("--fps must be one of 25, 30, 40, 50, or 60");
+    throw std::invalid_argument("--fps must be 25 or 30");
   }
   if (options.bps <= 0 ||
       static_cast<unsigned long long>(options.bps) >
@@ -312,8 +292,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--frame-timeout-ms must be positive");
   }
   if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
-    throw std::invalid_argument(
-        "--sample-rate-hz must be one of 25, 50, 100, 200, 500, 1000, or 2000");
+    throw std::invalid_argument("--sample-rate-hz must be 25 or 30");
   }
   if (options.record_frame_skip > 1U) {
     throw std::invalid_argument("--record-frame-skip must be 0 or 1");
@@ -486,9 +465,9 @@ void ConfigureSc132TriggerMode(const Options& options) {
             << " (GPIO417 is used when mode=software_gpio)\n";
 }
 
-// 功能：为内部单颗 sensor smoke 自动补齐 60fps sensor profile。
+// 功能：为内部单颗25fps smoke自动补齐兼容的60fps base sensor profile。
 // 输入：options.camera_mask/options.fps。
-// 副作用：当内部诊断只启用一颗 sensor 且未预设 SC132_SENSOR_PROFILE 时设置兼容 profile。
+// 副作用：当内部诊断只启用一颗25fps sensor且未预设SC132_SENSOR_PROFILE时设置兼容profile。
 void ConfigureSc132SensorProfile(const Options& options) {
   const char* current_profile = std::getenv(kSc132SensorProfileEnv);
   if (current_profile != nullptr && current_profile[0] != '\0') {
@@ -496,16 +475,16 @@ void ConfigureSc132SensorProfile(const Options& options) {
     return;
   }
 
-  // 四路使用默认 profile；单颗 60fps 使用匹配 SDK 的 1-lane profile。
-  if (CameraMaskPopCount(options.camera_mask) != 1 || options.fps != 60) {
+  // 四路使用libsc132默认profile；单颗25fps使用SDK兼容的60fps base profile。
+  if (CameraMaskPopCount(options.camera_mask) != 1 || options.fps != 25) {
     return;
   }
 
   // setenv 仅影响当前进程，不修改板端全局 shell 环境。
-  if (setenv(kSc132SensorProfileEnv, kSc132Single60FpsProfile, 1) != 0) {
+  if (setenv(kSc132SensorProfileEnv, kSc132Single25FpsBaseProfile, 1) != 0) {
     throw std::runtime_error("set SC132_SENSOR_PROFILE failed");
   }
-  std::cout << "Auto selected single-sensor 60fps profile\n";
+  std::cout << "Auto selected single-sensor 25fps base profile\n";
 }
 
 }  // namespace robobaton_demo

@@ -247,7 +247,7 @@ cd /root/demo
 
 ## 4. sensor_demo 联合相机与IMU
 
-`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`1000Hz`，可通过`--sample-rate-hz`切换到`25/50/100/200/500/1000/2000Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
+`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`30Hz`，可通过`--sample-rate-hz`切换到`25Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
 
 `sensor_demo` 的 IMU 终端记录与 `imu_reader_demo` 使用同一格式：默认按 `min(sample-rate-hz, 10)` 抽样输出 `imu data:` 多行块，`--print-rate-hz HZ` 可调整输出频率，`--print-rate-hz 0` 只保留启动/退出摘要，`--print-metrics` 才追加 `metrics:` 诊断段。
 
@@ -256,7 +256,7 @@ cd /root/demo
 ```
 
 ```bash
-./sensor_demo --sample-rate-hz 2000
+./sensor_demo --sample-rate-hz 25
 ```
 
 ```bash
@@ -351,7 +351,7 @@ MP4 模式保持 PRRTSP v2 的五个导出函数和 `libprrtsp.so.2` SONAME；�
 ```text
 SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
 ```
-`effective_hz`按相对1000Hz目标的ppm误差验收；V1门限为绝对误差`<=12000ppm`，等价稳定窗口约`988.0–1012.0Hz`。
+`effective_hz`按相对配置目标的ppm误差验收；V1门限为绝对误差`<=12000ppm`。
 
 启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 
@@ -440,9 +440,9 @@ killall -q cam_demo 2>/dev/null || true
 ```text
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
---fps <25|30|40|50|60> 相机和编码帧率，默认30；五档均为受支持配置；仅ROS1 bag全量JPEG保存把60fps归为stress档，MP4不适用该标签
+--fps <25|30>       相机和编码帧率，默认30；仅支持25fps和30fps
 --codec <h264|h265> 编码格式，默认 h264
---rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25/40/50/60fps
+--rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
 --rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
@@ -452,17 +452,17 @@ killall -q cam_demo 2>/dev/null || true
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps 25/30/40/50/60`均为受支持的相机/RTSP配置；ROS1 bag全量JPEG保存单独把60fps归为stress档，H.264 MP4的60fps属于稳定发布矩阵。`--codec h265`使用相同的四路端口和path。`--rotate 180`仅支持30fps，不支持25/40/50/60fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
+限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps`仅支持`25`和`30`；其他值在启动副作用前拒绝。`--codec h265`使用相同的四路端口和path。`--rotate 180`仅支持30fps，不支持25fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
 
 ### H.265 客户端播放说明
 
-`--codec h265`的板端编码和RTSP接口已经完成，可输出固定四路H.265码流。在四路`1280x1088@60fps`高吞吐配置下同时播放时，部分客户端可能因H.265接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或RTSP发送失败，也不把该配置降级为stress-only。
+`--codec h265`的板端编码和RTSP接口已经完成，可输出固定四路H.265码流。部分客户端仍可能因H.265接收、软件解码或渲染吞吐不足而出现卡顿；这不等同于板端编码或RTSP发送失败。
 
 排查时应同时观察板端和客户端：
 
 - 如果板端日志中四路 `fps` 接近目标值、`queue_full_rejects=0`，并且 `ffprobe`/`ffmpeg` 能持续接收 `hevc` 码流，则卡顿更可能位于客户端缓冲、解码或显示链路。
-- 客户端应优先使用支持H.265硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法持续处理四路60fps高吞吐配置。
-- 如果客户端仍无法实时播放，可将 `--fps` 降为 `25/30/40/50` 中的较低档、减少同时播放的通道数，或降低输出分辨率。降低 `--bps` 主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
+- 客户端应优先使用支持H.265硬件解码的播放器，并确认硬解实际启用；旧播放器或纯软件解码可能无法持续处理四路码流。
+- 如果客户端仍无法实时播放，可将`--fps`从30降为25、减少同时播放的通道数，或降低输出分辨率。降低`--bps`主要减少传输带宽，通常不能按相同比例降低解码和渲染负荷。
 - H.264 与 H.265 配置相同的 `--bps` 时，目标平均码率和网络带宽基本相近；H.265 的优势是相同画质下可选用更低目标码率，而不是在相同码率目标下自动减少带宽。实际带宽受码控、GOP/I 帧峰值及 RTP/RTSP/TCP/IP 开销影响，应以每路实测 `bytes/s` 为准。
 
 因此，验收 H.265 接口时应分别确认“板端持续输出有效码流”和“目标客户端能够实时解码显示”，不要只凭单一播放器的画面流畅度判断板端接口状态。
@@ -579,10 +579,10 @@ ICM发布身份为ABI 2.1、real SO `libicm42688.so.2.1.0`，SONAME继续保持`
 示例：
 
 ```bash
-./imu_reader_demo --sample-rate-hz 2000 --count 10000
+./imu_reader_demo --sample-rate-hz 25 --count 300
 ```
 
-支持的IMU采样率为 `25/50/100/200/500/1000/2000Hz`；默认仍为 `1000Hz`。
+支持的IMU采样率为`25Hz`和`30Hz`，默认`30Hz`。
 
 终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置
 `--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0`

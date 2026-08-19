@@ -16,7 +16,7 @@ import tempfile
 
 MANIFEST_NAME = "manifest.sha256"
 PROVENANCE_NAME = "runtime-provenance.json"
-PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v1"
+PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v2"
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
@@ -139,6 +139,56 @@ def git_output(repo_root: Path, *args: str) -> str:
         check=True,
     ).stdout.strip()
 
+def git_bytes(repo_root: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+
+
+def workspace_context(repo_root: Path) -> tuple[Path, str]:
+    repository_top = Path(git_output(repo_root, "rev-parse", "--show-toplevel")).resolve()
+    if repository_top != repo_root.resolve():
+        raise AssertionError(f"runtime source root is not a Git worktree root: {repo_root}")
+    if repo_root.parent.name != "sub_module":
+        raise AssertionError(f"runtime source is outside the required sub_module layout: {repo_root}")
+    workspace_root = repo_root.parents[1].resolve()
+    superproject_top = Path(git_output(workspace_root, "rev-parse", "--show-toplevel")).resolve()
+    if superproject_top != workspace_root:
+        raise AssertionError(f"runtime superproject root mismatch: {superproject_top} != {workspace_root}")
+    return workspace_root, repo_root.relative_to(workspace_root).as_posix()
+
+
+def git_status(repo_root: Path) -> str:
+    return git_output(repo_root, "status", "--porcelain=v2", "-uall")
+
+
+def committed_input_hashes(repo_root: Path, commit: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for path in repo_input_paths(repo_root):
+        relative = path.relative_to(repo_root).as_posix()
+        try:
+            payload = git_bytes(repo_root, "cat-file", "blob", f"{commit}:{relative}")
+        except subprocess.CalledProcessError as error:
+            raise AssertionError(
+                f"runtime provenance input is not committed at {commit}: {relative}"
+            ) from error
+        result[relative] = hashlib.sha256(payload).hexdigest()
+    return result
+
+
+def artifact_payload_hashes(package_dir: Path) -> dict[str, str]:
+    excluded = {MANIFEST_NAME, PROVENANCE_NAME}
+    return {
+        path.relative_to(package_dir).as_posix(): sha256(path)
+        for path in sorted(package_dir.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+        and path.relative_to(package_dir).as_posix() not in excluded
+    }
+
 
 def repo_input_paths(repo_root: Path) -> list[Path]:
     paths = [
@@ -254,29 +304,71 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
             raise AssertionError(f"hash mismatch for {relative}: {actual_hash} != {expected_hash}")
 
 
+def capture_clean_source(repo_root: Path) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
+    workspace_root, repository_path = workspace_context(repo_root)
+    superproject_status = git_status(workspace_root)
+    repository_status = git_status(repo_root)
+    if superproject_status or repository_status:
+        raise AssertionError(
+            "runtime provenance requires clean source repositories before packaging: "
+            f"superproject={superproject_status!r} runtime_source={repository_status!r}"
+        )
+    superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
+    repository_commit = git_output(repo_root, "rev-parse", "HEAD")
+    gitlink_commit = git_output(
+        workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
+    )
+    if gitlink_commit != repository_commit:
+        raise AssertionError(
+            "runtime source HEAD does not match the superproject gitlink: "
+            f"repository={repository_commit} gitlink={gitlink_commit}"
+        )
+    inputs = committed_input_hashes(repo_root, repository_commit)
+    if inputs != repo_input_hashes(repo_root):
+        raise AssertionError("runtime source inputs differ from the recorded source commit")
+    source = {
+        "superproject_commit": superproject_commit,
+        "repository_path": repository_path,
+        "repository_commit": repository_commit,
+        "superproject_gitlink_commit": gitlink_commit,
+    }
+    repository_states = {
+        "superproject": {"commit": superproject_commit, "status": superproject_status},
+        "runtime_source": {"commit": repository_commit, "status": repository_status},
+    }
+    return source, repository_states, inputs
+
+
 def build_provenance(
+    package_dir: Path,
     repo_root: Path,
     compiler: str,
     triplet: str,
     toolchain_file: Path,
     build_dir: Path,
 ) -> dict[str, object]:
+    source, repository_states, inputs = capture_clean_source(repo_root)
+    compiler_path = Path(compiler).resolve()
+    toolchain_path = toolchain_file.resolve()
+    if not compiler_path.is_file() or compiler_path.is_symlink():
+        raise AssertionError(f"runtime provenance compiler is not a regular file: {compiler_path}")
+    if not toolchain_path.is_file() or toolchain_path.is_symlink():
+        raise AssertionError(f"runtime provenance toolchain is not a regular file: {toolchain_path}")
     return {
         "schema": PROVENANCE_SCHEMA,
         "release_version": RELEASE_VERSION,
-        "repo_root": str(repo_root),
-        "git": {
-            "head": git_output(repo_root, "rev-parse", "HEAD"),
-            "dirty": bool(git_output(repo_root, "status", "--porcelain")),
-        },
+        "source": source,
+        "repository_states": repository_states,
+        "artifact": {"files": artifact_payload_hashes(package_dir)},
         "toolchain": {
-            "compiler": compiler,
+            "compiler": str(compiler_path),
+            "compiler_sha256": sha256(compiler_path),
             "triplet": triplet,
-            "toolchain_file": str(toolchain_file),
-            "toolchain_file_sha256": sha256(toolchain_file),
-            "build_dir": str(build_dir),
+            "toolchain_file": str(toolchain_path),
+            "toolchain_file_sha256": sha256(toolchain_path),
+            "build_dir": str(build_dir.resolve()),
         },
-        "inputs": repo_input_hashes(repo_root),
+        "inputs": inputs,
     }
 
 
@@ -288,7 +380,9 @@ def write_provenance(
     toolchain_file: Path,
     build_dir: Path,
 ) -> None:
-    provenance = build_provenance(repo_root, compiler, triplet, toolchain_file, build_dir)
+    provenance = build_provenance(
+        package_dir, repo_root, compiler, triplet, toolchain_file, build_dir
+    )
     write_atomic_text(
         package_dir / PROVENANCE_NAME,
         json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
@@ -304,23 +398,67 @@ def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
         raise AssertionError(f"unexpected provenance schema: {provenance.get('schema')!r}")
     if provenance.get("release_version") != RELEASE_VERSION:
         raise AssertionError("runtime provenance release_version drift")
-    current_inputs = repo_input_hashes(repo_root)
+
+    workspace_root, repository_path = workspace_context(repo_root)
+    source = provenance.get("source")
+    if not isinstance(source, dict) or source.get("repository_path") != repository_path:
+        raise AssertionError("runtime provenance source identity is incomplete")
+    superproject_commit = source.get("superproject_commit")
+    repository_commit = source.get("repository_commit")
+    gitlink_commit = source.get("superproject_gitlink_commit")
+    for label, commit in (
+        ("superproject", superproject_commit),
+        ("runtime source", repository_commit),
+        ("superproject gitlink", gitlink_commit),
+    ):
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise AssertionError(f"runtime provenance {label} commit is invalid")
+    try:
+        git_output(workspace_root, "cat-file", "-e", f"{superproject_commit}^{{commit}}")
+        git_output(repo_root, "cat-file", "-e", f"{repository_commit}^{{commit}}")
+        committed_gitlink = git_output(
+            workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
+        )
+    except subprocess.CalledProcessError as error:
+        raise AssertionError("runtime provenance source commit is unavailable") from error
+    if committed_gitlink != repository_commit or gitlink_commit != repository_commit:
+        raise AssertionError("runtime provenance source commit/gitlink binding mismatch")
+
+    repository_states = provenance.get("repository_states")
+    expected_states = {
+        "superproject": {"commit": superproject_commit, "status": ""},
+        "runtime_source": {"commit": repository_commit, "status": ""},
+    }
+    if repository_states != expected_states:
+        raise AssertionError("runtime provenance requires recorded clean source repository states")
+
     stored_inputs = provenance.get("inputs")
     if not isinstance(stored_inputs, dict):
         raise AssertionError("runtime provenance inputs must be a dict")
-    if stored_inputs != current_inputs:
-        raise AssertionError("runtime provenance source/input hashes do not match current repo")
-    git_info = provenance.get("git")
-    if not isinstance(git_info, dict):
-        raise AssertionError("runtime provenance git block missing")
-    current_head = git_output(repo_root, "rev-parse", "HEAD")
-    current_dirty = bool(git_output(repo_root, "status", "--porcelain"))
-    if git_info.get("head") != current_head or bool(git_info.get("dirty")) != current_dirty:
-        raise AssertionError("runtime provenance git baseline/dirty status drift")
+    committed_inputs = committed_input_hashes(repo_root, repository_commit)
+    if stored_inputs != committed_inputs:
+        raise AssertionError("runtime provenance inputs do not match the recorded source commit")
+    if stored_inputs != repo_input_hashes(repo_root):
+        raise AssertionError("runtime provenance source/input hashes do not match current files")
+
+    artifact = provenance.get("artifact")
+    if not isinstance(artifact, dict) or artifact.get("files") != artifact_payload_hashes(package_dir):
+        raise AssertionError("runtime provenance artifact payload hashes do not match package files")
     toolchain = provenance.get("toolchain")
     if not isinstance(toolchain, dict):
         raise AssertionError("runtime provenance toolchain block missing")
-    for field in ("compiler", "triplet", "toolchain_file", "toolchain_file_sha256", "build_dir"):
+    for path_field, hash_field in (
+        ("compiler", "compiler_sha256"),
+        ("toolchain_file", "toolchain_file_sha256"),
+    ):
+        path_value = toolchain.get(path_field)
+        digest = toolchain.get(hash_field)
+        if not isinstance(path_value, str) or not isinstance(digest, str):
+            raise AssertionError(f"runtime provenance missing toolchain field: {path_field}")
+        path = Path(path_value)
+        if not path.is_absolute() or not path.is_file() or path.is_symlink() or sha256(path) != digest:
+            raise AssertionError(f"runtime provenance toolchain identity drift: {path_field}")
+    for field in ("triplet", "build_dir"):
         if not toolchain.get(field):
             raise AssertionError(f"runtime provenance missing toolchain field: {field}")
     return provenance
@@ -411,7 +549,8 @@ def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("package_dir", type=Path)
+    parser.add_argument("package_dir", type=Path, nargs="?")
+    parser.add_argument("--check-source", action="store_true")
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--write-provenance", action="store_true")
     parser.add_argument("--repo-root", type=Path, default=ROOT)
@@ -421,8 +560,14 @@ def main() -> int:
     parser.add_argument("--build-dir", type=Path)
     args = parser.parse_args()
 
-    package_dir = args.package_dir.resolve()
     repo_root = args.repo_root.resolve()
+    if args.check_source:
+        capture_clean_source(repo_root)
+        print(f"Runtime source snapshot verified: {repo_root}")
+        return 0
+    if args.package_dir is None:
+        raise SystemExit("package_dir is required unless --check-source is used")
+    package_dir = args.package_dir.resolve()
     if args.write_provenance:
         if not args.compiler or not args.triplet or args.toolchain_file is None or args.build_dir is None:
             raise SystemExit("--write-provenance requires --compiler, --triplet, --toolchain-file, and --build-dir")

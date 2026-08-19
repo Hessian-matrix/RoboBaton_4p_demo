@@ -34,7 +34,7 @@ constexpr uint32_t kDefaultSourceLivenessTimeoutMs = 2000U;
 constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
-constexpr uint32_t kDefaultImuSampleRateHz = 1000U;
+constexpr uint32_t kDefaultImuSampleRateHz = 30U;
 
 constexpr uint32_t kDefaultImuPrintRateHz = 10U;
 extern std::atomic<bool> g_stop_requested;

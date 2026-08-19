@@ -51,7 +51,7 @@ typedef struct icm42688_config {
 } icm42688_config_t;
 
 #define ICM42688_CONFIG_INIT \
-  { sizeof(icm42688_config_t), 1000U, 1U, ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO, {0U} }
+  { sizeof(icm42688_config_t), 30U, 1U, ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO, {0U} }
 
 typedef struct icm42688_raw_sample {
   int16_t temperature;
