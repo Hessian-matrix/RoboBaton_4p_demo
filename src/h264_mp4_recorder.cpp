@@ -1011,7 +1011,7 @@ class H264Mp4Recorder::Impl {
       std::error_code quarantine_error;
       if (!exists_error && !quarantine_exists) {
 #ifdef RELEASE008_TESTING
-        if (fail_cleanup_and_quarantine_) {
+        if (fail_final_directory_quarantine_) {
           quarantine_error = std::make_error_code(std::errc::io_error);
         } else {
           (void)RenameNoReplace(destination, partial_path_, &quarantine_error);
@@ -1023,16 +1023,30 @@ class H264Mp4Recorder::Impl {
       if (!exists_error && !quarantine_exists && !quarantine_error) {
         result.published_path = partial_path_.string();
         std::string sync_error;
-        if (!FsyncDirectory(partial_path_.parent_path(), &sync_error) &&
-            result.error.empty()) {
-          result.error = sync_error;
+        bool inject_parent_sync_failure = false;
+#ifdef RELEASE008_TESTING
+        inject_parent_sync_failure = fail_quarantined_parent_sync_;
+#endif
+        if (inject_parent_sync_failure) {
+          sync_error = "sync quarantined session parent failed (injected)";
         }
-      } else if (result.error.empty()) {
-        result.error = exists_error
-                           ? exists_error.message()
-                           : (quarantine_exists
-                                  ? "partial quarantine path already exists"
-                                  : quarantine_error.message());
+        if (inject_parent_sync_failure ||
+            !FsyncDirectory(partial_path_.parent_path(), &sync_error)) {
+          AppendFinishError(&result.error,
+                            "sync quarantined session parent failed: " +
+                                sync_error);
+        }
+      } else if (exists_error) {
+        AppendFinishError(&result.error,
+                          "inspect partial quarantine path failed: " +
+                              exists_error.message());
+      } else if (quarantine_exists) {
+        AppendFinishError(&result.error,
+                          "partial quarantine path already exists");
+      } else {
+        AppendFinishError(&result.error,
+                          "quarantine final session failed: " +
+                              quarantine_error.message());
       }
     }
     if (!durable || rename_error) {
@@ -1043,11 +1057,11 @@ class H264Mp4Recorder::Impl {
         result.error = rename_error ? rename_error.message() : "publish durability failed";
       }
     }
-    if (!durable && renamed_to_destination &&
-        result.published_path == partial_path_.string()) {
-      // 隔离目录先撤销已接受的收据和旧状态，再发布与返回值一致的失败状态。
+    if (!durable && renamed_to_destination) {
+      // durability失败后，以实际保留数据的目录撤销complete元数据并发布失败状态。
       std::string downgrade_error;
-      if (!RewriteSessionStatus(partial_path_, result, &downgrade_error)) {
+      if (!RewriteSessionStatus(fs::path(result.published_path), result,
+                                &downgrade_error)) {
         AppendFinishError(&result.error, "session status downgrade failed");
         AppendFinishError(&result.error, downgrade_error);
       }
@@ -1126,9 +1140,14 @@ class H264Mp4Recorder::Impl {
     fail_receipt_after_rename_ = true;
   }
 
-  void FailPublicationCleanupAndQuarantineForTest() noexcept {
+  void FailFinalDirectoryQuarantineForTest() noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
-    fail_cleanup_and_quarantine_ = true;
+    fail_final_directory_quarantine_ = true;
+  }
+
+  void FailQuarantinedSessionParentSyncForTest() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_quarantined_parent_sync_ = true;
   }
 
   void FailParentDirectorySyncAfterRenameForTest() noexcept {
@@ -1700,9 +1719,6 @@ class H264Mp4Recorder::Impl {
       durable = FsyncFile(receipt, &sync_error) &&
                 FsyncDirectory(destination, &sync_error);
 #endif
-#ifdef RELEASE008_TESTING
-      if (fail_cleanup_and_quarantine_) return false;
-#endif
       if (durable) return true;
 
       // A failed receipt must not remain at the externally accepted filename.
@@ -1784,7 +1800,8 @@ class H264Mp4Recorder::Impl {
   bool writer_paused_ = false;
 #ifdef RELEASE008_TESTING
   bool fail_receipt_after_rename_ = false;
-  bool fail_cleanup_and_quarantine_ = false;
+  bool fail_final_directory_quarantine_ = false;
+  bool fail_quarantined_parent_sync_ = false;
   bool fail_parent_sync_after_rename_ = false;
   bool fail_marker_removal_ = false;
   bool fail_status_rewrite_write_ = false;
@@ -1878,8 +1895,12 @@ void H264Mp4Recorder::FailPublicationReceiptAfterRenameForTest() noexcept {
   impl_->FailPublicationReceiptAfterRenameForTest();
 }
 
-void H264Mp4Recorder::FailPublicationCleanupAndQuarantineForTest() noexcept {
-  impl_->FailPublicationCleanupAndQuarantineForTest();
+void H264Mp4Recorder::FailFinalDirectoryQuarantineForTest() noexcept {
+  impl_->FailFinalDirectoryQuarantineForTest();
+}
+
+void H264Mp4Recorder::FailQuarantinedSessionParentSyncForTest() noexcept {
+  impl_->FailQuarantinedSessionParentSyncForTest();
 }
 
 void H264Mp4Recorder::FailParentDirectorySyncAfterRenameForTest() noexcept {

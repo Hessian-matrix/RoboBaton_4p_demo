@@ -110,7 +110,8 @@ class H264Mp4Recorder final {
                               uint32_t terminate_grace_ms) noexcept;
   uint32_t RemuxTimeoutForBytesForTest(uint64_t raw_bytes) const noexcept;
   void FailPublicationReceiptAfterRenameForTest() noexcept;
-  void FailPublicationCleanupAndQuarantineForTest() noexcept;
+  void FailFinalDirectoryQuarantineForTest() noexcept;
+  void FailQuarantinedSessionParentSyncForTest() noexcept;
   void FailParentDirectorySyncAfterRenameForTest() noexcept;
   void FailPublicationMarkerRemovalForTest() noexcept;
   void FailSessionStatusRewriteWriteForTest() noexcept;
