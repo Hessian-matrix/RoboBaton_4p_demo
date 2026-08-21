@@ -15,6 +15,6 @@ imu:
   print_metrics: false
 save_data:
   save: false
-  format: rosbag
-  save_path: /root/save_demo/record.bag
+  format: mp4
+  save_path: /root/demo/save_mp4/
   skip: false

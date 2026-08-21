@@ -7,3 +7,4 @@ __pycache__/
 *.py[cod]
 build_x5_jpeg_fix/
 build_x5_origin_overlay/
+.package-runtime.*/
