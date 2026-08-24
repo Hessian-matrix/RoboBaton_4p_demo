@@ -5,6 +5,10 @@ English version: [README_EN.md](README_EN.md)
 
 这是给用户交付的最小开源 demo。它包含 SC132 四目相机 RTSP 示例、IMU 读取示例、串口通信示例、公开头文件和二进制驱动库，不包含底层驱动实现源码。
 
+### 相机标定自动发现与文件回退
+
+运行包中的可选 `config/camera_calibration/` 目录不包含标定系数，仅提供格式说明。每个 active camera 启动前先读取对应 device-tree VCON bus，并通过 `I2C_RDWR` 只读读取该相机固定物理 EEPROM 地址：camera0→bus4/sensor0x33/EEPROM0x52，camera1→bus4/sensor0x32/EEPROM0x53，camera2→bus6/sensor0x33/EEPROM0x52，camera3→bus6/sensor0x32/EEPROM0x53。运行时不扫描另一地址，也不以响应数量猜测身份；`SC132_EEPROM_CANDIDATES` 只能作为允许列表，不能改变默认物理映射。板端可见的 0x50 ACK 不属于 V1 标定绑定映射。只有映射 EEPROM 明确 non-ACK 时才尝试 `camN.bin` 或当前模型格式的 `camN.yaml`。EEPROM 无效、总线/I/O 错误、文件 identity/元数据无效或文件缺失都只输出 `CAMERA_CALIBRATION_RESULT` 状态，不绑定无效标定。非零 rotation 不绑定 canonical 1280x1088 标定。默认目录为 `${DEMO_DIR}/config/camera_calibration`，可用 `SC132_CALIBRATION_DIR` 覆盖；目录 README 说明 256 字节 `RB4PCAL1` 记录和 DS/KB4 YAML 格式。
+
 ## 1. 目录结构
 
 ```text
@@ -14,12 +18,14 @@ open_source_demo/
 ├── demo/                    # 可直接部署到 X5 /root/demo 的运行包
 │   ├── cam_demo / mosaic_rtsp_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
-│   ├── config/              # sensor_demo YAML 配置
+│   ├── config/              # sensor_demo YAML 与 camera calibration README
+│   │   └── camera_calibration/README.md
 │   ├── bin/                 # AArch64 可执行文件
 │   └── lib/                 # 与运行包匹配的三套动态库
 ├── image/                   # README 接线图片
 ├── config/                  # sensor_demo 默认 YAML 配置
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
@@ -197,7 +203,8 @@ ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/mosaic_rtsp_demo /root
 ├── serial_port_demo
 ├── env.sh
 ├── config/
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── bin/
 │   ├── cam_demo
 │   ├── mosaic_rtsp_demo
@@ -686,7 +693,8 @@ SC132 相机 demo 依赖 X5 板端 camera/vpf/hbmem/multimedia/FFmpeg/OpenSSL �
 ├── sensor_demo / cam_demo / imu_reader_demo / serial_port_demo
 ├── env.sh
 ├── config/
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── bin/
 │   ├── sensor_demo
 │   ├── cam_demo

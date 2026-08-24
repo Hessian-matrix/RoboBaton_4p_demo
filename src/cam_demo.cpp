@@ -74,6 +74,9 @@ int main(int argc, char** argv) {
     g_stop_requested.store(false, std::memory_order_release);
 
     Options options = ParseCommandLine(argc, argv);
+    options.camera_calibrations = LoadCameraCalibrations(
+        options.camera_mask, options.rotate_degrees);
+    PrintCameraCalibrationResults(options.camera_calibrations, std::cout);
     system_clock = std::make_unique<FrozenSystemClock>();
     system_clock->PrintTimeBase(std::cout);
     options.system_clock = system_clock.get();

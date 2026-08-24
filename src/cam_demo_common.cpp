@@ -1,5 +1,10 @@
 #include "cam_demo_common.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ostream>
+#include <string>
 #include <stdexcept>
 #include <utility>
 
@@ -8,6 +13,74 @@ extern "C" {
 }
 
 namespace robobaton_demo {
+namespace {
+
+constexpr uint32_t kAbsentCalibrationBus = 0xffffffffU;
+constexpr const char* kCalibrationDirectoryEnv = "SC132_CALIBRATION_DIR";
+constexpr const char* kDeviceTreeRootEnv = "SC132_DEVICE_TREE_ROOT";
+constexpr const char* kDemoDirEnv = "DEMO_DIR";
+
+const char* NonEmptyEnv(const char* name) noexcept {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0' ? value : nullptr;
+}
+
+std::string DefaultCalibrationDirectory() {
+  const char* demo_dir = NonEmptyEnv(kDemoDirEnv);
+  return std::string(demo_dir != nullptr ? demo_dir : ".") +
+         "/config/camera_calibration";
+}
+
+void InitializeCalibrationBinding(uint32_t camera_id,
+                                  camera_calibration_binding_v1* binding) {
+  std::memset(binding, 0, sizeof(*binding));
+  binding->struct_size = static_cast<uint32_t>(sizeof(*binding));
+  binding->camera_id = camera_id;
+  binding->status = CAMERA_CALIBRATION_STATUS_MISSING;
+  binding->source = CAMERA_CALIBRATION_SOURCE_NONE;
+  binding->bus = kAbsentCalibrationBus;
+}
+
+const char* CameraCalibrationSourceName(uint32_t source) noexcept {
+  switch (source) {
+    case CAMERA_CALIBRATION_SOURCE_EEPROM:
+      return "eeprom";
+    case CAMERA_CALIBRATION_SOURCE_FILE:
+      return "file";
+    case CAMERA_CALIBRATION_SOURCE_NONE:
+      return "none";
+    default:
+      return "none";
+  }
+}
+
+const char* CameraCalibrationStatusName(uint32_t status) noexcept {
+  switch (status) {
+    case CAMERA_CALIBRATION_STATUS_PASS:
+      return "PASS";
+    case CAMERA_CALIBRATION_STATUS_ABSENT:
+      return "ABSENT";
+    case CAMERA_CALIBRATION_STATUS_INVALID:
+      return "INVALID";
+    case CAMERA_CALIBRATION_STATUS_IO_ERROR:
+      return "IO_ERROR";
+    case CAMERA_CALIBRATION_STATUS_MISSING:
+      return "MISSING";
+    default:
+      return "IO_ERROR";
+  }
+}
+
+std::string HexByte(uint32_t value) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string text = "0x00";
+  text[2] = digits[(value >> 4U) & 0x0fU];
+  text[3] = digits[value & 0x0fU];
+  return text;
+}
+
+}  // namespace
+
 
 std::atomic<bool> g_stop_requested{false};
 
@@ -56,6 +129,77 @@ void QueuedFrame::Reset() noexcept {
 
 sc132_frame_t* QueuedFrame::ReleaseOwnership() noexcept {
   return std::exchange(frame, nullptr);
+}
+
+CameraCalibrationSet LoadCameraCalibrations(uint32_t camera_mask, int rotate_degrees) {
+  CameraCalibrationSet set;
+  set.camera_mask = camera_mask;
+
+  std::string default_calibration_directory;
+  const char* fallback_directory = NonEmptyEnv(kCalibrationDirectoryEnv);
+  if (fallback_directory == nullptr) {
+    default_calibration_directory = DefaultCalibrationDirectory();
+    fallback_directory = default_calibration_directory.c_str();
+  }
+  const char* device_tree_root = NonEmptyEnv(kDeviceTreeRootEnv);
+
+  for (uint32_t camera_id = 0U; camera_id < CAMERA_CALIBRATION_CAMERA_COUNT;
+       ++camera_id) {
+    camera_calibration_binding_v1& binding = set.bindings[camera_id];
+    InitializeCalibrationBinding(camera_id, &binding);
+    if ((camera_mask & (1U << camera_id)) == 0U) {
+      continue;
+    }
+
+    camera_calibration_request_v1 request{};
+    request.struct_size = static_cast<uint32_t>(sizeof(request));
+    request.camera_id = camera_id;
+    request.device_tree_root = device_tree_root;
+    request.fallback_directory = fallback_directory;
+    request.rotate_degrees = rotate_degrees;
+    const int32_t rc = camera_calibration_discover(&request, &binding);
+    if (rc != CAMERA_CALIBRATION_OK) {
+      InitializeCalibrationBinding(camera_id, &binding);
+      binding.status = CAMERA_CALIBRATION_STATUS_IO_ERROR;
+      std::snprintf(binding.error, sizeof(binding.error),
+                    "camera_calibration_discover failed rc=%d",
+                    static_cast<int>(rc));
+    }
+  }
+  return set;
+}
+
+void PrintCameraCalibrationResults(const CameraCalibrationSet& set,
+                                   std::ostream& output) {
+  for (uint32_t camera_id = 0U; camera_id < CAMERA_CALIBRATION_CAMERA_COUNT;
+       ++camera_id) {
+    if ((set.camera_mask & (1U << camera_id)) == 0U) {
+      continue;
+    }
+    const camera_calibration_binding_v1& binding = set.bindings[camera_id];
+    output << "CAMERA_CALIBRATION_RESULT camera=" << camera_id
+           << " source=" << CameraCalibrationSourceName(binding.source)
+           << " status=" << CameraCalibrationStatusName(binding.status);
+    if (binding.bus != kAbsentCalibrationBus) {
+      output << " bus=" << binding.bus;
+    } else if (binding.status == CAMERA_CALIBRATION_STATUS_PASS &&
+               binding.source == CAMERA_CALIBRATION_SOURCE_FILE) {
+      output << " bus=unavailable";
+    }
+    if (binding.eeprom_i2c_addr != 0U) {
+      output << " eeprom=" << HexByte(binding.eeprom_i2c_addr);
+    }
+    if (binding.endpoint[0] != '\0') {
+      output << " endpoint=" << binding.endpoint;
+    }
+    if (binding.path[0] != '\0') {
+      output << " path=" << binding.path;
+    }
+    if (binding.error[0] != '\0') {
+      output << " error=" << binding.error;
+    }
+    output << '\n';
+  }
 }
 
 uint64_t SteadyClockNowNs() {

@@ -866,6 +866,9 @@ int main(int argc, char** argv) {
     options.channels = kMaxChannels;
     options.rotate_degrees = 0;
     options.frame_set_timeout_ms = MosaicFrameSetTimeoutMs(cli_options.fps);
+    options.camera_calibrations = LoadCameraCalibrations(
+        options.camera_mask, options.rotate_degrees);
+    PrintCameraCalibrationResults(options.camera_calibrations, std::cout);
 
     system_clock = std::make_unique<FrozenSystemClock>();
     system_clock->PrintTimeBase(std::cout);

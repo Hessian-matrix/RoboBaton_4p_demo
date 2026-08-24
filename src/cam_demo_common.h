@@ -2,14 +2,17 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <array>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <utility>
 
 #include "sc132camera.h"
+#include "camera_calibration.h"
 #include "frozen_system_clock.h"
 
 extern "C" {
@@ -54,6 +57,14 @@ enum class ImuStartOrder : uint32_t {
 };
 
 struct Options;
+struct CameraCalibrationSet {
+  uint32_t camera_mask = 0U;
+  std::array<camera_calibration_binding_v1, CAMERA_CALIBRATION_CAMERA_COUNT> bindings{};
+};
+
+CameraCalibrationSet LoadCameraCalibrations(uint32_t camera_mask, int rotate_degrees);
+void PrintCameraCalibrationResults(const CameraCalibrationSet& set, std::ostream& output);
+
 
 const char* VideoCodecName(VideoCodec codec) noexcept;
 const char* ImuSampleDropPolicyName(uint32_t policy) noexcept;
@@ -81,6 +92,7 @@ struct Options {
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
+  CameraCalibrationSet camera_calibrations;
   const FrozenSystemClock* system_clock = nullptr;
 };
 

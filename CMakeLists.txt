@@ -36,6 +36,11 @@ if(NOT EXISTS "${PRRTSP_SO}")
   message(FATAL_ERROR "Missing ${PRRTSP_SO}. Run the canonical producer build so libprrtsp.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
+set(CAMERA_CALIBRATION_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libcamera_calibration.so.1.0.0")
+if(NOT EXISTS "${CAMERA_CALIBRATION_SO}")
+  message(FATAL_ERROR "Missing ${CAMERA_CALIBRATION_SO}. Run the canonical producer build so libcamera_calibration.so.1.0.0 and compatibility copies exist in this demo's lib/ directory.")
+endif()
+
 set(X5_USR_X5_INCLUDE_DIR "" CACHE PATH "X5 usr_x5 include directory that provides hbn_api.h")
 if(NOT X5_USR_X5_INCLUDE_DIR AND CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/usr_x5/include/hbn_api.h")
   set(X5_USR_X5_INCLUDE_DIR "${CMAKE_SYSROOT}/usr_x5/include")
@@ -77,6 +82,12 @@ set_target_properties(prrtsp_v2 PROPERTIES
   IMPORTED_LOCATION "${PRRTSP_SO}"
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
+add_library(camera_calibration_v1 SHARED IMPORTED GLOBAL)
+set_target_properties(camera_calibration_v1 PROPERTIES
+  IMPORTED_LOCATION "${CAMERA_CALIBRATION_SO}"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
 add_library(hbmem SHARED IMPORTED GLOBAL)
 set_target_properties(hbmem PROPERTIES
   IMPORTED_LOCATION "${HBMEM_SO}"
@@ -186,16 +197,18 @@ if(X5_HOBOT_LIB_DIR)
   target_link_options(sensor_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
   target_link_options(mosaic_rtsp_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
-target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
-target_link_libraries(sensor_demo PRIVATE icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads)
-target_link_libraries(mosaic_rtsp_demo PRIVATE sc132_v2 prrtsp_v2 hbmem Threads::Threads)
+target_link_libraries(cam_demo PRIVATE camera_calibration_v1 sc132_v2 prrtsp_v2 Threads::Threads)
+target_link_libraries(sensor_demo PRIVATE camera_calibration_v1 icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads)
+target_link_libraries(mosaic_rtsp_demo PRIVATE camera_calibration_v1 sc132_v2 prrtsp_v2 hbmem Threads::Threads)
 target_link_options(cam_demo PRIVATE
+  "LINKER:--no-as-needed"
   -static-libstdc++
   -static-libgcc
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
 )
 target_link_options(mosaic_rtsp_demo PRIVATE
+  "LINKER:--no-as-needed"
   -static-libstdc++
   -static-libgcc
   "LINKER:--export-dynamic"
@@ -203,6 +216,7 @@ target_link_options(mosaic_rtsp_demo PRIVATE
 )
 # libicm42688 已依赖共享 C++ 运行库，sensor_demo 复用同一映射，避免静态和动态运行库同时驻留。
 target_link_options(sensor_demo PRIVATE
+  "LINKER:--no-as-needed"
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
 )
@@ -236,7 +250,7 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo mosaic_rts
   LIBRARY DESTINATION lib
 )
 
-install(FILES "${ICM42688_SO}" "${SC132_SO}" "${PRRTSP_SO}"
+install(FILES "${ICM42688_SO}" "${SC132_SO}" "${PRRTSP_SO}" "${CAMERA_CALIBRATION_SO}"
   DESTINATION lib
 )
 
@@ -244,9 +258,13 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/include/icm42688_driver.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/sc132camera.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/prrtsp_v2.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/camera_calibration.h"
   DESTINATION include
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/sensor_config.yaml"
+  DESTINATION config
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/config/camera_calibration"
   DESTINATION config
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DESTINATION .)

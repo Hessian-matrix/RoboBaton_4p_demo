@@ -5,6 +5,10 @@ Chinese version: [README.md](README.md)
 
 This is the minimal user-facing demo package. It includes the joint `sensor_demo`, the SC132 4-camera RTSP demo, the standalone GPIO395 INT1 IMU reader demo, the UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
 
+### Camera calibration auto-discovery and file fallback
+
+The optional `config/camera_calibration/` directory in the runtime package contains format guidance only, not calibration coefficients. Before camera side effects, each active camera reads its device-tree VCON bus and uses `I2C_RDWR` read-only to read only its fixed physical EEPROM address: camera0→bus4/sensor0x33/EEPROM0x52, camera1→bus4/sensor0x32/EEPROM0x53, camera2→bus6/sensor0x33/EEPROM0x52, and camera3→bus6/sensor0x32/EEPROM0x53. Runtime never scans the other address or guesses identity from response count; `SC132_EEPROM_CANDIDATES` is an allow-list only and cannot change the default physical mapping. A board-visible 0x50 ACK is not part of the V1 calibration binding map. A `camN.bin` or current-format `camN.yaml` file is tried only when the mapped EEPROM explicitly non-ACKs. Invalid EEPROM data, bus/I/O errors, invalid file identity/metadata, and missing files only emit a `CAMERA_CALIBRATION_RESULT` status and never bind invalid calibration. Non-zero rotation never binds canonical 1280x1088 calibration. The default directory is `${DEMO_DIR}/config/camera_calibration`, overrideable with `SC132_CALIBRATION_DIR`; the directory README describes the 256-byte `RB4PCAL1` record and DS/KB4 YAML formats.
+
 ## 1. Directory Layout
 
 ```text
@@ -14,12 +18,14 @@ open_source_demo/
 ├── demo/                    # Runtime package deployable to X5 /root/demo
 │   ├── cam_demo / mosaic_rtsp_demo / sensor_demo / imu_reader_demo / serial_port_demo
 │   ├── env.sh / manifest.sha256
-│   ├── config/              # sensor_demo YAML config
+│   ├── config/              # sensor_demo YAML and camera calibration README
+│   │   └── camera_calibration/README.md
 │   ├── bin/                 # AArch64 executables
 │   └── lib/                 # Shared libraries matched to the runtime package
 ├── image/                   # Wiring images used by the README files
 ├── config/                  # Default sensor_demo YAML config
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── include/
 │   ├── icm42688_driver.h
 │   ├── sc132camera.h
@@ -208,7 +214,8 @@ Runtime layout on X5:
 ├── serial_port_demo
 ├── env.sh
 ├── config/
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── bin/
 │   ├── cam_demo
 │   ├── mosaic_rtsp_demo
@@ -711,7 +718,8 @@ Confirm the target directory layout:
 ├── sensor_demo / cam_demo / imu_reader_demo / serial_port_demo
 ├── env.sh
 ├── config/
-│   └── sensor_config.yaml
+│   ├── sensor_config.yaml
+│   └── camera_calibration/README.md
 ├── bin/
 │   ├── sensor_demo
 │   ├── cam_demo

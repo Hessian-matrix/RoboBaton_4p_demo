@@ -24,28 +24,32 @@ EXPECTED_VERSION_DEFINITIONS = {
     "lib/libicm42688.so.2.0.0": "ICM42688_X5_2.0",
     "lib/libsc132.so.2.0.0": "LIBSC132_2.0",
     "lib/libprrtsp.so.2.0.0": "LIBPRRTSP_2.0",
+    "lib/libcamera_calibration.so.1.0.0": "CAMERA_CALIBRATION_1.0",
 }
 EXPECTED_SONAMES = {
     "lib/libicm42688.so.2.0.0": "libicm42688.so.2",
     "lib/libsc132.so.2.0.0": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
+    "lib/libcamera_calibration.so.1.0.0": "libcamera_calibration.so.1",
 }
 EXPECTED_LIBRARY_COPIES = {
     "lib/libicm42688.so.2.0.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
     "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
     "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
+    "lib/libcamera_calibration.so.1.0.0": {"lib/libcamera_calibration.so.1", "lib/libcamera_calibration.so"},
 }
 EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/sensor_demo": {"libcamera_calibration.so.1", "libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/cam_demo": {"libcamera_calibration.so.1", "libsc132.so.2", "libprrtsp.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/mosaic_rtsp_demo": {"libcamera_calibration.so.1", "libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
 }
 EXPECTED_LIBRARY_NEEDED = {
     "lib/libicm42688.so.2.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libcamera_calibration.so.1.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
     "VERSION",
@@ -56,6 +60,7 @@ REQUIRED_FILES = {
     "serial_port_demo",
     "env.sh",
     "config/sensor_config.yaml",
+    "config/camera_calibration/README.md",
     "bin/cam_demo",
     "bin/imu_reader_demo",
     "bin/mosaic_rtsp_demo",
@@ -64,6 +69,23 @@ REQUIRED_FILES = {
     *EXPECTED_VERSION_DEFINITIONS,
     *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
 }
+
+FORBIDDEN_PACKAGE_FILES = {
+    "eeprom_calibration_tool",
+    "bin/eeprom_calibration_tool",
+    "camera_calibration_i2c_write.cpp",
+}
+FORBIDDEN_PACKAGE_FILE_FRAGMENTS = (
+    "camera_calibration_i2c_write.cpp",
+    "libcamera_calibration_write",
+    "libeeprom_calibration",
+)
+FORBIDDEN_WRITER_SYMBOL_FRAGMENTS = (
+    "At24Eeprom",
+    "WriteRecordBytes",
+    "LinuxI2cBus",
+    "camera_calibration_i2c_write",
+)
 
 
 def sha256(path: Path) -> str:
@@ -96,6 +118,9 @@ def dynamic_symbols(path: Path) -> set[str]:
         readelf(path, "--dyn-syms", "--wide"),
     ))
 
+def symbol_table(path: Path) -> str:
+    return readelf(path, "-Ws", "--wide")
+
 
 def verify_aarch64_executable(path: Path) -> None:
     header = readelf(path, "-h")
@@ -120,6 +145,28 @@ def package_files(package_dir: Path) -> list[Path]:
         path for path in package_dir.rglob("*")
         if path.is_file() and path.name != MANIFEST_NAME
     )
+
+def verify_forbidden_payloads(package_dir: Path) -> None:
+    relatives = {path.relative_to(package_dir).as_posix() for path in package_files(package_dir)}
+    forbidden = sorted(relative for relative in relatives if relative in FORBIDDEN_PACKAGE_FILES)
+    forbidden.extend(
+        sorted(relative for relative in relatives
+               if any(fragment in relative for fragment in FORBIDDEN_PACKAGE_FILE_FRAGMENTS))
+    )
+    calibration_payloads = sorted(
+        relative for relative in relatives
+        if relative.startswith("config/camera_calibration/") and relative != "config/camera_calibration/README.md"
+    )
+    if forbidden:
+        raise AssertionError(f"forbidden writer package files: {forbidden}")
+    if calibration_payloads:
+        raise AssertionError(f"calibration production inputs must not ship: {calibration_payloads}")
+
+    for relative in ("lib/libcamera_calibration.so.1.0.0", "lib/libcamera_calibration.so.1", "lib/libcamera_calibration.so"):
+        symbols = symbol_table(package_dir / relative)
+        present = [fragment for fragment in FORBIDDEN_WRITER_SYMBOL_FRAGMENTS if fragment in symbols]
+        if present:
+            raise AssertionError(f"writer symbols leaked into {relative}: {present}")
 
 
 def write_manifest(package_dir: Path) -> None:
@@ -206,6 +253,7 @@ def verify_package(package_dir: Path) -> None:
         "lib/libicm42688.so.2.0.0": "icm42688_get_version",
         "lib/libsc132.so.2.0.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
+        "lib/libcamera_calibration.so.1.0.0": "camera_calibration_get_version",
     }
     for relative, symbol in version_getters.items():
         if symbol not in dynamic_symbols(package_dir / relative):
@@ -216,6 +264,8 @@ def verify_package(package_dir: Path) -> None:
         for copy_relative in copies:
             if sha256(package_dir / copy_relative) != expected_hash:
                 raise AssertionError(f"producer copy drift: {copy_relative} != {real_relative}")
+
+    verify_forbidden_payloads(package_dir)
 
     verify_manifest(package_dir)
 

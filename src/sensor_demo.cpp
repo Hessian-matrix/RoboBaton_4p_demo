@@ -209,6 +209,9 @@ int main(int argc, char** argv) {
     g_stop_requested.store(false, std::memory_order_release);
 
     Options options = ParseSensorDemoCommandLine(argc, argv);
+    options.camera_calibrations = LoadCameraCalibrations(
+        options.camera_mask, options.rotate_degrees);
+    PrintCameraCalibrationResults(options.camera_calibrations, std::cout);
     imu_sample_drop_policy = options.imu_sample_drop_policy;
     system_clock = std::make_unique<FrozenSystemClock>();
     system_clock->PrintTimeBase(std::cout);
