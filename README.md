@@ -353,7 +353,7 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 ```
 `effective_hz`按相对配置目标的ppm误差验收；V1门限为绝对误差`<=12000ppm`。
 
-启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用实验性的 `vin_lpwm` 或 `none` 时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
+启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用 `none` 诊断模式时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
 
 ### `sensor_demo` 的 frame-set/source 诊断日志
 
@@ -431,7 +431,7 @@ pgrep -a cam-service
 killall -q cam_demo 2>/dev/null || true
 ```
 
-`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线，也是 V1 唯一已验证的稳定 Trigger 模式。`vin_lpwm` 和 `none` 仍可作为实验性参数显式传入，但尚未验收，不属于 V1 稳定合同。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、30fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
+`--trigger-mode` 默认值是 `software_gpio`，对应当前四目相机外触发接线，也是 V1 唯一已验证的稳定 Trigger 模式。`none` 仅用于显式 free-run 诊断，不属于 V1 稳定合同。普通交付运行直接执行 `./cam_demo`，默认启动固定四路、30fps、H.264、正装方向 `1280x1088` 输出；执行 `./cam_demo --codec h265` 可切换四路 H.265 推流。
 
 部署时请整目录拷贝 `/root/demo` 运行包。顶层入口会设置 `LD_LIBRARY_PATH`，如果只拷贝 `bin/cam_demo` 或单个 `.so`，板端可能加载系统库，导致运行环境和交付包不一致。
 
@@ -446,7 +446,7 @@ killall -q cam_demo 2>/dev/null || true
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
 --url <path>       RTSP path，默认 /PRR
 --rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
---trigger-mode <software_gpio|vin_lpwm|none> 触发输出模式，默认 software_gpio/GPIO417
+--trigger-mode <software_gpio|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出source liveness、每路送帧耗时和时间戳 skew 诊断信息
 --max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
@@ -554,7 +554,7 @@ avg_frame_rate=30/1
 - `group_id`：`libsc132.so` 生成的四目同步帧组序号
 - `group_skew_ns`：当前帧组四路 timestamp 最大差值，单位 `ns`，用于诊断链路相位差
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
-- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在 V1 唯一已验证的默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；实验性的 `vin_lpwm`/`none` 优先使用 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间，不声明为 V1 wall/realtime 合同。
+- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在 V1 唯一已验证的默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；显式 `none` 诊断模式优先使用 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间，不声明为 V1 wall/realtime 合同。
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时

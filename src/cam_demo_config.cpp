@@ -44,7 +44,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --max-skew-ns <ns> Frame-set timestamp skew limit, default "
             << kDefaultFrameSetMaxSkewNs << "\n"
             << "  --frame-timeout-ms <ms> Frame-set pending timeout, default 100\n"
-            << "  --trigger-mode <software_gpio|vin_lpwm|none> SC132 trigger output mode, default "
+            << "  --trigger-mode <software_gpio|none> SC132 trigger output mode, default "
             << kDefaultSc132TriggerMode << "\n";
   if (include_imu_options) {
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
@@ -325,9 +325,8 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
         "--imu-sample-drop-policy must be allow-counted or strict");
   }
   if (options.trigger_mode != "software_gpio" && options.trigger_mode != "gpio" &&
-      options.trigger_mode != "vin_lpwm" && options.trigger_mode != "lpwm" &&
       options.trigger_mode != "none" && options.trigger_mode != "off") {
-    throw std::invalid_argument("--trigger-mode must be one of software_gpio, vin_lpwm, or none");
+    throw std::invalid_argument("--trigger-mode must be one of software_gpio or none");
   }
 }
 
@@ -454,7 +453,7 @@ Options ParseSensorDemoCommandLineWithConfig(int argc, char** argv, Options opti
 }
 
 // 功能：把命令行选择的触发模式写入 libsc132 使用的环境变量。
-// 输入：options.trigger_mode，支持 software_gpio、vin_lpwm、none 等别名。
+// 输入：options.trigger_mode，支持 software_gpio、none 以及兼容别名。
 // 副作用：覆盖当前进程的 SC132_TRIGGER_MODE；software_gpio 模式使用 GPIO417。
 void ConfigureSc132TriggerMode(const Options& options) {
   // 命令行参数优先于 shell 环境。

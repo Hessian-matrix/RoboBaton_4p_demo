@@ -48,7 +48,7 @@ Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
   --fps <30|60>               Camera/encoder FPS, default 30
-  --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio, vin_lpwm, none; default software_gpio/GPIO417
+  --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio or none; default software_gpio/GPIO417
   --output-dir <path>         Local log output directory, default ./regression_logs
 
 Evaluation thresholds:
@@ -94,6 +94,14 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "${TRIGGER_MODE}" in
+  software_gpio|gpio|none|off) ;;
+  *)
+    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported values are software_gpio and none" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "${HOST}" ]]; then
   echo "Missing --host" >&2
@@ -202,7 +210,7 @@ max_numeric_field() {
 frame_set_metric_lines() {
   # frameset 行由单个回调线程一次性打印，可直接代表同一 frame-set 的四路时间戳。
   awk '
-    /^frameset group_id=[0-9]+ group_ts_ns=[0-9]+ group_skew_ns=[0-9]+ calc_skew_ns=[0-9]+ cam0\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam1\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam2\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\) cam3\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+\)$/ {
+    /^frameset group_id=[0-9]+ group_ts_ns=[0-9]+( group_ts_domain=[a-z_]+)? group_skew_ns=[0-9]+ calc_skew_ns=[0-9]+ cam0\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+(,camera_ts_domain=[a-z_]+)?\) cam1\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+(,camera_ts_domain=[a-z_]+)?\) cam2\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+(,camera_ts_domain=[a-z_]+)?\) cam3\(seq=[0-9]+,frame_id=[0-9]+,camera_ts_ns=[0-9]+(,camera_ts_domain=[a-z_]+)?\)$/ {
       print
     }
   ' "${LOCAL_LOG}"
@@ -217,7 +225,7 @@ frame_set_max_numeric_field() {
 valid_metric_lines() {
   # 诊断线程以单次原子写提交每行，只接纳字段完整的行参与阈值判定。
   awk '
-    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ queue_full_rejects=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+( rtsp_ts_ns=[0-9]+)? send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]$/ {
+    /^cam[0-3] fps=[0-9]+([.][0-9]+)? last_seq=[0-9]+ group_id=[0-9]+ group_skew_ns=[0-9]+ queue=[0-9]+\/[0-9]+ queue_full_rejects=[0-9]+ pipeline_delay_ms=[0-9]+ camera_ts_ns=[0-9]+( camera_ts_domain=[a-z_]+)?( rtsp_ts_ns=[0-9]+( rtsp_ts_domain=[a-z_]+)?)? send_avg_ms=[0-9]+([.][0-9]+)? send_max_ms=[0-9]+([.][0-9]+)? rtsp_endpoint=ch[1-4] rtsp_port=55[4-7]( rtsp_degraded=[0-9]+ rtsp_preview_dropped=[0-9]+ rtsp_last_error=-?[0-9]+)?$/ {
       print
     }
   ' "${LOCAL_LOG}"
@@ -279,7 +287,7 @@ fi
 remote_env_cmd="export LD_LIBRARY_PATH='${REMOTE_DIR}/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib'"
 # 远端进程显式导出触发模式，确保本次回归验证的是指定同步触发路径。
 remote_env_cmd="${remote_env_cmd} && export SC132_TRIGGER_MODE='${TRIGGER_MODE}'"
-remote_run_cmd="cd '${REMOTE_DIR}' || exit 2; ${remote_env_cmd}; timeout '${RUN_SECONDS}' ./cam_demo --channels '${CHANNELS}' --fps '${FPS}' --width '${WIDTH}' --height '${HEIGHT}' --bps '${BPS}' --rotate '${ROTATE}' --url '${URL_PATH}' --diagnostics --diag-interval-ms '${DIAG_INTERVAL_MS}' > '${REMOTE_LOG}' 2>&1 & runner_pid=\\\$!; echo \\\${runner_pid} > '${REMOTE_PID}'; wait \\\${runner_pid}; rc=\\\$?; echo \\\${rc} > '${REMOTE_RC}'"
+remote_run_cmd="cd '${REMOTE_DIR}' || exit 2; ${remote_env_cmd}; timeout '${RUN_SECONDS}' ./cam_demo --channels '${CHANNELS}' --fps '${FPS}' --width '${WIDTH}' --height '${HEIGHT}' --bps '${BPS}' --rotate '${ROTATE}' --url '${URL_PATH}' --trigger-mode '${TRIGGER_MODE}' --diagnostics --diag-interval-ms '${DIAG_INTERVAL_MS}' > '${REMOTE_LOG}' 2>&1 & runner_pid=\\\$!; echo \\\${runner_pid} > '${REMOTE_PID}'; wait \\\${runner_pid}; rc=\\\$?; echo \\\${rc} > '${REMOTE_RC}'"
 if ! ssh_remote "rm -f '${REMOTE_LOG}' '${REMOTE_RC}' '${REMOTE_PID}'; nohup setsid sh -c \"${remote_run_cmd}\" </dev/null >/dev/null 2>&1 & wrapper_pid=\$!; attempts=0; while [ ! -s '${REMOTE_PID}' ] && kill -0 \"\${wrapper_pid}\" 2>/dev/null && [ \"\${attempts}\" -lt 5 ]; do sleep 1; attempts=\$((attempts + 1)); done; runner_pid=\$(cat '${REMOTE_PID}' 2>/dev/null || true); case \"\${runner_pid}\" in ''|*[!0-9]*) kill -TERM -\"\${wrapper_pid}\" 2>/dev/null || kill -TERM \"\${wrapper_pid}\" 2>/dev/null || true; exit 1 ;; esac"; then
   record_fail "failed to start remote cam_demo or acquire runner PID"
   exit 1
@@ -346,7 +354,7 @@ else
   record_pass "no fatal/error patterns found"
 fi
 
-sensor_count="$(grep -c 'INFO: Found sensor_name:sc132gs-1280p' "${LOCAL_LOG}" || true)"
+sensor_count="$(grep -Ec 'INFO: Found sensor_name:sc132gs-(1280p|slave-right)' "${LOCAL_LOG}" || true)"
 if (( sensor_count >= CHANNELS )); then
   record_pass "sensor detection count=${sensor_count}"
 else
