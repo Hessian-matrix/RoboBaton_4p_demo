@@ -247,9 +247,10 @@ cd /root/demo
 
 ## 4. sensor_demo 联合相机与IMU
 
-`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`30Hz`，可通过`--sample-rate-hz`切换到`25Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
+`sensor_demo`是联合运行入口：相机仍通过`libsc132.so`和PRRTSP v2输出四路RTSP，IMU通过`libicm42688.so`的GPIO395 DRDY + sensor timestamp FIFO合同连续采集，默认`1000Hz`，可通过`--sample-rate-hz`切换到`25/50/100/200/500/1000/2000Hz`。IMU不使用GPIO397或FSYNC；退出时先停止相机/RTSP，再停止IMU采集线程。
 
 `sensor_demo` 的 IMU 终端记录与 `imu_reader_demo` 使用同一格式：默认按 `min(sample-rate-hz, 10)` 抽样输出 `imu data:` 多行块，`--print-rate-hz HZ` 可调整输出频率，`--print-rate-hz 0` 只保留启动/退出摘要，`--print-metrics` 才追加 `metrics:` 诊断段。
+
 
 ```bash
 ./sensor_demo
@@ -440,7 +441,7 @@ killall -q cam_demo 2>/dev/null || true
 ```text
 --width <pixels>   图像宽度，默认 1280
 --height <pixels>  图像高度，默认 1088
---fps <25|30>       相机和编码帧率，默认30；仅支持25fps和30fps
+--fps <25|30|40|50|60>       相机和编码帧率，默认30；仅支持25/30/40/50/60fps
 --codec <h264|h265> 编码格式，默认 h264
 --rotate <0|90|180|270> 输出旋转角度，默认 0；180 仅支持 30fps，不支持 25fps
 --bps <kbps>       编码目标平均码率，单位 kbps，默认 4000；可按带宽/画质折中覆盖
@@ -448,11 +449,11 @@ killall -q cam_demo 2>/dev/null || true
 --rtsp-base-port <port> RTSP 起始端口，默认 554；camera 0..3 使用 base+0..3
 --trigger-mode <software_gpio|none> 触发输出模式，默认 software_gpio/GPIO417
 --diagnostics      输出source liveness、每路送帧耗时和时间戳 skew 诊断信息
---max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 2000000；同步配组后四路 frame_id 对外保持绝对一致
+--max-skew-ns <ns> 帧组 timestamp skew 放行上限，默认 10000000（10ms）；同步配组后四路 frame_id 对外保持绝对一致
 --frame-timeout-ms <ms> 帧组等待缺路帧的超时时间，默认 100
 ```
 
-限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps`仅支持`25`和`30`；其他值在启动副作用前拒绝。`--codec h265`使用相同的四路端口和path。`--rotate 180`仅支持30fps，不支持25fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
+限制说明：默认`./cam_demo`使用固定四路、30fps、H.264、正装方向`1280x1088`输出。`--fps`仅支持`25`、`30`、`40`、`50`和`60`；`--rotate 180`仅支持30fps，不支持25fps。RTSP编码画布随对外旋转角同步变化：`0/180 => 1280x1088`，`90/270 => 1088x1280`。
 
 ### H.265 客户端播放说明
 
@@ -546,7 +547,7 @@ avg_frame_rate=30/1
 5. 后台线程从队列取帧，构造 `prrtsp_nv12_frame_v2` 并调用 `prrtsp_stream_send()` 推流。
 6. 后台线程处理完成后调用 `sc132_frame_release()` 归还帧。
 
-用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`libsc132.so` 仅在归一化 `frame_id` 一致且 timestamp skew 不超过配置上限时放行，默认上限 `2000000 ns` 覆盖 30fps 板端实测约 `1.06 ms` 的同帧链路相位差，同时仍远小于一帧周期。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
+用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`libsc132.so` 仅在归一化 `frame_id` 一致且 timestamp skew 不超过配置上限时放行，默认上限为 `10000000 ns（10ms）`，用于覆盖四路曝光时间差；帧周期 guard 仍防止跨帧配组。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
 
 日志字段：
 
@@ -581,13 +582,9 @@ ICM发布身份为ABI 2.1、real SO `libicm42688.so.2.1.0`，SONAME继续保持`
 ```bash
 ./imu_reader_demo --sample-rate-hz 25 --count 300
 ```
+支持的IMU采样率为`25/50/100/200/500/1000/2000Hz`，默认`1000Hz`。
 
-支持的IMU采样率为`25Hz`和`30Hz`，默认`30Hz`。
-
-终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置
-`--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0`
-时禁用终端输出，`--count` 语义不变。默认只输出 `imu data:` 数据段；加
-`--print-metrics` 后才输出 `metrics:` 指标段。
+终端默认以 `10Hz` 输出，但程序仍消费并计入全部 IMU 样本。可显式设置 `--print-rate-hz` 调整输出频率，该值必须不超过 `--sample-rate-hz`；显式设置为 `0` 时禁用终端输出，`--count` 语义不变。默认只输出 `imu data:` 数据段；加 `--print-metrics` 后才输出 `metrics:` 指标段。
 
 每个已抽样 IMU 样本输出一个带边界的多行记录。分割符
 `*****************************************************************` 始终输出；默认格式为：
@@ -721,7 +718,7 @@ sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
   --host <x5-ip> \
   --fps 30 \
   --min-fps 28 \
-  --max-group-skew-ns 2000000 \
+  --max-group-skew-ns 10000000 \
   --kill-existing
 ```
 

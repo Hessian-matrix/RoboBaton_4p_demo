@@ -32,7 +32,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
             << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
             << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
-            << "  --fps <25|30>       Camera and encoder fps, default 30\n"
+            << "  --fps <25|30|40|50|60>       Camera and encoder fps, default 30\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
             << "  --codec <h264|h265> Encoder format, default h264\n"
@@ -49,8 +49,9 @@ void PrintUsage(const char* program, bool include_imu_options) {
   if (include_imu_options) {
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
               << " YAML config is loaded before CLI options; missing file is created with defaults\n";
-    std::cout << "  --sample-rate-hz <25|30> IMU sample rate, default "
+    std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
+
     std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
@@ -161,9 +162,6 @@ ImuStartOrder ParseImuStartOrder(const std::string& text) {
   throw std::invalid_argument("--imu-start-order must be imu-first or camera-first");
 }
 
-
-
-
 void ApplyChannels(Options* options, ParseState* state, int channels) {
   options->channels = channels;
   state->requested_channels = channels;
@@ -192,7 +190,6 @@ void ApplyCameraMask(Options* options, ParseState* state, uint32_t camera_mask) 
   options->channels = CameraMaskPopCount(camera_mask);
   state->camera_selector_set = true;
 }
-
 
 void ValidateOptions(const Options& options, bool record_frame_skip_set);
 
@@ -226,14 +223,15 @@ void FinalizeParsedOptions(Options* options, const ParseState& config_state,
 // 输入：sample_rate_hz 为用户命令行值。
 // 输出：支持则 true，否则 false。
 bool IsSupportedImuSampleRateHz(uint32_t sample_rate_hz) {
-  return sample_rate_hz == 25U || sample_rate_hz == 30U;
+  return sample_rate_hz == 25U || sample_rate_hz == 50U || sample_rate_hz == 100U ||
+         sample_rate_hz == 200U || sample_rate_hz == 500U || sample_rate_hz == 1000U ||
+         sample_rate_hz == 2000U;
 }
 
 // 功能：按libsc132当前公开的离散帧率表校验相机帧率。
 bool IsSupportedCameraFps(int fps) {
-  return fps == 25 || fps == 30;
+  return fps == 25 || fps == 30 || fps == 40 || fps == 50 || fps == 60;
 }
-
 
 // 功能：检查运行参数是否处于 demo 支持范围。
 // 输入：已解析的 Options。
@@ -253,7 +251,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--width and --height must produce positive even NV12 dimensions");
   }
   if (!IsSupportedCameraFps(options.fps)) {
-    throw std::invalid_argument("--fps must be 25 or 30");
+    throw std::invalid_argument("--fps must be 25, 30, 40, 50, or 60");
   }
   if (options.bps <= 0 ||
       static_cast<unsigned long long>(options.bps) >
@@ -278,7 +276,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
   }
-  // 对外 180 度进入底层 270 度慢路径，只保留 30fps 作为已验证组合。
+  // 对外180度进入底层270度慢路径，只保留30fps作为已验证组合。
   if (InternalRotateDegrees(options) == 270 && options.fps != 30) {
     throw std::invalid_argument("--rotate 180 is supported only at 30fps");
   }
@@ -292,7 +290,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--frame-timeout-ms must be positive");
   }
   if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
-    throw std::invalid_argument("--sample-rate-hz must be 25 or 30");
+    throw std::invalid_argument("--sample-rate-hz must be 25, 50, 100, 200, 500, 1000, or 2000");
   }
   if (options.record_frame_skip > 1U) {
     throw std::invalid_argument("--record-frame-skip must be 0 or 1");
@@ -324,8 +322,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument(
         "--imu-sample-drop-policy must be allow-counted or strict");
   }
-  if (options.trigger_mode != "software_gpio" && options.trigger_mode != "gpio" &&
-      options.trigger_mode != "none" && options.trigger_mode != "off") {
+  if (options.trigger_mode != "software_gpio" && options.trigger_mode != "none") {
     throw std::invalid_argument("--trigger-mode must be one of software_gpio or none");
   }
 }

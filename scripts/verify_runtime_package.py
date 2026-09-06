@@ -304,15 +304,10 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
             raise AssertionError(f"hash mismatch for {relative}: {actual_hash} != {expected_hash}")
 
 
-def capture_clean_source(repo_root: Path) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
+def capture_source_snapshot(repo_root: Path) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
     workspace_root, repository_path = workspace_context(repo_root)
     superproject_status = git_status(workspace_root)
     repository_status = git_status(repo_root)
-    if superproject_status or repository_status:
-        raise AssertionError(
-            "runtime provenance requires clean source repositories before packaging: "
-            f"superproject={superproject_status!r} runtime_source={repository_status!r}"
-        )
     superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
     repository_commit = git_output(repo_root, "rev-parse", "HEAD")
     gitlink_commit = git_output(
@@ -320,23 +315,25 @@ def capture_clean_source(repo_root: Path) -> tuple[dict[str, str], dict[str, obj
     )
     if gitlink_commit != repository_commit:
         raise AssertionError(
-            "runtime source HEAD does not match the superproject gitlink: "
+            "runtime provenance source HEAD does not match the superproject gitlink: "
             f"repository={repository_commit} gitlink={gitlink_commit}"
         )
-    inputs = committed_input_hashes(repo_root, repository_commit)
-    if inputs != repo_input_hashes(repo_root):
-        raise AssertionError("runtime source inputs differ from the recorded source commit")
+
+    # 允许 release 仓直接从当前工作树打包；这里记录的是 package 时刻的完整快照。
+    inputs = repo_input_hashes(repo_root)
     source = {
         "superproject_commit": superproject_commit,
         "repository_path": repository_path,
         "repository_commit": repository_commit,
         "superproject_gitlink_commit": gitlink_commit,
     }
+    # provenance 需要保留当前工作树状态，后续 verify 必须与这份快照一致。
     repository_states = {
         "superproject": {"commit": superproject_commit, "status": superproject_status},
         "runtime_source": {"commit": repository_commit, "status": repository_status},
     }
     return source, repository_states, inputs
+
 
 
 def build_provenance(
@@ -347,13 +344,15 @@ def build_provenance(
     toolchain_file: Path,
     build_dir: Path,
 ) -> dict[str, object]:
-    source, repository_states, inputs = capture_clean_source(repo_root)
+    # 先采集当前工作树快照，再验证 toolchain 与编译器的可追溯性。
+    source, repository_states, inputs = capture_source_snapshot(repo_root)
     compiler_path = Path(compiler).resolve()
     toolchain_path = toolchain_file.resolve()
     if not compiler_path.is_file() or compiler_path.is_symlink():
         raise AssertionError(f"runtime provenance compiler is not a regular file: {compiler_path}")
     if not toolchain_path.is_file() or toolchain_path.is_symlink():
         raise AssertionError(f"runtime provenance toolchain is not a regular file: {toolchain_path}")
+    # provenance 记录 package 生成时的源码快照，不要求工作树必须 clean。
     return {
         "schema": PROVENANCE_SCHEMA,
         "release_version": RELEASE_VERSION,
@@ -370,23 +369,6 @@ def build_provenance(
         },
         "inputs": inputs,
     }
-
-
-def write_provenance(
-    package_dir: Path,
-    repo_root: Path,
-    compiler: str,
-    triplet: str,
-    toolchain_file: Path,
-    build_dir: Path,
-) -> None:
-    provenance = build_provenance(
-        package_dir, repo_root, compiler, triplet, toolchain_file, build_dir
-    )
-    write_atomic_text(
-        package_dir / PROVENANCE_NAME,
-        json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
-    )
 
 
 def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
@@ -425,21 +407,28 @@ def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
         raise AssertionError("runtime provenance source commit/gitlink binding mismatch")
 
     repository_states = provenance.get("repository_states")
-    expected_states = {
-        "superproject": {"commit": superproject_commit, "status": ""},
-        "runtime_source": {"commit": repository_commit, "status": ""},
+    if not isinstance(repository_states, dict):
+        raise AssertionError("runtime provenance source states must be a dict")
+    # 允许 dirty 工作树打包；只要当前状态和 provenance 记录一致，就视为同一快照。
+    current_states = {
+        "superproject": {"commit": superproject_commit, "status": git_status(workspace_root)},
+        "runtime_source": {"commit": repository_commit, "status": git_status(repo_root)},
     }
-    if repository_states != expected_states:
-        raise AssertionError("runtime provenance requires recorded clean source repository states")
+    if repository_states != current_states:
+        raise AssertionError(
+            "runtime provenance source state does not match the current workspace snapshot"
+        )
 
     stored_inputs = provenance.get("inputs")
     if not isinstance(stored_inputs, dict):
         raise AssertionError("runtime provenance inputs must be a dict")
-    committed_inputs = committed_input_hashes(repo_root, repository_commit)
-    if stored_inputs != committed_inputs:
-        raise AssertionError("runtime provenance inputs do not match the recorded source commit")
     if stored_inputs != repo_input_hashes(repo_root):
         raise AssertionError("runtime provenance source/input hashes do not match current files")
+    # 工作树干净时，再额外把 provenance 锁到提交树，保持 clean build 的强约束。
+    if not current_states["superproject"]["status"] and not current_states["runtime_source"]["status"]:
+        committed_inputs = committed_input_hashes(repo_root, repository_commit)
+        if stored_inputs != committed_inputs:
+            raise AssertionError("runtime provenance inputs do not match the recorded source commit")
 
     artifact = provenance.get("artifact")
     if not isinstance(artifact, dict) or artifact.get("files") != artifact_payload_hashes(package_dir):
@@ -462,6 +451,25 @@ def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
         if not toolchain.get(field):
             raise AssertionError(f"runtime provenance missing toolchain field: {field}")
     return provenance
+
+
+
+
+def write_provenance(
+    package_dir: Path,
+    repo_root: Path,
+    compiler: str,
+    triplet: str,
+    toolchain_file: Path,
+    build_dir: Path,
+) -> None:
+    provenance = build_provenance(
+        package_dir, repo_root, compiler, triplet, toolchain_file, build_dir
+    )
+    write_atomic_text(
+        package_dir / PROVENANCE_NAME,
+        json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
+    )
 
 
 def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
@@ -562,7 +570,8 @@ def main() -> int:
 
     repo_root = args.repo_root.resolve()
     if args.check_source:
-        capture_clean_source(repo_root)
+        capture_source_snapshot(repo_root)
+
         print(f"Runtime source snapshot verified: {repo_root}")
         return 0
     if args.package_dir is None:

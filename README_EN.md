@@ -274,9 +274,10 @@ ICM FIFO TMST
   -> sample_timestamp_ns / icm42688 sample callback
 ```
 
-Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25` or `30` and defaults to `30`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
+Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
 
 `sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
+
 
 At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch. Explicit `none` diagnostic mode preserves the SC132 native timestamp domain and does not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
 
@@ -465,7 +466,7 @@ Common options:
 ```text
 --width <pixels>   Frame width, default 1280
 --height <pixels>  Frame height, default 1088
---fps <25|30>       Camera and encoder fps, default 30; only 25fps and 30fps are supported
+--fps <25|30|40|50|60>       Camera and encoder fps, default 30; 25/30/40/50/60 are supported
 --codec <h264|h265> Video codec, default h264
 --rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25fps
 --bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
@@ -473,11 +474,11 @@ Common options:
 --rtsp-base-port <port> RTSP base port, default 554; cameras 0..3 use base+0..3
 --trigger-mode <software_gpio|none> Trigger output mode, default software_gpio/GPIO417
 --diagnostics      Print source liveness, per-channel send timing, and timestamp skew diagnostics
---max-skew-ns <ns> Frame-set timestamp skew release limit, default 2000000; after synchronized grouping, all four exposed frame_id values match exactly
+--max-skew-ns <ns> Frame-set timestamp skew release limit, default 10000000 (10 ms); after synchronized grouping, all four exposed frame_id values match exactly
 --frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
 ```
 
-Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps` supports only `25` and `30`; other values are rejected before startup side effects. `--codec h265` uses the same four ports and paths. `--rotate 180` is supported only at 30fps and is rejected at 25fps.
+Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps` supports only `25`, `30`, `40`, `50`, and `60`; `--rotate 180` is supported only at 30fps and is rejected at 25fps. `--codec h265` uses the same four ports and paths.
 
 ### H.265 Client Playback Notes
 
@@ -571,7 +572,7 @@ Frame flow:
 5. Worker threads pop frames, build `prrtsp_nv12_frame_v2`, and call `prrtsp_stream_send()`.
 6. Worker threads call `sc132_frame_release()` after processing.
 
-The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default `2000000 ns` covers the measured approximately `1.06 ms` same-frame pipeline phase at 30 fps while remaining far below one frame period. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
+The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default is `10000000 ns (10 ms)` to cover exposure-time differences across the four cameras; the frame-period guard still prevents cross-frame grouping. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
 
 Log fields:
 
@@ -606,7 +607,7 @@ Example:
 ./imu_reader_demo --sample-rate-hz 25 --count 300
 ```
 
-Supported IMU sample rates are `25 Hz` and `30 Hz`; the default is `30 Hz`.
+Supported IMU sample rates are `25/50/100/200/500/1000/2000 Hz`; the default is `1000 Hz`.
 
 Terminal output defaults to `10 Hz` while the program still consumes and counts every
 IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
@@ -746,7 +747,7 @@ sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
   --host <x5-ip> \
   --fps 30 \
   --min-fps 28 \
-  --max-group-skew-ns 2000000 \
+  --max-group-skew-ns 10000000 \
   --kill-existing
 ```
 

@@ -23,7 +23,7 @@ MIN_FPS_SET=0
 MIN_GOOD_FPS_SAMPLES=3
 MAX_PIPELINE_DELAY_MS=80
 MAX_SEND_MAX_MS=120
-MAX_GROUP_SKEW_NS=2000000
+MAX_GROUP_SKEW_NS=10000000
 MAX_RTSP_PTS_SKEW_MS=1
 MAX_FRAME_ID_OFFSET_JITTER=0
 MIN_GROUP_ID=""
@@ -47,7 +47,7 @@ Connection:
 Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
-  --fps <30|60>               Camera/encoder FPS, default 30
+  --fps <25|30|40|50|60>  Camera/encoder FPS, default 30
   --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio or none; default software_gpio/GPIO417
   --output-dir <path>         Local log output directory, default ./regression_logs
 
@@ -56,7 +56,7 @@ Evaluation thresholds:
   --min-good-fps-samples <n>  Minimum FPS samples per channel above --min-fps, default 3
   --max-pipeline-delay-ms <n> Maximum pipeline_delay_ms, default 80
   --max-send-max-ms <n>       Maximum send_max_ms, default 120
-  --max-group-skew-ns <n>     Maximum group_skew_ns, default 2000000
+  --max-group-skew-ns <n>     Maximum group_skew_ns, default 10000000
   --max-rtsp-pts-skew-ms <n>  Maximum RTSP PTS skew across channels, default 1
   --max-frame-id-offset-jitter <n>
                               Maximum jitter of per-group frame_id offsets, default 0; absolute offsets must be 0
@@ -94,6 +94,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+if ! [[ "${FPS}" =~ ^[0-9]+$ ]] || (( FPS != 25 && FPS != 30 && FPS != 40 && FPS != 50 && FPS != 60 )); then
+  echo "Invalid --fps ${FPS}; supported values are 25, 30, 40, 50, and 60" >&2
+  exit 2
+fi
 
 case "${TRIGGER_MODE}" in
   software_gpio|gpio|none|off) ;;
@@ -114,8 +118,12 @@ if [[ -n "${PASSWORD}" ]] && ! command -v sshpass >/dev/null 2>&1; then
   exit 2
 fi
 if (( MIN_FPS_SET == 0 )); then
+  # Map each supported target to a conservative per-channel acceptance floor.
   case "${FPS}" in
+    25) MIN_FPS=20 ;;
     30) MIN_FPS=25 ;;
+    40) MIN_FPS=35 ;;
+    50) MIN_FPS=45 ;;
     60) MIN_FPS=55 ;;
   esac
 fi

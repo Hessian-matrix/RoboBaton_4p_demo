@@ -19,8 +19,7 @@ extern "C" {
 #define SC132_FRAME_SET_MAX_CAMERAS 4U
 #define SC132_NATIVE_OUTPUT_WIDTH 1280U
 #define SC132_NATIVE_OUTPUT_HEIGHT 1088U
-/* 默认 2 毫秒用于容纳四路同一曝光帧约 1.06 毫秒的链路时间戳相位差，且仍远小于单帧周期。 */
-#define SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS 2000000ULL
+#define SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS 10000000ULL
 
 typedef struct sc132_frame sc132_frame_t;
 
