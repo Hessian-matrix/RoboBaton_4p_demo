@@ -42,7 +42,7 @@
     "lib/libsc132.so.2.0.0": "bd7c5883b7b24137835208a57c94d75d0ae4e84eeb14ae307faf3df42db9385b",
     "scripts/package_runtime.sh": "58a58f5d494b53c6ba85f7707f08b412138068377aac670b7b73f2a305b5835f",
     "scripts/runtime_ffprobe_frame_count.sh": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
-    "scripts/verify_runtime_package.py": "8edbac147ac2d917bdafb241f99ed790fd10db455124bbf25e8dad657732015d",
+    "scripts/verify_runtime_package.py": "2da4c94154af4168d2bdb9e0881e1e2660664d7d56a78a8ba81c85f00b5cef57",
     "src/cam_demo.cpp": "aaada2c62f9675f33539098b562a82b1c49bc96d98b521df69f2e7184074ea0a",
     "src/cam_demo_common.cpp": "4d0a786eec959bb6888f79281554f3b90f288c6bd61d031e8cff7146a7fd2b73",
     "src/cam_demo_common.h": "02d1cbe3bc512f0f3c4d13b2814fd7ae8c5fbf2803a02cd09f2fd6efb6eed8ef",
@@ -71,23 +71,23 @@
   "release_version": "1.1.1",
   "repository_states": {
     "runtime_source": {
-      "commit": "5b7724326f14780a41255eb68ffa83a1e02f06b2",
-      "status": "1 .M N... 100644 100644 100644 8e807dc038aaf88518586b018bb101436a216375 8e807dc038aaf88518586b018bb101436a216375 lib/libprrtsp.so\n1 .M N... 100644 100644 100644 8e807dc038aaf88518586b018bb101436a216375 8e807dc038aaf88518586b018bb101436a216375 lib/libprrtsp.so.2\n1 .M N... 100644 100644 100644 8e807dc038aaf88518586b018bb101436a216375 8e807dc038aaf88518586b018bb101436a216375 lib/libprrtsp.so.2.0.0\n1 .M N... 100644 100644 100644 123b6e5bd61ee2de9a3279bbea1e07295770693d 123b6e5bd61ee2de9a3279bbea1e07295770693d lib/libsc132.so\n1 .M N... 100644 100644 100644 123b6e5bd61ee2de9a3279bbea1e07295770693d 123b6e5bd61ee2de9a3279bbea1e07295770693d lib/libsc132.so.2\n1 .M N... 100644 100644 100644 123b6e5bd61ee2de9a3279bbea1e07295770693d 123b6e5bd61ee2de9a3279bbea1e07295770693d lib/libsc132.so.2.0.0\n1 .M N... 100755 100755 100755 0cf069b4c042695b77a0508a2eafc314deeefd22 0cf069b4c042695b77a0508a2eafc314deeefd22 scripts/package_runtime.sh\n1 .M N... 100644 100644 100644 8fba5869d9e8d135e046d8cf599ea737d5bf77c8 8fba5869d9e8d135e046d8cf599ea737d5bf77c8 scripts/verify_runtime_package.py"
+      "commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315",
+      "status": "1 .M N... 100644 100644 100644 f9ac1d28e0df2bfab2f315b8a65a890f24d725ad f9ac1d28e0df2bfab2f315b8a65a890f24d725ad .gitignore"
     },
     "superproject": {
-      "commit": "a51a16d0d35e93cd72bcedc9ac28690a6a28c6ee",
-      "status": "1 .M N... 100644 100644 100644 7622d6906c583cd19e44ba408c495f4fee50fc16 7622d6906c583cd19e44ba408c495f4fee50fc16 USAGE.md\n1 .M N... 100644 100644 100644 997ea3da45748cc1aa81dbadad4eef8944454555 997ea3da45748cc1aa81dbadad4eef8944454555 docs/plan/2026-07-30-sc132-25-40-50fps-support-plan.md\n1 .M N... 100644 100644 100644 a9d990fc5ffbb311e33f4d0f203d47f198c1ee4f a9d990fc5ffbb311e33f4d0f203d47f198c1ee4f sc132/README.md\n1 .M N... 100644 100644 100644 ff4b7df8614265587161d74ef4290de91d7c8f03 ff4b7df8614265587161d74ef4290de91d7c8f03 sc132/sc132_sensor_profile_policy_internal.h\n1 .M N... 100644 100644 100644 160e9e0166d18df6d5a564d1791b5de4ba201dfb 160e9e0166d18df6d5a564d1791b5de4ba201dfb scripts/validation/robobaton_4p_demo/run_fullsave_stability.py\n1 .M S.M. 160000 160000 160000 35156a3ac13e6bfdee16d1fdd57cddc6831b4979 35156a3ac13e6bfdee16d1fdd57cddc6831b4979 sub_module/4P_doc\n1 .M S.M. 160000 160000 160000 00bfd26447ccd55b0bb84f70520bec61690e49bf 00bfd26447ccd55b0bb84f70520bec61690e49bf sub_module/RoboBaton_4P_ROS2_demo\n1 .M N... 100755 100755 100755 e1dc03da3b265ff01be836bd5be440a8e900e184 e1dc03da3b265ff01be836bd5be440a8e900e184 tests/robobaton_4p_demo/fullsave_stability_runner_test.py\n1 .M N... 100644 100644 100644 20a8382aca94a87b17dc445c16551e3a41f87db6 20a8382aca94a87b17dc445c16551e3a41f87db6 tests/robobaton_4p_demo/verify_runtime_package_test.py\n1 .M N... 100644 100644 100644 522d42129f67363e427d077aed0ed0230d8715c3 522d42129f67363e427d077aed0ed0230d8715c3 tests/sc132_public_config_contract_test.py\n1 .M N... 100644 100644 100644 eb7d047d60eb052971c150092e5004492b1b6bb0 eb7d047d60eb052971c150092e5004492b1b6bb0 tests/sc132_sensor_profile_policy_test.c"
+      "commit": "b22647817d706543e79f7cf4c27ddf003ec86f2e",
+      "status": "1 .M N... 100644 100644 100644 3a5bc68fc8f8ef5c1e6b08dfeb6f04b1fbdf39f7 3a5bc68fc8f8ef5c1e6b08dfeb6f04b1fbdf39f7 CMakeLists.txt\n1 .M N... 100644 100644 100644 2f636b153fe36992edf60da6970ed2590447dd93 2f636b153fe36992edf60da6970ed2590447dd93 tests/icm42688_c_api_test.c\n1 .M N... 100644 100644 100644 c0dfa7d6d6e414394900f1b0d466ab7c01eeab50 c0dfa7d6d6e414394900f1b0d466ab7c01eeab50 tests/robobaton_4p_demo/release008_contract_test.py\n1 .M N... 100644 100644 100644 12cb862cc58c81f4d882481bb98ef8e3ee493ce8 12cb862cc58c81f4d882481bb98ef8e3ee493ce8 tests/robobaton_4p_demo/release008_fake_producers.cpp"
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "5b7724326f14780a41255eb68ffa83a1e02f06b2",
+    "repository_commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "a51a16d0d35e93cd72bcedc9ac28690a6a28c6ee",
-    "superproject_gitlink_commit": "5b7724326f14780a41255eb68ffa83a1e02f06b2"
+    "superproject_commit": "b22647817d706543e79f7cf4c27ddf003ec86f2e",
+    "superproject_gitlink_commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315"
   },
   "toolchain": {
-    "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",
+    "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/.package-build-v111-metadata-refresh",
     "compiler": "/usr/bin/aarch64-linux-gnu-gcc-11",
     "compiler_sha256": "70a2d6626629079a8d94b97184b121d4e3a1bfe880c44e7db30670bb73e4028e",
     "toolchain_file": "/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake",

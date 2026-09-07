@@ -2,7 +2,7 @@ build_x5/
 build_x5_syncfix/*
 regression_logs/*
 *.bin
-.package-build-icm42688/
+.package-build-*/
 __pycache__/
 *.py[cod]
 build_x5_jpeg_fix/
