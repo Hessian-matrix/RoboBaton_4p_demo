@@ -162,8 +162,16 @@ def workspace_context(repo_root: Path) -> tuple[Path, str]:
     return workspace_root, repo_root.relative_to(workspace_root).as_posix()
 
 
-def git_status(repo_root: Path) -> str:
-    return git_output(repo_root, "status", "--porcelain=v2", "-uall")
+def git_status(repo_root: Path, excluded_path: Path | None = None) -> str:
+    args = ["status", "--porcelain=v2", "-uall"]
+    if excluded_path is not None:
+        try:
+            relative = excluded_path.resolve().relative_to(repo_root.resolve()).as_posix()
+        except ValueError:
+            relative = ""
+        if relative:
+            args.extend(["--", ".", f":(exclude){relative}"])
+    return git_output(repo_root, *args)
 
 
 def committed_input_hashes(repo_root: Path, commit: str) -> dict[str, str]:
@@ -304,10 +312,13 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
             raise AssertionError(f"hash mismatch for {relative}: {actual_hash} != {expected_hash}")
 
 
-def capture_source_snapshot(repo_root: Path) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
+def capture_source_snapshot(
+    repo_root: Path, package_dir: Path | None = None
+) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
     workspace_root, repository_path = workspace_context(repo_root)
-    superproject_status = git_status(workspace_root)
-    repository_status = git_status(repo_root)
+    runtime_repository = workspace_root / repository_path
+    superproject_status = git_status(workspace_root, runtime_repository)
+    repository_status = git_status(repo_root, package_dir)
     superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
     repository_commit = git_output(repo_root, "rev-parse", "HEAD")
     gitlink_commit = git_output(
@@ -343,9 +354,12 @@ def build_provenance(
     triplet: str,
     toolchain_file: Path,
     build_dir: Path,
+    source_output_dir: Path | None = None,
 ) -> dict[str, object]:
-    # 先采集当前工作树快照，再验证 toolchain 与编译器的可追溯性。
-    source, repository_states, inputs = capture_source_snapshot(repo_root)
+    # staging目录尚未替换最终输出目录，来源状态必须排除将被替换的路径。
+    source, repository_states, inputs = capture_source_snapshot(
+        repo_root, source_output_dir or package_dir
+    )
     compiler_path = Path(compiler).resolve()
     toolchain_path = toolchain_file.resolve()
     if not compiler_path.is_file() or compiler_path.is_symlink():
@@ -371,7 +385,11 @@ def build_provenance(
     }
 
 
-def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
+def verify_provenance(
+    package_dir: Path,
+    repo_root: Path,
+    source_output_dir: Path | None = None,
+) -> dict[str, object]:
     provenance_path = package_dir / PROVENANCE_NAME
     if not provenance_path.is_file():
         raise AssertionError(f"missing {PROVENANCE_NAME}")
@@ -411,8 +429,11 @@ def verify_provenance(package_dir: Path, repo_root: Path) -> dict[str, object]:
         raise AssertionError("runtime provenance source states must be a dict")
     # 允许 dirty 工作树打包；只要当前状态和 provenance 记录一致，就视为同一快照。
     current_states = {
-        "superproject": {"commit": superproject_commit, "status": git_status(workspace_root)},
-        "runtime_source": {"commit": repository_commit, "status": git_status(repo_root)},
+        "superproject": {"commit": superproject_commit, "status": git_status(workspace_root, repo_root)},
+        "runtime_source": {
+            "commit": repository_commit,
+            "status": git_status(repo_root, source_output_dir or package_dir),
+        },
     }
     if repository_states != current_states:
         raise AssertionError(
@@ -462,9 +483,16 @@ def write_provenance(
     triplet: str,
     toolchain_file: Path,
     build_dir: Path,
+    source_output_dir: Path | None = None,
 ) -> None:
     provenance = build_provenance(
-        package_dir, repo_root, compiler, triplet, toolchain_file, build_dir
+        package_dir,
+        repo_root,
+        compiler,
+        triplet,
+        toolchain_file,
+        build_dir,
+        source_output_dir,
     )
     write_atomic_text(
         package_dir / PROVENANCE_NAME,
@@ -472,11 +500,16 @@ def write_provenance(
     )
 
 
-def verify_package(package_dir: Path, *, repo_root: Path = ROOT) -> None:
+def verify_package(
+    package_dir: Path,
+    *,
+    repo_root: Path = ROOT,
+    source_output_dir: Path | None = None,
+) -> None:
     expected_nodes = expected_inventory_nodes()
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     verify_checksums(package_dir, actual_inventory)
-    verify_provenance(package_dir, repo_root)
+    verify_provenance(package_dir, repo_root, source_output_dir)
 
     missing = sorted(relative for relative in REQUIRED_FILES if not (package_dir / relative).is_file())
     if missing:
@@ -561,6 +594,7 @@ def main() -> int:
     parser.add_argument("--check-source", action="store_true")
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--write-provenance", action="store_true")
+    parser.add_argument("--source-output-dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--compiler", default="")
     parser.add_argument("--triplet", default="")
@@ -587,10 +621,15 @@ def main() -> int:
             args.triplet,
             args.toolchain_file.resolve(),
             args.build_dir.resolve(),
+            args.source_output_dir.resolve() if args.source_output_dir else package_dir,
         )
     if args.write_manifest:
         write_manifest(package_dir)
-    verify_package(package_dir, repo_root=repo_root)
+    verify_package(
+        package_dir,
+        repo_root=repo_root,
+        source_output_dir=args.source_output_dir.resolve() if args.source_output_dir else None,
+    )
     print(f"Runtime ABI package verified: {package_dir}")
     return 0
 

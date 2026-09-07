@@ -287,9 +287,12 @@ python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --triplet "${TARGET_TRIPLET}" \
   --toolchain-file "${TOOLCHAIN_FILE}" \
   --build-dir "${BUILD_DIR}" \
+  --source-output-dir "${OUTPUT_DIR}" \
   "${STAGE_DIR}"
 chmod 644 "${STAGE_DIR}/runtime-provenance.json" "${STAGE_DIR}/manifest.sha256"
-python3 "${SCRIPT_DIR}/verify_runtime_package.py" "${STAGE_DIR}"
+python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
+  --source-output-dir "${OUTPUT_DIR}" \
+  "${STAGE_DIR}"
 
 if [[ -e "${OUTPUT_DIR}" ]]; then
   mv "${OUTPUT_DIR}" "${WORK_ROOT}/previous"
