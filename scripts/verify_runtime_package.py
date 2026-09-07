@@ -427,26 +427,25 @@ def verify_provenance(
     repository_states = provenance.get("repository_states")
     if not isinstance(repository_states, dict):
         raise AssertionError("runtime provenance source states must be a dict")
-    # 允许 dirty 工作树打包；只要当前状态和 provenance 记录一致，就视为同一快照。
-    current_states = {
-        "superproject": {"commit": superproject_commit, "status": git_status(workspace_root, repo_root)},
-        "runtime_source": {
-            "commit": repository_commit,
-            "status": git_status(repo_root, source_output_dir or package_dir),
-        },
+    expected_state_commits = {
+        "superproject": superproject_commit,
+        "runtime_source": repository_commit,
     }
-    if repository_states != current_states:
-        raise AssertionError(
-            "runtime provenance source state does not match the current workspace snapshot"
-        )
+    for label, expected_commit in expected_state_commits.items():
+        state = repository_states.get(label)
+        if not isinstance(state, dict) or state.get("commit") != expected_commit:
+            raise AssertionError(f"runtime provenance {label} state commit mismatch")
+        if not isinstance(state.get("status"), str):
+            raise AssertionError(f"runtime provenance {label} state status is invalid")
 
     stored_inputs = provenance.get("inputs")
     if not isinstance(stored_inputs, dict):
         raise AssertionError("runtime provenance inputs must be a dict")
     if stored_inputs != repo_input_hashes(repo_root):
         raise AssertionError("runtime provenance source/input hashes do not match current files")
-    # 工作树干净时，再额外把 provenance 锁到提交树，保持 clean build 的强约束。
-    if not current_states["superproject"]["status"] and not current_states["runtime_source"]["status"]:
+    # 运行包可以在生成后随 tracked 输出一起提交；提交记录和输入哈希仍锁定真实源码身份。
+    current_runtime_status = git_status(repo_root, source_output_dir or package_dir)
+    if not current_runtime_status:
         committed_inputs = committed_input_hashes(repo_root, repository_commit)
         if stored_inputs != committed_inputs:
             raise AssertionError("runtime provenance inputs do not match the recorded source commit")
