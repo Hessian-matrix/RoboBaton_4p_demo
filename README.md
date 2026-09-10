@@ -165,6 +165,8 @@ file lib/libprrtsp.so
 
 如果没有交叉编译工具链，则不能重新编译 demo，只能使用已经编译好的 `sensor_demo`、`imu_reader_demo`、`serial_port_demo`、`cam_demo` 和 `lib/` 下对应 `.so` 部署到板端运行。
 
+`lib/`中的每个项目库只保留一个真实版本化 ELF：`libicm42688.so.2.1.0`、`libsc132.so.2.1.0`和`libprrtsp.so.2.0.0`。对应的`.so.2`是指向真实文件的相对软链接，未带版本的`.so`再指向`.so.2`；打包阶段会保留这些链接目标，不会创建独立 ELF 副本。
+
 ## 3. 部署
 
 主仓库集成时，`sub_module/RoboBaton_4p_demo/demo/` 是随仓库分发的板端运行包；单独查看本仓库时，对应运行包就是当前仓库的 `demo/`。用户可以直接把 `demo/` 的内容复制到 X5 的 `/root/demo/` 作为更新包。
@@ -354,7 +356,9 @@ SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_reg
 ```
 `effective_hz`按相对配置目标的ppm误差验收；V1门限为绝对误差`<=12000ppm`。
 
-启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，相机诊断中的 `camera_ts_ns` 和 RTSP PTS 也映射到该 system 时间域。显式使用 `none` 诊断模式时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
+启动时会先输出 `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`。`system_realtime` 输出由启动时冻结的 `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset 外推得到；在 V1 唯一已验证的 `software_gpio` 触发模式下，`group_timestamp_ns` 是同一 frame-set 共用的 GPIO417 触发时间，相机诊断中的 `camera_ts_ns`、录包图像时间和 RTSP PTS 使用每路触发参考下的曝光中值并映射到该 system 时间域。显式使用 `none` 诊断模式时保留 SC132 原生时间域，不声明为 V1 wall/realtime 合同。IMU 输出中的 `host_timestamp_ns`/`sample_timestamp_ns` 始终映射到 `system_realtime`。GPIO395 仍是 IMU DRDY 边沿锚点，FIFO TMST 仍决定逐 sample 相对时间；映射只改变 epoch，不用最近邻时间差伪造物理 TD，TD 应在共同运动事件采集后单独估计。
+
+公开头中的 `SC132_FRAME_TIMESTAMP_SEMANTICS_VERSION=2` 标识上述逐路曝光中值语义；ABI 仍为 2.0，结构布局、导出符号和 `libsc132.so.2` SONAME 不变。
 
 ### `sensor_demo` 的 frame-set/source 诊断日志
 
@@ -547,15 +551,16 @@ avg_frame_rate=30/1
 5. 后台线程从队列取帧，构造 `prrtsp_nv12_frame_v2` 并调用 `prrtsp_stream_send()` 推流。
 6. 后台线程处理完成后调用 `sc132_frame_release()` 归还帧。
 
-用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`libsc132.so` 仅在归一化 `frame_id` 一致且 timestamp skew 不超过配置上限时放行，默认上限为 `10000000 ns（10ms）`，用于覆盖四路曝光时间差；帧周期 guard 仍防止跨帧配组。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
+用户二次开发的四目同步入口在 `src/cam_demo.cpp` 的 `OnSynchronizedFrameSet()`。该函数收到的是同一个 `group_id` 下的四路帧，包含 `max_skew_ns`、每路 `camera_id`、`sequence`、`frame_id` 和 `timestamp_ns`；`max_skew_ns` 是交付后的四路 `timestamp_ns` 最大差值。`libsc132.so` 配组时仍先用写回曝光中值前的 producer output timestamp skew 与归一化 `frame_id` 判定是否放行，默认上限为 `10000000 ns（10ms）`，用于覆盖四路曝光时间差；帧周期 guard 仍防止跨帧配组。不要把裸指针保存到更长生命周期；如果要异步使用图像，请自行 `sc132_frame_retain()`，处理完成后 `sc132_frame_release()`。
 
 日志字段：
 
 - `seq`：每个相机通道独立递增的软件序号
 - `group_id`：`libsc132.so` 生成的四目同步帧组序号
-- `group_skew_ns`：当前帧组四路 timestamp 最大差值，单位 `ns`，用于诊断链路相位差
+- `group_skew_ns`：当前帧组四路对外 `camera_ts_ns` / `timestamp_ns` 最大差值，单位 `ns`，用于诊断最终交付时间戳 skew
+- `calc_skew_ns`：`sensor_demo` 基于四路 `camera_ts_ns` 独立计算的最大差值；稳定实现下应与 `group_skew_ns` 一致
 - `frame_id`：同步帧组帧号；同一 `group_id` 下四路该值必须完全一致
-- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在 V1 唯一已验证的默认 `software_gpio/GPIO417` 模式下，它是匹配到的 GPIO trigger 时间经过 frozen offset 映射后的 `system_realtime` 时间；显式 `none` 诊断模式优先使用 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间，不声明为 V1 wall/realtime 合同。
+- `camera_ts_ns`：相机帧时间戳，单位 `ns`。在 V1 唯一已验证的默认 `software_gpio/GPIO417` 模式下，它是每路触发参考下的曝光中值经过 frozen offset 映射后的 `system_realtime` 时间；同组 `group_timestamp_ns` 仍只表示共用 GPIO417 触发时间。显式 `none` 诊断模式优先使用 sensor/VIO 随帧时间戳，缺失时 fallback 为系统出帧时间，不声明为 V1 wall/realtime 合同。
 - `enqueue_timestamp_ns`：入队时 host steady clock 时间戳，单位 `ns`
 - `queue_full_rejects`：回调发现单路队列已满而拒收帧的累计次数；稳定推流时必须始终为 `0`，任意非零值都会触发失败关闭
 - `pipeline_delay_ms`：当前帧从入队到完成 RTSP 送帧调用的耗时

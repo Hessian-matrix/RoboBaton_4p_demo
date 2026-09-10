@@ -144,7 +144,7 @@ fi
 
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libsc132.so.2.1.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
     echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
@@ -225,23 +225,27 @@ trap cleanup EXIT
 
 WORK_ROOT="$(mktemp -d "$(dirname "${OUTPUT_DIR}")/.package-runtime.XXXXXX")"
 STAGE_DIR="${WORK_ROOT}/stage"
-mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/lib"
+mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/config" "${STAGE_DIR}/lib"
 
 cp "${BUILD_DIR}/cam_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/imu_reader_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
 cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
+cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
+cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/sensor_config.yaml"
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libsc132.so.2.1.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
-  cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
+  source_library="${PACKAGE_LIB_DIR}/${library}"
+  staged_library="${STAGE_DIR}/lib/${library}"
+  if [[ -L "${source_library}" ]]; then
+    ln -s "$(readlink "${source_library}")" "${staged_library}"
+  else
+    cp "${source_library}" "${staged_library}"
+  fi
 done
-mkdir -p "${STAGE_DIR}/config"
-cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
-cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
-
 for executable in cam_demo imu_reader_demo sensor_demo serial_port_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
 done
@@ -278,7 +282,9 @@ done
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe"
-chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
+chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml"
+chmod 644 "${STAGE_DIR}/lib/"*.so.*
+chmod 644 "${STAGE_DIR}/lib/"*.so
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --write-provenance \

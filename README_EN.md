@@ -176,6 +176,8 @@ The expected output should contain `ARM aarch64`.
 
 If the cross-compilation toolchain is not available, the demo cannot be rebuilt. In that case, deploy the prebuilt binaries and the matching libraries under `lib/` to the board and run them directly.
 
+Each project library under `lib/` has one real versioned ELF: `libicm42688.so.2.1.0`, `libsc132.so.2.1.0`, or `libprrtsp.so.2.0.0`. The matching `.so.2` is a relative symlink to that real file, and the unversioned `.so` is a second symlink to `.so.2`; the package staging flow preserves these link targets rather than creating duplicate ELF copies.
+
 ## 3. Deploy
 
 When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
@@ -265,7 +267,8 @@ Source: `src/sensor_demo.cpp`.
 
 ```text
 SC132 GPIO417 trigger
-  -> frame-set.group_timestamp_ns
+  -> frame-set.group_timestamp_ns (common trigger origin)
+  -> per-camera trigger-referenced exposure midpoint timestamp_ns
   -> PRRTSP v2 timestamp_ns
 
 ICM GPIO395 DRDY rising edge
@@ -278,8 +281,9 @@ Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAM
 
 `sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
 
+At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, `group_timestamp_ns` is the common GPIO417 trigger time for the frame set, while camera diagnostics (`camera_ts_ns`), recorded image stamps, and RTSP PTS use the per-camera trigger-referenced exposure midpoint mapped to that system-time epoch. Explicit `none` diagnostic mode preserves the SC132 native timestamp domain and does not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
 
-At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch. Explicit `none` diagnostic mode preserves the SC132 native timestamp domain and does not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
+`SC132_FRAME_TIMESTAMP_SEMANTICS_VERSION=2` in the public header identifies this per-camera exposure-midpoint contract. ABI 2.0, structure layouts, exported symbols, and the `libsc132.so.2` SONAME remain unchanged.
 
 ### `sensor_demo` frame-set/source diagnostic log
 
@@ -572,15 +576,16 @@ Frame flow:
 5. Worker threads pop frames, build `prrtsp_nv12_frame_v2`, and call `prrtsp_stream_send()`.
 6. Worker threads call `sc132_frame_release()` after processing.
 
-The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default is `10000000 ns (10 ms)` to cover exposure-time differences across the four cameras; the frame-period guard still prevents cross-frame grouping. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
+The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`; `max_skew_ns` is the maximum skew across the delivered per-camera `timestamp_ns` values. `libsc132.so` still admits a group by normalized `frame_id` and producer output timestamp skew before exposure-midpoint rewrite. The default is `10000000 ns (10 ms)` to cover exposure-time differences across the four cameras; the frame-period guard still prevents cross-frame grouping. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
 
 Log fields:
 
 - `seq`: per-camera software sequence
 - `group_id`: synchronized frame-set sequence generated by `libsc132.so`
-- `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
+- `group_skew_ns`: maximum skew across the delivered per-camera `camera_ts_ns` / `timestamp_ns` values, in `ns`, used to diagnose final timestamp skew
+- `calc_skew_ns`: maximum skew independently calculated by `sensor_demo` from the per-camera `camera_ts_ns` values; in a stable implementation it should match `group_skew_ns`
 - `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
-- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode, the only V1-validated trigger mode, it is the matched GPIO trigger timestamp mapped into the `system_realtime` epoch by the frozen offset. Explicit `none` diagnostic mode prefers the sensor/VIO per-frame timestamp and uses the system output timestamp as fallback; it does not carry a V1 wall/realtime contract
+- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode, the only V1-validated trigger mode, it is the per-camera trigger-referenced exposure midpoint mapped into the `system_realtime` epoch by the frozen offset. The same group's `group_timestamp_ns` remains only the common GPIO417 trigger time. Explicit `none` diagnostic mode prefers the sensor/VIO per-frame timestamp and uses the system output timestamp as fallback; it does not carry a V1 wall/realtime contract
 - `queue_full_rejects`: cumulative frames rejected because a per-channel queue was already full; this must remain `0` during stable streaming, and any nonzero value triggers fail-closed shutdown
 - `pipeline_delay_ms`: time from enqueue to RTSP send completion
 - `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled

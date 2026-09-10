@@ -10,6 +10,7 @@ extern "C" {
 
 #define SC132_ABI_VERSION_MAJOR 2U
 #define SC132_ABI_VERSION_MINOR 0U
+#define SC132_FRAME_TIMESTAMP_SEMANTICS_VERSION 2U
 
 #define SC132_STATUS_OK ((int32_t)0)
 #define SC132_STATUS_INVALID_ARGUMENT ((int32_t)-1)
@@ -65,9 +66,13 @@ typedef struct sc132_frame_set {
 
 /*
  * DMA 帧只允许只读访问；以下合同明确时间域、借用引用和跨回调保留规则。
- * timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的 GPIO417
- * 上升沿时间，组内各路完全相同；其他模式优先使用 sensor/VIO 随帧时间，缺失时退回
+ * group_timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的 GPIO417
+ * 上升沿触发时间，组内各路完全相同；其他模式优先使用 sensor/VIO 随帧时间，缺失时退回
  * 系统出帧时间。所有模式均不保证与墙上时钟同域。
+ * max_skew_ns 是当前对外 items[].timestamp_ns 的最大差值；software_gpio 配组放行仍基于写回曝光中值前的 producer output timestamp skew。
+ * items[i].timestamp_ns 与对同一 items[i].frame 调用 sc132_frame_get_info 返回的
+ * timestamp_ns 单位为 ns。sc132_start_frame_set() 的 software_gpio 帧使用对应相机触发参考下的
+ * 曝光中值时间，不要求组内相同；其他模式与 group_timestamp_ns 同源。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
  * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback
  * 保存 frame，必须在回调内先 sc132_frame_retain，并在最终使用完成后自行 sc132_frame_release。

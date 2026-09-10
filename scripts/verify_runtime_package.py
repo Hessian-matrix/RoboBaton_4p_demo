@@ -28,18 +28,21 @@ EXPECTED_VERSION_NEEDS = {
 }
 EXPECTED_VERSION_DEFINITIONS = {
     "lib/libicm42688.so.2.1.0": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
-    "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
+    "lib/libsc132.so.2.1.0": {"LIBSC132_2.0"},
     "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
     "lib/libicm42688.so.2.1.0": "libicm42688.so.2",
-    "lib/libsc132.so.2.0.0": "libsc132.so.2",
+    "lib/libsc132.so.2.1.0": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
 }
-EXPECTED_LIBRARY_COPIES = {
-    "lib/libicm42688.so.2.1.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
-    "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
-    "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
+EXPECTED_LIBRARY_SYMLINKS = {
+    "lib/libicm42688.so.2": "libicm42688.so.2.1.0",
+    "lib/libicm42688.so": "libicm42688.so.2",
+    "lib/libsc132.so.2": "libsc132.so.2.1.0",
+    "lib/libsc132.so": "libsc132.so.2",
+    "lib/libprrtsp.so.2": "libprrtsp.so.2.0.0",
+    "lib/libprrtsp.so": "libprrtsp.so.2",
 }
 EXPECTED_SCRIPT_COPIES = {
     "scripts/runtime_ffprobe_frame_count.sh": "bin/ffprobe",
@@ -52,7 +55,7 @@ EXPECTED_NEEDED = {
 }
 EXPECTED_LIBRARY_NEEDED = {
     "lib/libicm42688.so.2.1.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libsc132.so.2.1.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
@@ -62,21 +65,26 @@ REQUIRED_FILES = {
     "imu_reader_demo",
     "sensor_demo",
     "serial_port_demo",
-    "env.sh",
-    "config/sensor_config.yaml",
     "bin/cam_demo",
     "bin/imu_reader_demo",
     "bin/sensor_demo",
     "bin/serial_port_demo",
     "bin/ffprobe",
+    "env.sh",
+    "config/sensor_config.yaml",
     *EXPECTED_VERSION_DEFINITIONS,
-    *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
+    *EXPECTED_LIBRARY_SYMLINKS,
 }
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+
+def source_input_hash(path: Path) -> str:
+    if path.is_symlink():
+        return hashlib.sha256(os.readlink(path).encode("utf-8")).hexdigest()
+    return sha256(path)
 
 def readelf(path: Path, *args: str) -> str:
     return subprocess.run(
@@ -193,7 +201,7 @@ def artifact_payload_hashes(package_dir: Path) -> dict[str, str]:
     return {
         path.relative_to(package_dir).as_posix(): sha256(path)
         for path in sorted(package_dir.rglob("*"))
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
         and path.relative_to(package_dir).as_posix() not in excluded
     }
 
@@ -217,7 +225,7 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
 
 def repo_input_hashes(repo_root: Path) -> dict[str, str]:
     return {
-        path.relative_to(repo_root).as_posix(): sha256(path)
+        path.relative_to(repo_root).as_posix(): source_input_hash(path)
         for path in repo_input_paths(repo_root)
     }
 
@@ -230,7 +238,7 @@ def expected_inventory_nodes() -> dict[str, str]:
         MANIFEST_NAME: "regular",
     }
     for relative in REQUIRED_FILES:
-        nodes[relative] = "regular"
+        nodes[relative] = "symlink" if relative in EXPECTED_LIBRARY_SYMLINKS else "regular"
     return nodes
 
 
@@ -240,7 +248,8 @@ def verify_exact_inventory(root: Path, expected_nodes: dict[str, str]) -> dict[s
         relative = path.relative_to(root).as_posix()
         st = os.lstat(path)
         if stat.S_ISLNK(st.st_mode):
-            raise AssertionError(f"symlink is not allowed in runtime package: {relative}")
+            actual_inventory[relative] = "symlink"
+            continue
         if stat.S_ISDIR(st.st_mode):
             actual_inventory[relative] = "dir"
             continue
@@ -259,7 +268,7 @@ def manifest_regular_files(root: Path, actual_inventory: dict[str, str]) -> list
     return sorted(
         relative
         for relative, kind in actual_inventory.items()
-        if kind == "regular" and relative != MANIFEST_NAME
+        if kind in {"regular", "symlink"} and relative != MANIFEST_NAME
     )
 
 
@@ -310,6 +319,14 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
         actual_hash = sha256(root / relative)
         if actual_hash != expected_hash:
             raise AssertionError(f"hash mismatch for {relative}: {actual_hash} != {expected_hash}")
+def verify_library_symlink_targets(package_dir: Path) -> None:
+    for relative, target in EXPECTED_LIBRARY_SYMLINKS.items():
+        path = package_dir / relative
+        observed = os.readlink(path) if path.is_symlink() else "<not a symlink>"
+        if observed != target:
+            raise AssertionError(
+                f"library symlink target mismatch for {relative}: {observed!r} != {target!r}"
+            )
 
 
 def capture_source_snapshot(
@@ -507,6 +524,7 @@ def verify_package(
 ) -> None:
     expected_nodes = expected_inventory_nodes()
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
+    verify_library_symlink_targets(package_dir)
     verify_checksums(package_dir, actual_inventory)
     verify_provenance(package_dir, repo_root, source_output_dir)
 
@@ -569,18 +587,12 @@ def verify_package(
 
     version_getters = {
         "lib/libicm42688.so.2.1.0": "icm42688_get_version",
-        "lib/libsc132.so.2.0.0": "sc132_get_version",
+        "lib/libsc132.so.2.1.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
     }
     for relative, symbol in version_getters.items():
         if symbol not in dynamic_symbols(package_dir / relative):
             raise AssertionError(f"missing release version getter {symbol} in {relative}")
-
-    for real_relative, copies in EXPECTED_LIBRARY_COPIES.items():
-        expected_hash = sha256(package_dir / real_relative)
-        for copy_relative in copies:
-            if sha256(package_dir / copy_relative) != expected_hash:
-                raise AssertionError(f"producer copy drift: {copy_relative} != {real_relative}")
 
     for source_relative, package_relative in EXPECTED_SCRIPT_COPIES.items():
         if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):

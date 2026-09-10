@@ -26,9 +26,9 @@ if(NOT EXISTS "${ICM42688_SO}")
   message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.1.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
-set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0")
+set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.1.0")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.1.0 and compatibility links exist in this demo's lib/ directory.")
 endif()
 
 set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0")
@@ -205,18 +205,12 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo
   LIBRARY DESTINATION lib
 )
 
-install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so"
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib/"
   DESTINATION lib
-)
+  FILES_MATCHING
+  PATTERN "libicm42688.so*"
+  PATTERN "libsc132.so*"
+  PATTERN "libprrtsp.so*")
 
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/include/icm42688_driver.h"
