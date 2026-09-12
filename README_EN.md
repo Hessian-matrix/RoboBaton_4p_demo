@@ -1,865 +1,158 @@
-# X5 SC132 4-Camera, IMU, And UART Demo
+# X5 SC132 4-Camera, IMU, and UART Demo
 
-Chinese version: [README.md](README.md)
-![alt text](image/4P_Cam.png)
+中文说明：[README.md](README.md)
 
-This is the minimal user-facing demo package. It includes the joint `sensor_demo`, the SC132 4-camera RTSP demo, the standalone GPIO395 INT1 IMU reader demo, the UART communication demo, public headers, and binary driver libraries. It does not include the underlying driver implementation source code.
+![RoboBaton 4P](image/4P_Cam.png)
 
-## 1. Directory Layout
+This is the public non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42688 IMU examples, UART1/UART7 examples, public headers, and matching prebuilt runtime libraries.
 
-```text
-open_source_demo/
-├── CMakeLists.txt
-├── README.md / README_EN.md
-├── demo/                    # Runtime package deployable to X5 /root/demo
-│   ├── cam_demo / sensor_demo / imu_reader_demo / serial_port_demo
-│   ├── env.sh / manifest.sha256
-│   ├── config/              # sensor_demo YAML config
-│   ├── bin/                 # AArch64 executables and MP4 ffprobe helper
-│   └── lib/                 # Shared libraries matched to the runtime package
-├── image/                   # Wiring images used by the README files
-├── config/                  # Default sensor_demo YAML config
-│   └── sensor_config.yaml
-├── include/
-│   ├── icm42688_driver.h
-│   ├── sc132camera.h
-│   └── prrtsp_v2.h
-├── lib/                     # Delivered libraries used for source cross-builds
-├── scripts/
-│   ├── env_setup/
-│   │   ├── configure_x5_ptp_master.sh
-│   │   ├── enable_uart_autologin.sh
-│   │   ├── x5_sync_time.sh
-│   │   └── x5-ion-mem.run
-│   ├── build_cam_demo.sh
-│   ├── build_sensor_demo.sh
-│   ├── build_imu_reader_demo.sh
-│   ├── build_serial_port_demo.sh
-│   ├── cam_demo_regression.sh
-│   ├── rosbag_info.py
-│   ├── rosbag_extract.py
-│   ├── mp4_extract.py
-│   ├── package_runtime.sh
-│   ├── runtime_ffprobe_frame_count.sh
-│   └── verify_runtime_package.py
-└── src/
-    ├── cam_demo.cpp / sensor_demo.cpp
-    ├── cam_demo_common.* / cam_demo_config.*
-    ├── cam_demo_pipeline.* / cam_demo_rtsp.*
-    ├── rosbag_v2_writer.* / sensor_bag_recorder.* / h264_mp4_recorder.*
-    ├── x5_jpeg_encoder.* / imu_reader_demo.cpp
-    └── serial_port_demo.cpp
-```
+> **The [4P_doc](https://4p-docs.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
 
-`scripts/env_setup/` contains optional board-side environment helpers for NTP time sync, X5 PTP master setup, debug-UART root autologin toggling, and `x5-ion-mem` installation. They serve user deployment and troubleshooting only; they are not internal tests, fixtures, or release evidence.
-
-`cam_demo.cpp` keeps the main flow and user extension hooks. Command-line parsing, RTSP wrapping, frame queues, and background streaming are split into `cam_demo_config.*`, `cam_demo_rtsp.*`, and `cam_demo_pipeline.*` for easier reading.
-
-This public repository does not contain the internal `tests/` directory or release checklist. When integrated into the top-level `4cam` workspace, those maintainer assets live under `tests/robobaton_4p_demo/`; they are not part of the user source delivery or the board-side `demo/` package. `build_x5/`, `.package-build-*`, `regression_logs/`, and Python caches are local generated artifacts and are not release content.
-
-## Repository And Release Identity
-
-The `main` branch is the public non-ROS release line. A complete V1 is not defined by this repository alone: the top-level `4cam` repository on `master` pins one exact commit from each public repository through Git links:
+## Contents
 
 ```text
-RoboBaton_4p_demo              main
-RoboBaton_4P_ROS2_demo         main
-4P_doc                         main
+demo/       Complete X5 package for `/root/demo`
+include/    Public C headers
+lib/        Prebuilt libraries matching the current demo and headers
+config/     Default `sensor_demo` YAML
+src/        Demo source
+scripts/    Build, packaging, and runtime verification entry points
 ```
 
-For an official delivery, use the commit/tag named by the release together with its matching `demo/manifest.sha256`. Do not combine an arbitrary checkout of `main` with prebuilt libraries or a runtime package from another generation. The top-level `feature/* -> dev -> rc/* -> master` flow is an internal candidate-promotion path; dev/feature content that has not entered the official composition is not a supported public release.
+Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the configuration file.
 
-## Version Reporting
+## Version and package matching
 
-Both the repository and runtime package contain a machine-readable `VERSION` file. All four delivered programs support `--version` without initializing camera, IMU, or UART hardware:
+Use the repository, `demo/`, prebuilt libraries, and public documentation as one release composition. Confirm `VERSION`, the repository tag, and `demo/manifest.sha256`; do not mix source, headers, shared libraries, and runtime packages from different releases.
+
+On the board, query program and runtime-library versions:
 
 ```bash
-cat demo/VERSION
-demo/cam_demo --version
-demo/sensor_demo --version
-demo/imu_reader_demo --version
-demo/serial_port_demo --version
+cd /root/demo
+./cam_demo --version
+./sensor_demo --version
+./imu_reader_demo --version
+./serial_port_demo --version
 ```
 
-`cam_demo` and `sensor_demo` also report the product and ABI versions of the `libsc132`, `libprrtsp`, and `libicm42688` objects actually loaded by the process, which detects mixed packages. The three project-owned shared libraries expose `sc132_get_version()`, `prrtsp_get_version()`, and `icm42688_get_version()` C APIs. Each returns process-static read-only storage that must not be freed. Product SemVer is independent of a shared library's SONAME/ABI version.
+These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html), [API reference](https://4p-docs.readthedocs.io/en/latest/api-reference.html), and [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html).
 
-Features, fixes, and known limitations are maintained in the [public changelog](https://github.com/Hessian-matrix/4P_doc/blob/main/source/changelog.md).
+## Choose a demo
 
-The public documentation repository provides a single Chinese [data persistence application guide](https://github.com/Hessian-matrix/4P_doc/blob/main/source/save-data-application-guide.md) for package integrity, board operation, mutually exclusive ROS1 bag/MP4 configuration, graceful shutdown, completeness acceptance, offline conversion, and recovery.
+| Program | Purpose |
+|---|---|
+| `sensor_demo` | Four cameras, RTSP, and IMU together; optional ROS1 bag or H.264 MP4 persistence |
+| `cam_demo` | Four cameras and RTSP |
+| `imu_reader_demo` | Standalone IMU reading |
+| `serial_port_demo` | UART1/UART7 example; not for DEBUG_UART |
 
-## 2. Build
+## Default run
 
-This demo is intended to be cross-compiled on a development host and only run on the X5 board. Native compilation on the X5 board is not required or recommended.
-
-Build prerequisites:
-
-- X5 aarch64 cross-compilation toolchain (included in the companion archive)
-- CMake (a host-side tool; **not included in the archive**, install it separately)
-- Toolchain file from the X5 SDK (included in the companion archive)
-
-Companion archive:
-
-```text
-<4cam-repo-root>/cross_compile_toolchain/x5_4cam_cross_toolchain_20260708.tar.gz
-```
-
-Download URL:
-
-```text
-https://www.hessian-matrix.com/wp-content/uploads/2026/automaticupdates/x5_4cam_cross_toolchain_20260708.tar.gz
-```
-
-The archive was checked to contain:
-
-```text
-cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake
-cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
-cross_compile/new/toolchain/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-strip
-X5 SDK platform_samples, sysroot, headers, and libraries
-```
-
-The archive does not contain the host `cmake` executable. Its `cmake/` directories are SDK/ROS CMake metadata, not a CMake installation. After extraction, set the toolchain as follows:
+The default package is `demo/`. After deployment, run on X5:
 
 ```bash
-cd <4cam-repo-root>
-tar -xzf cross_compile_toolchain/x5_4cam_cross_toolchain_20260708.tar.gz \
-  -C cross_compile_toolchain
-
-export X5_TOOLCHAIN_ROOT="$PWD/cross_compile_toolchain/x5_4cam_cross_toolchain_20260708"
-export TOOLCHAIN_FILE="$X5_TOOLCHAIN_ROOT/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake"
+cd /root/demo
+./sensor_demo
 ```
 
-Confirm that CMake is installed separately on the host:
+Camera/RTSP only:
 
 ```bash
-cmake --version
+./cam_demo
 ```
-The toolchain file path below is only an example. Replace it with the actual path in your environment:
+
+IMU only:
 
 ```bash
-cd open_source_demo
+./imu_reader_demo
+```
+
+UART1/UART7 example:
+
+```bash
+./serial_port_demo
+```
+
+For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-docs.readthedocs.io/en/latest/first-boot.html) and [Quick start](https://4p-docs.readthedocs.io/en/latest/quick-start.html).
+
+## Persistence
+
+`sensor_demo` does not persist data automatically. The default format field is MP4 and the default path is `/root/demo/save_mp4/`. Explicitly select one mode when enabling persistence:
+
+```bash
+# ROS1 bag v2.0
+./sensor_demo --record-bag /data/run.bag
+
+# H.264 MP4 session
+./sensor_demo --record-mp4-dir /data/mp4_session
+```
+
+ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html).
+
+## Build from source
+
+This repository is cross-compiled on the development host and the generated package runs on X5. Before building, provide matching `./include`, `./lib`, the X5 cross-compilation package, and host CMake:
+
+```bash
+export TOOLCHAIN_FILE="/path/to/aarch64_x5_host_toolchain.cmake"
 cmake -S . -B build_x5 \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 cmake --build build_x5 -j
 ```
 
-You can also build one demo target at a time:
+Maintainers refresh the complete runtime package with:
 
 ```bash
-TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_cam_demo.sh
-TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_sensor_demo.sh
-TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_imu_reader_demo.sh
-TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_serial_port_demo.sh
+scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
+python3 scripts/verify_runtime_package.py demo
 ```
 
+For toolchain preparation, dependencies, build boundaries, and package verification, see [Open-source demo build](https://4p-docs.readthedocs.io/en/latest/open-source-build.html).
 
-Generated binaries:
+## Deployment
 
-- `build_x5/sensor_demo`
-- `build_x5/imu_reader_demo`
-- `build_x5/serial_port_demo`
-- `build_x5/cam_demo`
-
-Check the target architecture:
-
-```bash
-file build_x5/sensor_demo
-file build_x5/imu_reader_demo
-file build_x5/serial_port_demo
-file build_x5/cam_demo
-file lib/libicm42688.so
-file lib/libsc132.so
-file lib/libprrtsp.so
-```
-
-The expected output should contain `ARM aarch64`.
-
-If the cross-compilation toolchain is not available, the demo cannot be rebuilt. In that case, deploy the prebuilt binaries and the matching libraries under `lib/` to the board and run them directly.
-
-## 3. Deploy
-
-When integrated in the top-level workspace, `sub_module/RoboBaton_4p_demo/demo/` is the board-side runtime update package; when this repository is read standalone, the same package is this repository's local `demo/` directory. Users can copy the contents of `demo/` directly to `/root/demo/` on X5.
-
-> Runtime package status note: do not assume the checked-in `demo/` directory is always the current final release package. After any source, public-header, or `lib/` change, maintainers must rerun `scripts/package_runtime.sh` in an environment that has the X5 AArch64 toolchain, then validate the generated package with `scripts/verify_runtime_package.py demo`, including both `manifest.sha256` and `runtime-provenance.json`. Only that fresh rebuild may be treated as the current candidate package.
->
-> Historical board smoke, T1/T2/T3/T3.1/T4/T5 results, and old package hashes remain useful as historical evidence only. They do not automatically prove that the current source tree or the currently checked-in `demo/` directory is still valid. Final release or promotion decisions must use the latest top-level migration record and test matrix.
-
-After code or shared-library changes, maintainers should rebuild the dependent libraries and refresh `demo/` on the development host:
-
-```bash
-cd <4cam-repo-root>/sub_module/RoboBaton_4p_demo
-scripts/package_runtime.sh
-```
-
-`scripts/package_runtime.sh` is the release-repository consumer build and packaging entry point. It reads the producer runtime libraries and public headers already provided in `./lib` and `./include`, configures and builds this repository's four demo targets, then atomically publishes and verifies `./demo`. It does not compile `icm42688_driver.cpp` and does not access or depend on producer source code from the parent workspace.
-
-The runtime package contains the top-level launchers, `env.sh`, `config/sensor_config.yaml`, `bin/ffprobe`, the four `bin/` ELFs, and `lib/`. Deploy the complete contents of `demo/` to the board. Do not copy only one executable, one `.so` file, or omit the config file.
-
-Deploy it to X5:
-
-```bash
-ssh root@<x5-ip> "rm -rf /root/demo && mkdir -p /root/demo"
-tar -C demo -cf - . | ssh root@<x5-ip> "tar -xf - -C /root/demo"
-ssh root@<x5-ip> "chmod +x /root/demo/cam_demo /root/demo/sensor_demo /root/demo/imu_reader_demo /root/demo/serial_port_demo /root/demo/bin/*"
-```
-
-Note: copy the contents of `demo/`, not the outer `demo/` directory itself; the board should not contain `/root/demo/demo/`.
-
-Runtime layout on X5:
+The board target directory is `/root/demo`. Deployment must follow:
 
 ```text
-/root/demo/
-├── cam_demo
-├── sensor_demo
-├── imu_reader_demo
-├── serial_port_demo
-├── env.sh
-├── config/
-│   └── sensor_config.yaml
-├── bin/
-│   ├── cam_demo
-│   ├── sensor_demo
-│   ├── imu_reader_demo
-│   ├── serial_port_demo
-│   └── ffprobe
-└── lib/
-    ├── libicm42688.so
-    ├── libsc132.so
-    └── libprrtsp.so
+unique temporary directory
+→ complete manifest verification
+→ old-application exit check
+→ backup of the old directory
+→ atomic promotion
+→ help/smoke verification
+→ restore the latest backup on failure
 ```
 
-Default run commands:
-
-```bash
-cd /root/demo
-./sensor_demo
-./cam_demo
-./imu_reader_demo
-./serial_port_demo
-```
-
-The top-level `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo` files are launcher scripts. They set the library path and prepend the packaged tools to `PATH`:
-
-```bash
-LD_LIBRARY_PATH=/root/demo/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib
-PATH=/root/demo/bin:/root/demo:$PATH
-```
-
-The real ELF binaries are under `bin/`. To run a `bin/` binary directly, load the environment first:
-
-```bash
-cd /root/demo
-. ./env.sh
-./bin/cam_demo
-```
-
-All four demo launchers provide default configurations. For normal bring-up, run `./sensor_demo` for the joint camera/RTSP plus INT1 IMU path, `./cam_demo` for camera/RTSP only, or `./imu_reader_demo` for standalone INT1 IMU. Use command-line options only when changing FPS, bitrate, serial port, sample count, IMU sample rate, or other runtime parameters.
-
-`sensor_demo` loads `${DEMO_DIR:-current directory}/config/sensor_config.yaml` before parsing CLI options; if the file is missing, it creates the default config. The YAML uses `camera`, `rtsp`, `imu`, and `save_data` sections and supports `camera.width`, `camera.height`, `camera.fps`, `camera.rotate`, `rtsp.bps`, `rtsp.codec`, `rtsp.url`, `imu.sample_rate_hz`, `imu.print_rate_hz`, `imu.print_metrics`, `save_data.save`, `save_data.format`, `save_data.save_path`, and `save_data.skip`. `camera.width`/`camera.height` are fixed at `1280`/`1088` to expose the current resolution contract; changing them is rejected. `save_data.format` is `rosbag` or `mp4` and defaults to `rosbag`; `save_data.save_path` must be absolute, points to a `.bag` file in `rosbag` mode, and points to an output directory in `mp4` mode. `save_data.skip: true` applies only to `rosbag` and is equivalent to `--record-frame-skip 1`. The default YAML no longer selects the camera mask: the full four-camera path stays fixed at `0xf`, and single-sensor diagnostics should still use `cam_demo --camera-id`. CLI options take precedence and override only explicitly supplied fields. `camera_id`, `diagnostics`, `diag_interval_ms`, `max_skew_ns`, `frame_timeout_ms`, `trigger_mode`, `imu_sample_drop_policy`, and `imu_start_order` remain CLI-only. `cam_demo` does not read this YAML.
-
-## 4. `sensor_demo`: Joint Camera, RTSP, and IMU Entry Point
-
-Source: `src/sensor_demo.cpp`.
-
-`sensor_demo` starts the four-camera SC132 pipeline, PRRTSP v2, and the independent GPIO395 DRDY + sensor-timestamp FIFO IMU path:
-
-```text
-SC132 GPIO417 trigger
-  -> frame-set.group_timestamp_ns
-  -> PRRTSP v2 timestamp_ns
-
-ICM GPIO395 DRDY rising edge
-  -> host edge timestamp anchor
-ICM FIFO TMST
-  -> sample_timestamp_ns / icm42688 sample callback
-```
-
-Both `sensor_demo` and `imu_reader_demo` use `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`. `sensor_demo --sample-rate-hz <hz>` accepts `25/50/100/200/500/1000/2000` and defaults to `1000`. The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`. Shutdown quiesces the camera/RTSP pipeline before stopping the IMU acquisition thread.
-
-`sensor_demo` uses the same IMU terminal record format as `imu_reader_demo`: by default it prints sampled `imu data:` multi-line blocks at `min(sample-rate-hz, 10)`, `--print-rate-hz HZ` changes that terminal output rate, `--print-rate-hz 0` keeps only startup/shutdown summaries, and `--print-metrics` appends the optional `metrics:` diagnostics block.
-
-
-At startup the process prints `TIME_BASE realtime_start_ns=... monotonic_raw_start_ns=... frozen_offset_ns=...`. `system_realtime` outputs are produced by applying this frozen `CLOCK_REALTIME - CLOCK_MONOTONIC_RAW` offset. In `software_gpio`, the only V1-validated trigger mode, camera diagnostics (`camera_ts_ns`) and RTSP PTS are mapped to that system-time epoch. Explicit `none` diagnostic mode preserves the SC132 native timestamp domain and does not carry a V1 wall/realtime contract. IMU `host_timestamp_ns`/`sample_timestamp_ns` are always mapped to `system_realtime`. GPIO395 remains the IMU DRDY edge anchor, and FIFO TMST still defines the per-sample relative timeline.
-
-### `sensor_demo` frame-set/source diagnostic log
-
-With `sensor_demo --diagnostics`, the SC132 frame-set matcher and pipeline source liveness may periodically print:
-
-```text
-[FRAME_SET] trigger_sync matched_total=6961 discarded_total=28 trigger_seq=6989 lag_ns=9728000 interval_max_lag_ns=9738583 limit_ns=16666666
-source frame_sets_seen=6961 stale_ms=2 liveness_timeout_ms=2000
-```
-
-Field definitions:
-
-| Field | Meaning |
-|---|---|
-| `matched_total` | Cumulative number of successful GPIO trigger/frame-set matches since the current frame-set sync state was reset. |
-| `discarded_total` | Cumulative number of stale or no-longer-used trigger queue entries discarded during matching. It is not an RTSP frame-drop counter or a retryable frame-set-drop counter; a nonzero value alone is not a failure. |
-| `trigger_seq` | Sequence number of the latest matched GPIO417 software rising edge; it is not a sensor hardware frame ID. |
-| `lag_ns` | The earliest frame timestamp in the current frame-set minus the matched GPIO trigger timestamp: `frame_timestamp_ns - trigger_timestamp_ns`. |
-| `interval_max_lag_ns` | Maximum lag observed since the previous `trigger_sync` report. It is cleared after printing; the report window is approximately 1 second, so this is not the historical maximum for the entire soak. |
-| `limit_ns` | Maximum permitted trigger lag. For the explicit 60 Hz example above it is `16666666 ns`; at the current default 30 Hz it is approximately `33333333 ns`, one frame period. |
-| `frame_sets_seen` | Cumulative number of frame sets received by the pipeline; use it to confirm that the `libsc132` producer-to-callback source is still progressing. |
-| `stale_ms` | Host steady-clock interval since the latest frame-set callback; values near `liveness_timeout_ms` mean the source is stuck. |
-| `liveness_timeout_ms` | Source liveness fail-closed timeout. After successful startup, exceeding this interval without a new frame set emits a fatal line and requests producer stop. |
-
-The example means:
-
-```text
-current lag       = 9.728000 ms
-interval max lag  = 9.738583 ms
-allowed limit     = 16.666666 ms
-current margin    = 6.938666 ms
-```
-
-In this example:
-
-```text
-matched_total + discarded_total = trigger_seq
-6961 + 28 = 6989
-```
-
-This line therefore indicates that the matcher is still progressing and the lag is below one frame period. For anomaly diagnosis, also inspect:
-
-```text
-trigger_retryable
-no valid GPIO417 trigger timestamp
-worker fatal
-four camera last_seq/fps
-four RTSP frame counts
-queue_full_rejects
-```
-
-`trigger_sync` and `source` are diagnostic progress lines, not independent PASS/FAIL results. After successful startup, a source timeout emits `fatal: liveness stage=source_matcher ...` and fails closed; otherwise continue with the T3/T4/T5 runbook only when these diagnostics accompany a stopped frame-set producer, all four RTSP streams stopping, a retryable burst limit, a structural fatal, or a timestamp mismatch.
-
-Run it from the complete package:
-
-```bash
-cd /root/demo
-./sensor_demo
-```
-
-```bash
-./sensor_demo --sample-rate-hz 25
-```
-
-On exit it prints an IMU summary such as:
-
-```text
-SENSOR_IMU_RESULT samples=... invalid=... timestamp_duplicates=... timestamp_regressions=... effective_hz=...
-```
-`effective_hz` is gated as a ppm error against the configured target. The V1 absolute-error limit is `<=12000ppm`.
-
-### ROS1 bag persistence and X5 hardware JPEG
-
-`sensor_demo` can write a ROS1 bag v2.0 while keeping all four RTSP streams and IMU acquisition active:
-
-```bash
-./sensor_demo --record-bag /data/run.bag
-./sensor_demo --record-bag /data/run-skip.bag --record-frame-skip 1
-```
-
-Or enable it in `config/sensor_config.yaml`:
-
-```yaml
-save_data:
-  save: true
-  format: rosbag
-  save_path: /root/save_demo/record.bag
-  skip: false
-```
-
-- `--record-bag` or `save_data.save: true` starts recording. The path must be an absolute `.bag` path; CLI `--record-bag` takes precedence over YAML `save_data.save_path`.
-- `--record-frame-skip 0` or `save_data.skip: false` stores every synchronized frame-set. Value `1`/`true` stores one complete `group_id`, skips the next, and shares that decision across all enabled cameras; RTSP FPS is unchanged.
-- Each enabled camera owns one persistent `MEDIA_CODEC_ID_JPEG` context at Q80. Full four-camera mode therefore uses four JPEG contexts.
-- The recorder copies NV12 into recorder-owned hbmem staging and releases the SC132 frame immediately; hardware JPEG does not extend the camera-frame lifetime. This path does not link software `libjpeg`.
-- The bag contains `/cameraN/image/compressed`, `/cameraN/camera_info`, `/cameraN/frame_metadata`, `/imu/data`, and session config/status topics. CameraInfo is currently uncalibrated.
-- Data is written to a safe temporary file. The final `.bag` atomically replaces an older successful file only after both writer finalization and hardware-JPEG cleanup succeed.
-
-Inspect metadata without a ROS installation:
-
-```bash
-python3 scripts/rosbag_info.py /data/run.bag
-python3 scripts/rosbag_info.py --yaml --freq /data/run.bag
-```
-
-Extract an indexed `.bag` or `.partial.bag` into IMU CSV, camera parameters, and four JPEG streams:
-
-```bash
-python3 scripts/rosbag_extract.py /data/run.bag /data/run_dataset
-```
-
-The output directory must not exist. On success it contains `imu.csv`, `camera_params.yaml`, `conversion_summary.json`, and `camera0` through `camera3`. `imu.csv` preserves the message timestamp, sequence, frame ID, orientation placeholder, angular velocity, linear acceleration, and all covariance fields. JPEG files use `<image-message-timestamp-ns>.jpg`; a repeated timestamp for the same camera receives the message sequence suffix. `camera_params.yaml` reflects the recorded `CameraInfo` exactly, so bags recorded without calibration still contain zero calibration matrices. The tool uses only the Python standard library and supports the current uncompressed, indexed ROS1 bag v2.0 output.
-
-### H.264 MP4 Persistence and Offline JPEG
-
-`sensor_demo` can also reuse each RTSP channel's already encoded H.264 access units and save four MP4 files, four timestamp indexes, and IMU CSV:
-
-```bash
-./sensor_demo --record-mp4-dir /data/run_mp4
-```
-
-Or enable it in `config/sensor_config.yaml`:
-
-```yaml
-save_data:
-  save: true
-  format: mp4
-  save_path: /root/save_demo/mp4_session
-  skip: false
-```
-
-- `--record-mp4-dir` is mutually exclusive with `--record-bag`; MP4 mode requires H.264 and the full four-camera mask `0x0f`, and does not support `record-frame-skip`. The configured final output directory must not end with the reserved `.partial` suffix. If that directory or its matching `.partial` already exists, the actual output automatically falls back to a sibling `<name>-YYYYMMDDTHHMMSSZ[-NNNN]` directory; `SENSOR_MP4_RESULT path=` reports the real path.
-- MP4 packets use nominal H.264 frame timing. The authoritative exact nanosecond camera timestamps are in the same-session `cameraN_timestamps.csv` files and are tied to the video by `frame_index` plus the start timestamp metadata.
-- IMU is saved separately as `imu.csv` in the same session directory. Owner/signal stop first stops and joins the producer, then drains the tail already admitted to the adapter FIFO. A complete session also requires contiguous sample sequence, zero GPIO gaps/FIFO overflows/mapper drops, no timestamp duplicates or regressions, and at most 200 µs timestamp uncertainty for published samples.
-- Recording publishes from a temporary directory only after the session status, MP4 files, timestamp indexes, IMU CSV, and publication receipt are durable. Incomplete sessions are saved as `.partial` directories and exit with code `2`.
-
-Convert an MP4 session into timestamp-named JPEGs:
-
-```bash
-python3 scripts/mp4_extract.py /data/run_mp4 /data/run_mp4_dataset
-python3 scripts/mp4_extract.py /data/run_mp4.partial /data/run_mp4_partial_dataset
-```
-
-Complete-source acceptance is bound to four-camera `camera_mask=0x0f`, the exact four MP4/index entries in the receipt, and the default `--expected-cameras 0,1,2,3`. A subset extraction or tampered inventory is not accepted as complete. Final output promotion is atomic no-replace and never overwrites a concurrently created path.
-
-MP4 completeness also requires a valid ICM final-health snapshot after producer stop/join: producer-published samples must equal consumer-observed samples, and final mapper/GPIO/FIFO/uncertainty-drop counters must all be zero. The public C ABI exposes this snapshot through `icm42688_get_runtime_health()` without changing existing sample/config layouts or SONAME 2.
-
-If an RTSP handle fails all three close attempts, the process terminates immediately with exit 1 to preserve camera callback ownership. Treat that run only as recovery data from `.partial`/staging.
-
-The output directory must not exist. On success it contains `imu.csv`, `camera_params.yaml`, `session_status.json`, `publication_receipt.json`, `conversion_summary.json`, `camera0_timestamps.csv` through `camera3_timestamps.csv`, and `camera0` through `camera3`. A `published_complete` source must have a matching `publication_receipt.json`; `.partial` sources can be converted, but the summary preserves `source_outcome` and sets `source_data_complete=false`.
-
-MP4 recording still requires an executable `ffmpeg` in the runtime `PATH`. The package ships a `bin/ffprobe` compatibility helper for the recorder's frame-count call; it is not a full `ffprobe` replacement. The top-level launchers plus `env.sh` prepend it to `PATH` so recording does not fail on board images without system `ffprobe`. Before recording, check with `. ./env.sh && command -v ffmpeg && command -v ffprobe`. Offline `scripts/mp4_extract.py` conversion still requires full `ffmpeg` and `ffprobe` on the Host `PATH`. Each external tool used by offline extraction has a 1800-second default timeout, adjustable with `--tool-timeout-seconds`; timeout cleanup targets the whole process group. Sustainable recording rates and pressure limits depend on target-board validation.
-
-MP4 mode keeps the five existing PRRTSP v2 exported functions and the `libprrtsp.so.2` SONAME. Encoded-AU observation is enabled through optional tail fields in `prrtsp_stream_config_v2`.
-
-### 4.1 SC132 4-Camera RTSP Demo
-
-`cam_demo` demonstrates how to use:
-
-- `libsc132.so`: starts the SC132 4-camera pipeline and provides synchronized NV12 DMA frames through a frame-set callback
-- `libprrtsp.so`: sends the four NV12 streams to the X5 encoder and publishes RTSP streams
-
-The four demo executables are linked for the X5 runtime environment. Keep `sensor_demo`, `cam_demo`, `include/`, and the libraries under `lib/` from the same package version. Do not mix same-named `.so` files from system directories or other projects, or startup/runtime symbol mismatches may occur.
-
-Default run:
-
-```bash
-./cam_demo
-```
-
-The current X5 image uses the system `cam-service` to initialize the camera/ISP baseline. Before running the demo, make sure the service is present, and do not run multiple camera applications at the same time:
-
-```bash
-/etc/init.d/S90cam-service start 2>/dev/null || true
-pgrep -a cam-service
-killall -q cam_demo 2>/dev/null || true
-```
-
-`--trigger-mode` defaults to `software_gpio`, matching the delivered 4-camera external trigger wiring and the only V1-validated stable trigger mode. `none` is kept only for explicit free-run diagnostics and is outside the V1 stable contract. For normal use, run `./cam_demo` directly for fixed four-camera, 30fps, H.264, upright `1280x1088` output; run `./cam_demo --codec h265` to switch all four streams to H.265.
-
-Deploy the complete `/root/demo` runtime package. The top-level launchers set `LD_LIBRARY_PATH`; if only `bin/cam_demo` or a single `.so` is copied, the board may load system libraries instead of the package libraries.
-
-Common options:
-
-```text
---width <pixels>   Frame width, default 1280
---height <pixels>  Frame height, default 1088
---fps <25|30|40|50|60>       Camera and encoder fps, default 30; 25/30/40/50/60 are supported
---codec <h264|h265> Video codec, default h264
---rotate <0|90|180|270> Output rotation, default 0; 180 is limited to 30fps and is not supported at 25fps
---bps <kbps>       Target average encoder bitrate in kbps, default 4000; override it for the required bandwidth/quality trade-off
---url <path>       RTSP path, default /PRR
---rtsp-base-port <port> RTSP base port, default 554; cameras 0..3 use base+0..3
---trigger-mode <software_gpio|none> Trigger output mode, default software_gpio/GPIO417
---diagnostics      Print source liveness, per-channel send timing, and timestamp skew diagnostics
---max-skew-ns <ns> Frame-set timestamp skew release limit, default 10000000 (10 ms); after synchronized grouping, all four exposed frame_id values match exactly
---frame-timeout-ms <ms> Timeout for waiting for missing channels in a frame set, default 100
-```
-
-Limit: default `./cam_demo` uses fixed four-camera, 30fps, H.264, upright `1280x1088` output. `--fps` supports only `25`, `30`, `40`, `50`, and `60`; `--rotate 180` is supported only at 30fps and is rejected at 25fps. `--codec h265` uses the same four ports and paths.
-
-### H.265 Client Playback Notes
-
-The board-side encoder and RTSP interface for `--codec h265` are complete and can publish four fixed H.265 streams. Some clients may still stutter because their H.265 receive, software-decode, or render throughput is insufficient. This does not indicate a board-side encoder or RTSP failure.
-
-Check both sides when diagnosing playback:
-
-- If the board reports per-channel `fps` close to the target, keeps `queue_full_rejects=0`, and `ffprobe`/`ffmpeg` continuously receives the `hevc` streams, the bottleneck is more likely in the client buffer, decoder, or display path.
-- Prefer a player with H.265 hardware decoding and verify that hardware decoding is active. Older players or software-only decoding may not sustain all four streams.
-- If the client still cannot play in real time, reduce `--fps` from 30 to 25, display fewer channels concurrently, or lower the output resolution. Reducing `--bps` mainly reduces network bandwidth and generally does not reduce decode/render load by the same ratio.
-- With the same `--bps`, H.264 and H.265 have approximately the same target average bitrate and network bandwidth. H.265 enables a lower target bitrate at comparable quality; it does not automatically reduce bandwidth when both codecs use the same bitrate target. Actual bandwidth also depends on rate control, GOP/I-frame peaks, and RTP/RTSP/TCP/IP overhead, so measure per-stream `bytes/s`.
-
-H.265 acceptance must therefore verify both that the board continuously publishes a valid bitstream and that the target client can decode and render it in real time. Do not use one player's visual smoothness as the sole indicator of board-side interface health.
-
-Default RTSP URLs:
-
-```text
-rtsp://<x5-ip>:554/PRR
-rtsp://<x5-ip>:555/PRR
-rtsp://<x5-ip>:556/PRR
-rtsp://<x5-ip>:557/PRR
-```
-
-The defaults are `554/555/556/557`. Cameras 0/1/2/3 map to the four outputs. Use `--rtsp-base-port <port>` to remap an isolated candidate as a block; the actual ports are `base+0..3`.
-
-### 4.1 Hardware check: single-sensor capture
-
-If the four-camera demo fails to start, one stream has no image, or the FPC/I2C/MIPI connection is suspected, start one physical sensor at a time. This mode is for hardware diagnosis only; normal operation still uses `./cam_demo` for the fixed four-camera path.
-
-Stop other camera processes before testing:
-
-```bash
-cd /root/demo
-killall -q cam_demo 2>/dev/null || true
-/etc/init.d/S90cam-service start 2>/dev/null || true
-```
-
-Start one physical camera id on the board:
-
-```bash
-./cam_demo --camera-id 0 --diagnostics   # cam0 -> rtsp://<x5-ip>:554/PRR
-./cam_demo --camera-id 1 --diagnostics   # cam1 -> rtsp://<x5-ip>:555/PRR
-./cam_demo --camera-id 2 --diagnostics   # cam2 -> rtsp://<x5-ip>:556/PRR
-./cam_demo --camera-id 3 --diagnostics   # cam3 -> rtsp://<x5-ip>:557/PRR
-```
-
-Run only one `cam_demo` process at a time. Before switching to another sensor, press `Ctrl-C` or run:
-
-```bash
-killall -q cam_demo 2>/dev/null || true
-```
-
-Use `ffprobe` or an RTSP player on the development machine to confirm video. The example below checks cam0; use ports `555/556/557` for the other sensors:
-
-```bash
-ffprobe -v error -rtsp_transport tcp \
-  -select_streams v:0 \
-  -show_entries stream=codec_name,width,height,avg_frame_rate \
-  -of default=noprint_wrappers=1 \
-  rtsp://<x5-ip>:554/PRR
-```
-
-Expected output includes:
-
-```text
-# Default ./cam_demo
-codec_name=h264
-
-# ./cam_demo --codec h265
-codec_name=hevc
-
-width=1280
-height=1088
-avg_frame_rate=30/1
-```
-
-Diagnosis guide:
-
-- If the board log prints `Found sensor_name:sc132gs-1280p` and `ffprobe` receives the selected `h264` or `hevc` stream, that sensor plus its I2C, MIPI/VIN, and RTSP path are basically healthy.
-- If only one `--camera-id` fails, check that camera connector, FPC cable, power, and cable orientation first.
-- If all four sensors work individually but the default four-camera mode fails, check the four-camera trigger wiring, GPIO417 external trigger, `cam-service`, and whether another camera process is using the hardware.
-
-Single-sensor diagnosis supports only `--camera-id 0/1/2/3`; do not use this mode to validate two-camera or three-camera combinations.
-
-Frame flow:
-
-1. `cam_demo` registers the synchronized four-camera callback through the `libsc132.so` frame-set API.
-2. `libsc132.so` synchronizes the four camera frames and emits a frame-set callback after grouping succeeds.
-3. The demo calls the user hook inside the frame-set callback, then retains each frame and pushes it into the corresponding RTSP queue.
-4. If a queue is full, the callback neither waits nor overwrites older frames; it rejects the current frame and fails the entire pipeline closed.
-5. Worker threads pop frames, build `prrtsp_nv12_frame_v2`, and call `prrtsp_stream_send()`.
-6. Worker threads call `sc132_frame_release()` after processing.
-
-The user development hook for synchronized four-camera data is `OnSynchronizedFrameSet()` in `src/cam_demo.cpp`. The callback receives four frames under one `group_id`, with `max_skew_ns`, per-camera `camera_id`, `sequence`, `frame_id`, and `timestamp_ns`. `libsc132.so` releases a group only when normalized `frame_id` values match and timestamp skew stays within the configured limit. The default is `10000000 ns (10 ms)` to cover exposure-time differences across the four cameras; the frame-period guard still prevents cross-frame grouping. Do not keep raw frame pointers beyond the callback lifetime unless you call `sc132_frame_retain()` and later call `sc132_frame_release()`.
-
-Log fields:
-
-- `seq`: per-camera software sequence
-- `group_id`: synchronized frame-set sequence generated by `libsc132.so`
-- `group_skew_ns`: maximum timestamp skew within the frame set, in `ns`, used to diagnose pipeline phase offset
-- `frame_id`: synchronized frame-set id; all four frames under the same `group_id` must expose exactly the same value
-- `camera_ts_ns`: camera frame timestamp in `ns`; in the default `software_gpio/GPIO417` mode, the only V1-validated trigger mode, it is the matched GPIO trigger timestamp mapped into the `system_realtime` epoch by the frozen offset. Explicit `none` diagnostic mode prefers the sensor/VIO per-frame timestamp and uses the system output timestamp as fallback; it does not carry a V1 wall/realtime contract
-- `queue_full_rejects`: cumulative frames rejected because a per-channel queue was already full; this must remain `0` during stable streaming, and any nonzero value triggers fail-closed shutdown
-- `pipeline_delay_ms`: time from enqueue to RTSP send completion
-- `send_avg_ms` / `send_max_ms`: `prrtsp_stream_send()` call timing when `--diagnostics` is enabled
-- `rtsp_latest_skew_ms`: timestamp skew across the latest sent frames when `--diagnostics` is enabled
-- `source frame_sets_seen` / `stale_ms` / `liveness_timeout_ms`: source progress, time since the latest frame set, and fail-closed timeout when `--diagnostics` is enabled; source timeout emits `fatal: liveness stage=source_matcher ...`
-
-### ICM ABI v2 Boundary
-
-The ICM delivery is ABI 2.1 with real SO `libicm42688.so.2.1.0` while retaining SONAME `libicm42688.so.2`. Functions available in v1.0.0 remain on `ICM42688_X5_2.0`; the additive `icm42688_get_runtime_health()` export uses `ICM42688_X5_2.1`, preserving compatibility for existing ABI-major-2 consumers. The only supported mode is `ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO=0` with watermark 1 and a documented ODR. Legacy `DIRECT=1`, the old `FIFO` enum name, the direct-register path, and watermark 8 remain retired. Ship the current header, SO, and consumers as one generation.
-
-See the top-level decision `docs/decisions/2026-07-28-icm-v2-sensor-timestamp-fifo-only.md`.
-
-## 5. IMU Reader Demo
-
-Default run:
-
-```bash
-./imu_reader_demo
-```
-
-Example:
-
-```bash
-./imu_reader_demo --sample-rate-hz 25 --count 300
-```
-
-Supported IMU sample rates are `25/50/100/200/500/1000/2000 Hz`; the default is `1000 Hz`.
-
-Terminal output defaults to `10 Hz` while the program still consumes and counts every
-IMU sample. Set `--print-rate-hz` explicitly to change the output rate; it must not
-exceed `--sample-rate-hz`. Set it to `0` to disable terminal output without changing
-`--count` semantics. By default, records include only the `imu data:` data section;
-add `--print-metrics` to include the `metrics:` diagnostics section.
-
-Each sampled IMU record is printed as one bounded multi-line block. The
-`*****************************************************************` separator is always printed. The default format is:
-
-```text
-*******************************IMU*******************************
-imu data:
-sample_seq=20400
-ts_ns=1785426031483224328
-temp_c=40.942029 accel_norm_mps2=9.513199
-accel_mps2=[-0.100556, 3.586514, -8.810662]
-gyro_rps  =[-0.003193, 0.009578, -0.013835]
-*****************************************************************
-```
-
-Data-section fields:
-
-- `sample_seq`: IMU sample sequence number
-- `ts_ns`: IMU sample timestamp in the `system_realtime` epoch, in `ns`; it is derived from the `CLOCK_MONOTONIC_RAW` FIFO TMST timeline plus the startup frozen offset
-- `temp_c`: temperature in `degC`
-- `accel_norm_mps2`: acceleration norm, typically close to `9.81` when stationary
-- `accel_mps2`: 3-axis acceleration in `m/s^2`
-- `gyro_rps`: 3-axis angular velocity in `rad/s`
-
-With `--print-metrics`, each record appends this diagnostics section before the final separator:
-
-```text
-metrics:
-host_ts_ns=1785426031488200044
-host_ts_gap_ms=4.975716 dt_ms=99.700735 uncertainty_us=65
-gpio_gap_count=0 fifo_overflow_count=0 mapper_failure_count=0
-```
-
-Metrics-section fields:
-
-- `host_ts_ns`: GPIO395 DRDY edge anchor mapped to the `system_realtime` epoch, in `ns`
-- `host_ts_gap_ms`: `host_ts_ns - ts_ns`, in `ms`, used to inspect the mapping gap between the GPIO edge anchor and the sample timestamp
-- `dt_ms`: timestamp delta between adjacent printed `ts_ns` samples in `ms`; it is typically about `100 ms` at the default 10 Hz output, or `1000 / --print-rate-hz` ms with a non-zero explicit print rate; `--print-rate-hz 0` produces no per-frame `dt_ms` output
-- `uncertainty_us` / `gpio_gap_count` / `fifo_overflow_count` / `mapper_failure_count`: diagnostics for timestamp mapping, GPIO event gaps, FIFO overflow, and mapper failures
-
-Notes:
-
-- The demo uses GPIO395 DRDY + sensor-timestamp FIFO mode (`ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO`).
-- `host_timestamp_ns` records the GPIO395 rising-edge anchor; `sample_timestamp_ns` is the per-sample timestamp mapped from FIFO TMST. Before the demo prints or forwards them, the same `TIME_BASE` frozen offset converts both values to `system_realtime`.
-- The IMU path does not use GPIO397, FSYNC, or `icm42688_pulse_fsync()`.
-- The driver callback runs on the acquisition thread and only enqueues into the bounded 64-slot FIFO; custom observers and CLI output run on the owner thread.
-- CLI output uses one non-blocking write per multi-line record. If an SSH session, pipe, or log collector slows down or closes, CLI records are dropped while the owner continues consuming every IMU sample.
-- The 10 Hz default further reduces normal terminal traffic. Increase `--print-rate-hz` explicitly for diagnostics, but log completeness is not guaranteed with a slow sink.
-- If a custom observer or other owner-side computation remains slower than the sample period, the bounded 64-slot FIFO still fails closed rather than silently dropping IMU samples.
-
-## 6. UART Communication Demo
-
-Interface pinout:
-![RoboBaton 4P UART board-top pinout](image/UART.png)
-
-TX/RX on all three UART connectors use `3.3V` logic. In the board-top view above, read from left to right: `DEBUG_UART` is `GND/RX/TX`; `UART7` and `UART1` are `3V3/RX/TX/GND`. The image does not identify Pin 1, so do not copy the left-to-right order when viewing from the cable or connector-mating side. Use a common ground and never connect 5V TTL, RS-232, or USB-UART VCC. V1 does not specify the `3V3` pin's power direction, current capability, or hot-plug behavior.
-
-V1 delivers only the `serial_port_demo` software example. Actual UART hardware communication, cables, USB-UART adapters, and peer devices are not V1-accepted product functions.
-
-Default run:
-
-```bash
-./serial_port_demo
-```
-
-The default configuration uses `/dev/ttyS1`, `115200`, and `txrx` mode. Add options only when selecting a different port or mode, for example:
-
-```bash
-./serial_port_demo --port /dev/ttyS1 --mode tx --baud 115200 --text "hello-x5"
-./serial_port_demo --port /dev/ttyS7 --mode rx --baud 115200
-./serial_port_demo --port /dev/ttyS1 --mode txrx --baud 115200 --count 10 --text "ping"
-./serial_port_demo --port /dev/ttyS7 --mode echo --baud 115200
-```
-
-Common options:
-
-```text
---port <path>             Serial device, default /dev/ttyS1
---baud <rate>             Baud rate, default 115200
---mode <tx|rx|txrx|echo>  Mode, default txrx
---count <n>               TX/TXRX rounds or RX/ECHO packets, 0 means forever
---interval-ms <ms>        TX interval, default 1000
---timeout-ms <ms>         RX timeout, default 200
---text <str>              TX payload prefix, default uart-demo
---no-newline              Do not append newline to the TX payload
-```
-
-## 7. Quick Verification After Deployment
-
-After deployment, first confirm all four demos can print their help text:
-
-```bash
-cd /root/demo
-./cam_demo --help
-./imu_reader_demo --help
-./serial_port_demo --help
-./sensor_demo --help
-```
-
-Camera demo check:
-
-```bash
-cd /root/demo
-/etc/init.d/S90cam-service start 2>/dev/null || true
-pgrep -a cam-service
-./cam_demo
-```
-
-After the demo starts, open the four RTSP streams with a player or RTSP client:
-
-```text
-rtsp://<x5-ip>:554/PRR
-rtsp://<x5-ip>:555/PRR
-rtsp://<x5-ip>:556/PRR
-rtsp://<x5-ip>:557/PRR
-```
-
-Basic pass criteria:
-
-- All four RTSP URLs connect and keep streaming.
-- All four images are visible, with no black screen, obvious mosaic, or obvious freeze.
-- The log reports per-camera `fps` close to the target frame rate.
-- The log keeps `queue_full_rejects` at `0`.
-- No obvious error, crash, or repeated camera restart appears.
-
-The complete 30 fps regression script is not part of the `/root/demo` runtime package. It is an SSH-driven tool in the development-host source tree. First deploy the complete `demo/` directory to `/root/demo` on the board, then run this from the `4cam` repository root on the development host:
-
-```bash
-cd <4cam-repo-root>
-sub_module/RoboBaton_4p_demo/scripts/cam_demo_regression.sh \
-  --host <x5-ip> \
-  --fps 30 \
-  --min-fps 28 \
-  --max-group-skew-ns 10000000 \
-  --kill-existing
-```
-
-Do not run `scripts/cam_demo_regression.sh` from `/root/demo` on the board. The runtime package contains only `bin/`, `lib/`, `config/sensor_config.yaml`, the top-level launchers `sensor_demo`, `cam_demo`, `imu_reader_demo`, and `serial_port_demo`, plus `env.sh` and `manifest.sha256`.
-
-## 8. Runtime Constraints
-
-The IMU demo uses the current X5 mainboard connection by default:
-
-- SPI device node: `/dev/spidev2.0`
-- SPI mode: `0`
-- SPI speed: `4 MHz`
-- Default read mode: sensor-timestamp FIFO
-
-The UART demo is a software example only. Select `/dev/ttyS1`, `/dev/ttyS7`, or another serial device according to the 3.3V pinout and actual wiring; real UART send/receive is not a V1-accepted function.
-
-The SC132 camera demo depends on X5 system runtime libraries such as camera, vpf, hbmem, multimedia, FFmpeg, and OpenSSL. It is intended to run on the X5 board only; the development host is only used for cross-compilation.
-
-## 9. Troubleshooting
-
-### 9.1 Shared Library Not Found
-
-Confirm the target directory layout:
-
-```text
-/root/demo/
-├── sensor_demo / cam_demo / imu_reader_demo / serial_port_demo
-├── env.sh
-├── config/
-│   └── sensor_config.yaml
-├── bin/
-│   ├── sensor_demo
-│   ├── cam_demo
-│   ├── imu_reader_demo
-│   └── serial_port_demo
-└── lib/
-    ├── libicm42688.so
-    ├── libsc132.so
-    └── libprrtsp.so
-```
-
-The top-level launchers set `LD_LIBRARY_PATH` automatically. If you run a `bin/` ELF directly, run:
-
-```bash
-cd /root/demo
-. ./env.sh
-./bin/imu_reader_demo --sample-rate-hz 25 --count 10
-```
-
-### 9.2 IMU Startup Failure
-
-Check:
-
-```bash
-ls -l /dev/spidev2.0
-./imu_reader_demo
-```
-
-Common causes:
-
-- `/dev/spidev2.0` does not exist
-- SPI pins are occupied by another service
-- IMU power, soldering, or device-tree configuration is incorrect
-
-### 9.3 No UART Data
-
-Check:
-
-```bash
-ls -l /dev/ttyS1 /dev/ttyS7
-./serial_port_demo
-```
-
-Common causes:
-
-- Wrong port
-- Baud rate mismatch
-- TX/RX wires are swapped incorrectly or not connected
-- The peer device is not transmitting data
-
-### 9.4 Camera Or RTSP Startup Failure
-
-Check:
-
-```bash
-ls -l lib/libsc132.so lib/libprrtsp.so
-. ./env.sh
-ldd ./bin/cam_demo
-./cam_demo
-```
-
-Common causes:
-
-- SC132 camera hardware is not connected or not powered
-- X5 device tree or camera sensor profile does not match the hardware
-- X5 multimedia runtime libraries are missing or incompatible
-- `LD_LIBRARY_PATH` does not include the local `lib/`, or `ldd ./bin/cam_demo` does not load the local `lib/libsc132.so` / `lib/libprrtsp.so`
-- The system `cam-service` is not running or is in a bad state; start it with `/etc/init.d/S90cam-service start`
-- Another camera application is still running and occupies camera/VIO resources
-- Default RTSP ports `554/555/556/557` are already occupied
-- The development host cannot reach the X5 RTSP ports over the network
-
-This demo is designed for fixed four-camera operation and does not provide 2-camera or 3-camera partial-start modes.
-
-For timing diagnostics:
-
-```bash
-./cam_demo --diagnostics
-```
-
-Interpretation:
-
-- If `fps` is close to the configured target (about 30 by default) and `queue_full_rejects=0`, but one player view is visibly slower, the delay is more likely in the RTSP client buffer or display path.
-- If `send_max_ms` stays unusually high, continue checking that RTSP or encoder path.
-- If `group_skew_ns` stays close to one frame period, continue checking external trigger stability, camera startup order, and board load.
+Do not delete `/root/demo` before uploading a new package, and do not test the camera with `cam-service` stopped. For the complete procedure, see [Deployment, upgrade, and rollback](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html).
+
+## Support-boundary summary
+
+- Camera output is NV12 `1280x1088`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
+- The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
+- The IMU supports `25/50/100/200/500/1000/2000Hz`, default `1000Hz`, and uses the sensor-timestamp FIFO path. TF and calibration are not provided.
+- DEBUG_UART is `1.8V`; UART1/UART7 are `3.3V`. Their `3V3` pins support input/output and peripheral power; the two interfaces share a formal `500mA` limit and support hot-plugging. Hardware communication passed V1 acceptance.
+- Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
+
+For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-docs.readthedocs.io/en/latest/data-contracts.html), [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html), and [Hardware and safety](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html).
+
+## Troubleshooting
+
+When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION`, manifest results, the command, exit code, and necessary logs. Do not submit real IPs, credentials, or internal paths. Start with [Troubleshooting](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html).
+
+## Public documentation index
+
+- [Product introduction](https://4p-docs.readthedocs.io/en/latest/Product_Introduction.html)
+- [Product and compatibility](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html)
+- [First power-on](https://4p-docs.readthedocs.io/en/latest/first-boot.html)
+- [Quick start](https://4p-docs.readthedocs.io/en/latest/quick-start.html)
+- [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html)
+- [Deployment, upgrade, and rollback](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html)
+- [Open-source demo build](https://4p-docs.readthedocs.io/en/latest/open-source-build.html)
+- [Data persistence](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html)
+- [Data contracts](https://4p-docs.readthedocs.io/en/latest/data-contracts.html)
+- [API reference](https://4p-docs.readthedocs.io/en/latest/api-reference.html)
+- [Hardware and safety](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html)
+- [Troubleshooting](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html)
+- [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html)
+
+License and third-party component information are defined by this repository's `LICENSE` and release documentation.

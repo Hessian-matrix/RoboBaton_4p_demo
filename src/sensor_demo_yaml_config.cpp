@@ -203,7 +203,7 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  print_metrics: false\n"
          << "save_data:\n"
          << "  save: false\n"
-         << "  format: rosbag\n"
+         << "  format: mp4\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.save_data_path << "\n"
          << "  skip: false\n";
   return output.str();

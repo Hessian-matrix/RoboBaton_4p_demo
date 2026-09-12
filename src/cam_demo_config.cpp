@@ -30,8 +30,8 @@ struct ParseState {
 // 输出：帮助文本写入 stdout。
 void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
-            << "  --width <pixels>  Frame width, default " << kDefaultWidth << "\n"
-            << "  --height <pixels> Frame height, default " << kDefaultHeight << "\n"
+            << "  --width <pixels>  Fixed native frame width, must be " << kDefaultWidth << "\n"
+            << "  --height <pixels> Fixed native frame height, must be " << kDefaultHeight << "\n"
             << "  --fps <25|30|40|50|60>       Camera and encoder fps, default 30\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
@@ -246,9 +246,10 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.channels != CameraMaskPopCount(options.camera_mask)) {
     throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
   }
-  if (options.width <= 0 || options.height <= 0 ||
-      (OutputWidth(options) & 1) != 0 || (OutputHeight(options) & 1) != 0) {
-    throw std::invalid_argument("--width and --height must produce positive even NV12 dimensions");
+  // SC132 producer只输出原生1280x1088；rotate只改变对外画布方向，不提供任意缩放。
+  if (options.width != kDefaultWidth || options.height != kDefaultHeight) {
+    throw std::invalid_argument(
+        "--width and --height must remain 1280x1088; changing resolution is not supported");
   }
   if (!IsSupportedCameraFps(options.fps)) {
     throw std::invalid_argument("--fps must be 25, 30, 40, 50, or 60");

@@ -2,10 +2,10 @@
   "artifact": {
     "files": {
       "VERSION": "cc52f678848b814373757b460383bf61960e4943c203735adde0a350b3e50989",
-      "bin/cam_demo": "afa48aab88ae933109d36047242f03f4509ebf3d99ef4e20e88675860229741e",
+      "bin/cam_demo": "6a4ab03144ce0b12097c246b996d6be34dbc3bfc23f6ad869e5907e5708041e2",
       "bin/ffprobe": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
       "bin/imu_reader_demo": "5bcc262ae53947eb46f97fe927d2e37399679424c4cb658b98729ac0d7096663",
-      "bin/sensor_demo": "c17614110cb58023e2c466a6e62c3ac73c2ee5bea6975e6a65786ec50f4c396b",
+      "bin/sensor_demo": "01207e0be9e1ce33b4cf3df25a79f3b0f6cdfa7cd2d0500cb15fb093a9048018",
       "bin/serial_port_demo": "3d916304fe0a44a7fddc09a554356a2519f3b960f82bc395a3aa9b69c523a629",
       "cam_demo": "99f2bb3caae5e0b396d2f1e4ae2df2871e9fe5e5de058c35632b401b459befb5",
       "config/sensor_config.yaml": "56c9de6f8385d995b18669e10a6b5448db932995d641cd6d8e9c6bfde2fbb4ed",
@@ -46,7 +46,7 @@
     "src/cam_demo.cpp": "aaada2c62f9675f33539098b562a82b1c49bc96d98b521df69f2e7184074ea0a",
     "src/cam_demo_common.cpp": "4d0a786eec959bb6888f79281554f3b90f288c6bd61d031e8cff7146a7fd2b73",
     "src/cam_demo_common.h": "02d1cbe3bc512f0f3c4d13b2814fd7ae8c5fbf2803a02cd09f2fd6efb6eed8ef",
-    "src/cam_demo_config.cpp": "1fa48d5ebc1ad89fd11436b187e11ce3ac29f9b54e3932896e3e147eda317207",
+    "src/cam_demo_config.cpp": "fe9e9b2f91fedb404537c249b621a6e5995d2a698a180f0593052dfbdfbd4414",
     "src/cam_demo_config.h": "2e4f7174695845079fd3a5efc24a82488fa02d83147ad332163d778cfbe5efe6",
     "src/cam_demo_pipeline.cpp": "e4a8696360eb45ab3d9bf3f3493b8cadfe98148fb9fd877536efa232b57d90bc",
     "src/cam_demo_pipeline.h": "ad1b5c4a3e04399a214cf08f7c2227350e85eac292b95ad96398305ae7dc422e",
@@ -62,8 +62,8 @@
     "src/sensor_bag_recorder.cpp": "353f1d973534a9a66e69824404d1577b9c73e5e402cfdb466d8beb0c8937443c",
     "src/sensor_bag_recorder.h": "0abd4652bdfc13980192d0e544af21018a23559181d217dd421c5ed906e48f27",
     "src/sensor_demo.cpp": "f2752f40970ac29db50f68405d541a20132a71282881efda10ad4ed907c2b796",
-    "src/sensor_demo_yaml_config.cpp": "fe781c876eb9716aa946d0b09e02ffe7ad2469e5a5924d613ea8d07ba9ef93c2",
-    "src/sensor_demo_yaml_config.h": "09e63f3937bcf9cccb70020524eca5f52c2fffd3980cafc30b7fce3f3281489a",
+    "src/sensor_demo_yaml_config.cpp": "0cfab0f80f1ba6f0890901f834d066899e8b46cb48be282bae1f7bce996b3d10",
+    "src/sensor_demo_yaml_config.h": "e51a38ed5abc372dad5481a882c0b1833cf9462d801cc7dfe716a2cd3349c86c",
     "src/serial_port_demo.cpp": "88c357eb45208c4dd19ecf5b46ab08b8cefe6347866792dfc80f016400e0ca4b",
     "src/x5_jpeg_encoder.cpp": "baa61540e17698201a6bb70c2993a7b01c0d4c82f37a1eae8c99774a9793b48c",
     "src/x5_jpeg_encoder.h": "748bff22e4a2274c01bf5672f64c478b3d5945625486492f6a35ac5c06754217"
@@ -71,23 +71,23 @@
   "release_version": "1.1.1",
   "repository_states": {
     "runtime_source": {
-      "commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315",
-      "status": "1 .M N... 100644 100644 100644 f9ac1d28e0df2bfab2f315b8a65a890f24d725ad f9ac1d28e0df2bfab2f315b8a65a890f24d725ad .gitignore"
+      "commit": "46c319866e70c55e034230c9ca641959d02257fe",
+      "status": "1 MM N... 100644 100644 100644 91f3305bfd1c8403b4369a863d8c291ad464920d 3592a0c8bf9060590ada953f470bfd9fd03b884a README.md\n1 MM N... 100644 100644 100644 08c066a12e1548f8d7503431608192b20add0d80 2d14f83837e9990eca10d6cf28672a161f3f4162 README_EN.md\n1 A. N... 000000 100755 100755 0000000000000000000000000000000000000000 d29bdd5f47a95c95f7d1ed3ea8f91513e623c600 scripts/env_setup/x5-pps-pin.sh\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 6a4a8c52bf06a89799da3f408a54fae0515d5e92 scripts/env_setup/x5pps.ko\n1 .M N... 100644 100644 100644 f6361c33093d66d53d9553f7ba92e9acf8cdb050 f6361c33093d66d53d9553f7ba92e9acf8cdb050 src/cam_demo_config.cpp\n1 M. N... 100644 100644 100644 dbe2c66de0412995435ad6cb7a3d3d90c6b1474b 86cf483fff93f4d9b53beef05f89637bbaa9f6fb src/sensor_demo_yaml_config.cpp\n1 M. N... 100644 100644 100644 a3031ff7532a6736989b5ba242ddb829bdad5df4 08b465428093c11e84aa0694ba1a61de412ee97f src/sensor_demo_yaml_config.h"
     },
     "superproject": {
-      "commit": "b22647817d706543e79f7cf4c27ddf003ec86f2e",
-      "status": "1 .M N... 100644 100644 100644 3a5bc68fc8f8ef5c1e6b08dfeb6f04b1fbdf39f7 3a5bc68fc8f8ef5c1e6b08dfeb6f04b1fbdf39f7 CMakeLists.txt\n1 .M N... 100644 100644 100644 2f636b153fe36992edf60da6970ed2590447dd93 2f636b153fe36992edf60da6970ed2590447dd93 tests/icm42688_c_api_test.c\n1 .M N... 100644 100644 100644 c0dfa7d6d6e414394900f1b0d466ab7c01eeab50 c0dfa7d6d6e414394900f1b0d466ab7c01eeab50 tests/robobaton_4p_demo/release008_contract_test.py\n1 .M N... 100644 100644 100644 12cb862cc58c81f4d882481bb98ef8e3ee493ce8 12cb862cc58c81f4d882481bb98ef8e3ee493ce8 tests/robobaton_4p_demo/release008_fake_producers.cpp"
+      "commit": "13b69b3b936ae266735540cea58a12e899f6219f",
+      "status": "1 MM N... 100644 100644 100644 03d7ed07dd7f1506ac1cd47e955a91687afd2754 dc444a96d8c27899565af20f6b6dbaa8ca9b98c5 README.md\n1 M. N... 100644 100644 100644 fdd4235ad474b8e3c3e5c8f3933c609322606dfd 145704b9f29a1377e26cc10d006f592fd1b57929 USAGE.md\n1 M. N... 100644 100644 100644 c56f3c6466d9ef115f8e14f4ace032068e63301d e0bfe54e31d8d4f2e80cc45d7ed7088aed1a9ac0 docs/decisions/2026-08-02-default-camera-fps-30.md\n1 M. N... 100644 100644 100644 ba94a681522ec539e05b6ddbdcc44adc094c3db9 88c955183e275fe38d08acffdf6d05135dff783f docs/decisions/2026-08-17-60fps-policy-by-persistence-mode.md\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 b33df271ee39eb4ef661f0959d06f4ae306e8c1c docs/decisions/2026-09-09-camera-fps-product-policy.md\n1 MM N... 100644 100644 100644 217ec21fd2815ad426137f153c37caeee7d4476f c5d10af972e9b27afdbb12377a0176ad311faf29 docs/project_code_and_function_understanding.md\n1 .M S.MU 160000 160000 160000 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 sub_module/4P_doc\n1 .M S.M. 160000 160000 160000 89a112365c44cf43bb0bcf495c991d94706e2a3a 89a112365c44cf43bb0bcf495c991d94706e2a3a sub_module/RoboBaton_4P_ROS2_demo\n1 MM N... 100755 100755 100755 d8a79f4519b599cdb559293fc89df5ad0065c860 118029b750303849bfe15d5766d632d0f1cd9f5d tests/default_camera_fps_contract_test.py\n1 M. N... 100644 100644 100644 caca1d5916d95ea33a30a1e0ce73bc71c38fd7af a2062f7329309816d94ae85306c652358970e63e tests/robobaton_4p_demo/package_runtime_script_test.py\n1 MM N... 100644 100644 100644 3e43a21d2d2e38d289a7867b027c502365dab778 1f65ca4187a1cebbbfb18402d9565041da7f5cb3 tests/robobaton_4p_demo/release008_consumer_lifecycle_test.cpp\n1 M. N... 100644 100644 100644 9721166df4fe8757e724f72b1787944f29564727 80089eab11a30f0199f014fff3e6cf068f5f7bb8 tests/robobaton_4p_ros2_demo/host/cam_demo_config_test.cpp"
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315",
+    "repository_commit": "46c319866e70c55e034230c9ca641959d02257fe",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "b22647817d706543e79f7cf4c27ddf003ec86f2e",
-    "superproject_gitlink_commit": "e8bcc20200eaf16ddc8ce9d6bb17f8e216893315"
+    "superproject_commit": "13b69b3b936ae266735540cea58a12e899f6219f",
+    "superproject_gitlink_commit": "46c319866e70c55e034230c9ca641959d02257fe"
   },
   "toolchain": {
-    "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/.package-build-v111-metadata-refresh",
+    "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",
     "compiler": "/usr/bin/aarch64-linux-gnu-gcc-11",
     "compiler_sha256": "70a2d6626629079a8d94b97184b121d4e3a1bfe880c44e7db30670bb73e4028e",
     "toolchain_file": "/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake",
