@@ -30,8 +30,8 @@ struct ParseState {
 // 输出：帮助文本写入 stdout。
 void PrintUsage(const char* program, bool include_imu_options) {
   std::cout << "Usage: " << program << " [options]\n"
-            << "  --width <pixels>  Fixed native frame width, must be " << kDefaultWidth << "\n"
-            << "  --height <pixels> Fixed native frame height, must be " << kDefaultHeight << "\n"
+            << "  --width <pixels>  Output width: 1280x1088 (default), 640x480, 720x480, or 1280x720, either axis\n"
+            << "  --height <pixels> Output height: must pair with a supported width above\n"
             << "  --fps <25|30|40|50|60>       Camera and encoder fps, default 30\n"
             << "  --rotate <0|90|180|270> Output rotation, default 0; 180 is supported only at 30fps\n"
             << "  --bps <kbps>      Encoder bitrate in kbps, default " << kDefaultBps << "\n"
@@ -252,10 +252,11 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.channels != CameraMaskPopCount(options.camera_mask)) {
     throw std::invalid_argument("--camera-mask supports only 0x1, 0x2, 0x4, 0x8, or 0xF");
   }
-  // SC132 producer只输出原生1280x1088；rotate只改变对外画布方向，不提供任意缩放。
-  if (options.width != kDefaultWidth || options.height != kDefaultHeight) {
+  // 640x480/720x480/1280x720 由 libsc132 VSE 硬件节点整幅缩放得到；缩放不改 FOV。
+  if (!IsSupportedOutputResolution(options.width, options.height)) {
     throw std::invalid_argument(
-        "--width and --height must remain 1280x1088; changing resolution is not supported");
+        "--width/--height must be 1280x1088, 640x480, 720x480, or 1280x720 "
+        "(either axis order)");
   }
   if (!IsSupportedCameraFps(options.fps)) {
     throw std::invalid_argument("--fps must be 25, 30, 40, 50, or 60");

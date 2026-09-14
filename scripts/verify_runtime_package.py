@@ -28,17 +28,17 @@ EXPECTED_VERSION_NEEDS = {
 }
 EXPECTED_VERSION_DEFINITIONS = {
     "lib/libicm42688.so.2.1.0": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
-    "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
+    "lib/libsc132.so.2.0.1": {"LIBSC132_2.0"},
     "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
     "lib/libicm42688.so.2.1.0": "libicm42688.so.2",
-    "lib/libsc132.so.2.0.0": "libsc132.so.2",
+    "lib/libsc132.so.2.0.1": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
 }
 EXPECTED_LIBRARY_COPIES = {
     "lib/libicm42688.so.2.1.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
-    "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
+    "lib/libsc132.so.2.0.1": {"lib/libsc132.so.2", "lib/libsc132.so"},
     "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
 }
 EXPECTED_SCRIPT_COPIES = {
@@ -52,7 +52,7 @@ EXPECTED_NEEDED = {
 }
 EXPECTED_LIBRARY_NEEDED = {
     "lib/libicm42688.so.2.1.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libsc132.so.2.0.1": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
@@ -569,7 +569,7 @@ def verify_package(
 
     version_getters = {
         "lib/libicm42688.so.2.1.0": "icm42688_get_version",
-        "lib/libsc132.so.2.0.0": "sc132_get_version",
+        "lib/libsc132.so.2.0.1": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
     }
     for relative, symbol in version_getters.items():

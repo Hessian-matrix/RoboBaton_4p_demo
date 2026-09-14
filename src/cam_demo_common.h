@@ -220,6 +220,9 @@ uint32_t CameraMaskFromChannelCount(int channels);
 int CameraMaskPopCount(uint32_t camera_mask);
 bool CameraMaskContains(uint32_t camera_mask, int camera_id);
 bool IsSupportedCameraMask(uint32_t camera_mask);
+// 相机输出画布白名单：native 1280x1088 与 VSE 硬件整幅缩放的 640x480 / 720x480 / 1280x720，
+// 两种轴向写法均合法（外部 90/270 旋转会交换交付宽高）。
+bool IsSupportedOutputResolution(int width, int height);
 int OutputWidth(const Options& options);
 int OutputHeight(const Options& options);
 int InternalRotateDegrees(const Options& options);

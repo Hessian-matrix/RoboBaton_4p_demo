@@ -21,6 +21,13 @@ extern "C" {
 #define SC132_NATIVE_OUTPUT_HEIGHT 1088U
 #define SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS 10000000ULL
 
+/*
+ * 帧组输出画布：native 为 1280x1088（内部旋转 0/180 时为 sensor 轴向 1088x1280）。
+ * 另公开 VSE 硬件全幅缩放画布 640x480、720x480、1280x720，两种轴向写法均合法
+ * （外部 90/270 旋转会交换交付宽高）。缩放不改变 FOV：整幅拉伸到目标尺寸，
+ * 横纵比相对 native 画布改变；软件旋转（180/270）在缩放之后由 Nano2D 完成。
+ */
+
 typedef struct sc132_frame sc132_frame_t;
 
 typedef struct sc132_frame_info {

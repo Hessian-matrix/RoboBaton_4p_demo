@@ -1,5 +1,5 @@
 # sensor_demo YAML config. Command-line options override this file.
-# width/height are fixed at 1280x1088; changing them is not supported.
+# width/height: 1280x1088 (default), 640x480, 720x480, or 1280x720 (either axis).
 camera:
   width: 1280
   height: 1088

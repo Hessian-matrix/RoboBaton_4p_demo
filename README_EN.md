@@ -127,7 +127,7 @@ Do not delete `/root/demo` before uploading a new package, and do not test the c
 
 ## Support-boundary summary
 
-- Camera output is NV12 `1280x1088`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
+- Camera output is NV12, `1280x1088` by default, with optional VSE hardware full-frame scaled canvases `640x480`, `720x480`, and `1280x720`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
 - The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
 - The IMU supports `25/50/100/200/500/1000/2000Hz`, default `1000Hz`, and uses the sensor-timestamp FIFO path. TF and calibration are not provided.
 - DEBUG_UART is `1.8V`; UART1/UART7 are `3.3V`. Their `3V3` pins support input/output and peripheral power; the two interfaces share a formal `500mA` limit and support hot-plugging. Hardware communication passed V1 acceptance.

@@ -141,14 +141,7 @@ VideoCodec ParseVideoCodec(const std::string& text) {
   throw std::invalid_argument("sensor_config.rtsp.codec must be h264 or h265");
 }
 
-// YAML 只暴露当前固定分辨率合同；非默认宽高在配置边界直接拒绝。
-void RequireFixedCameraDimension(int value, int expected, const char* name) {
-  if (value != expected) {
-    throw std::invalid_argument(std::string(name) + " must remain " +
-                                std::to_string(expected) +
-                                "; changing resolution is not supported");
-  }
-}
+// YAML 的 width/height 只做单键解析；画布对校验统一由 ValidateOptions 完成。
 
 bool PathExists(const std::string& path) {
   struct stat status {};
@@ -187,7 +180,7 @@ std::string DefaultSensorDemoYamlConfigText() {
   const Options defaults;
   std::ostringstream output;
   output << "# sensor_demo YAML config. Command-line options override this file.\n"
-         << "# width/height are fixed at 1280x1088; changing them is not supported.\n"
+         << "# width/height: 1280x1088 (default), 640x480, 720x480, or 1280x720 (either axis).\n"
          << "camera:\n"
          << "  width: " << defaults.width << "\n"
          << "  height: " << defaults.height << "\n"
@@ -253,11 +246,9 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
   const std::string name = "sensor_config." + key;
   if (key == "camera.width") {
     const int width = ParseInt(value, name.c_str());
-    RequireFixedCameraDimension(width, kDefaultWidth, "camera.width");
     options->width = width;
   } else if (key == "camera.height") {
     const int height = ParseInt(value, name.c_str());
-    RequireFixedCameraDimension(height, kDefaultHeight, "camera.height");
     options->height = height;
   } else if (key == "camera.fps") {
     options->fps = ParseInt(value, name.c_str());

@@ -155,6 +155,14 @@ bool IsSupportedCameraMask(uint32_t camera_mask) {
          (camera_mask & ~kDefaultCameraMask) == 0U;
 }
 
+bool IsSupportedOutputResolution(int width, int height) {
+  return (width == 1280 && height == 1088) ||
+         (width == 1088 && height == 1280) ||
+         (width == 640 && height == 480) || (width == 480 && height == 640) ||
+         (width == 720 && height == 480) || (width == 480 && height == 720) ||
+         (width == 1280 && height == 720) || (width == 720 && height == 1280);
+}
+
 int OutputWidth(const Options& options) {
   // width/height 是默认横屏交付画布；外部 0/180 保持画布轴，90/270 交换宽高。
   return options.rotate_degrees == 90 || options.rotate_degrees == 270

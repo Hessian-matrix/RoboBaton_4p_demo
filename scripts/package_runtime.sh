@@ -144,7 +144,7 @@ fi
 
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
     echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
@@ -234,7 +234,7 @@ cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
 cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
+  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
