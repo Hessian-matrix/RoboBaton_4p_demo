@@ -43,6 +43,54 @@ struct SensorDemoImuStatsTestResult {
 }  // namespace robobaton_demo
 #endif
 
+// 管线钩子的 user 契约对象与钩子函数保持外部可见：release008 宿主回归测试
+// 直接编译本文件（main 重命名）并验证 hook 解引用的是 MainPipelineHooksUser
+// 而非 recorder 自身，防止 user 指针间接层被再次写错。
+struct MainPipelineHooksUser {
+  robobaton_demo::SensorBagRecorder* bag_recorder = nullptr;
+  robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
+};
+
+void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
+  auto* context = static_cast<MainPipelineHooksUser*>(user);
+  if (context == nullptr || context->bag_recorder == nullptr) {
+    return;
+  }
+  static_cast<void>(context->bag_recorder->TryAcceptFrameSet(frame_set));
+}
+
+void ObserveQueuedFrameForCapture(const robobaton_demo::QueuedFrame& frame,
+                                  void* user) {
+  auto* context = static_cast<MainPipelineHooksUser*>(user);
+  if (context == nullptr || context->capture_recorder == nullptr) {
+    return;
+  }
+  context->capture_recorder->ObserveRawFrame(frame.channel, frame);
+}
+
+#ifdef RELEASE008_TESTING
+bool InjectJoinFailure(std::thread&, void*) { return false; }
+#endif
+
+robobaton_demo::PipelineHooks MainPipelineHooks(MainPipelineHooksUser* user) {
+  robobaton_demo::PipelineHooks hooks{};
+  if (user != nullptr && user->bag_recorder != nullptr) {
+    hooks.on_frame_set = ObserveFrameSetForBag;
+  }
+  if (user != nullptr && user->capture_recorder != nullptr) {
+    // 采集挂在 on_queued_frame：worker 线程、RTSP send 之前，group 屏障同步语义不变。
+    hooks.on_queued_frame = ObserveQueuedFrameForCapture;
+  }
+  hooks.user = user;
+#ifdef RELEASE008_TESTING
+  const char* inject = std::getenv("RELEASE008_TEST_JOIN_FAILURE");
+  if (inject != nullptr && inject[0] != '\0') {
+    hooks.join_thread = InjectJoinFailure;
+  }
+#endif
+  return hooks;
+}
+
 namespace {
 
 volatile sig_atomic_t g_signal_stop = 0;
@@ -51,16 +99,6 @@ void SignalHandler(int) {
   g_signal_stop = 1;
 }
 
-#ifdef RELEASE008_TESTING
-bool InjectJoinFailure(std::thread&, void*) { return false; }
-#endif
-
-void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
-  auto* recorder = static_cast<robobaton_demo::SensorBagRecorder*>(user);
-  if (recorder != nullptr) {
-    static_cast<void>(recorder->TryAcceptFrameSet(frame_set));
-  }
-}
 
 void ObserveEncodedFrameForMp4(int camera_id,
                                const prrtsp_encoded_frame_v2& frame,
@@ -77,20 +115,6 @@ void ObserveEncodedFrameForCapture(int camera_id,
   if (recorder != nullptr) {
     recorder->ObserveEncodedFrame(camera_id, frame);
   }
-}
-
-struct MainPipelineHooksUser {
-  robobaton_demo::SensorBagRecorder* bag_recorder = nullptr;
-  robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
-};
-
-void ObserveQueuedFrameForCapture(const robobaton_demo::QueuedFrame& frame,
-                                  void* user) {
-  auto* context = static_cast<MainPipelineHooksUser*>(user);
-  if (context == nullptr || context->capture_recorder == nullptr) {
-    return;
-  }
-  context->capture_recorder->ObserveRawFrame(frame.channel, frame);
 }
 
 
@@ -308,25 +332,6 @@ std::string TerminalToken(const std::string& value) {
     token.push_back(safe ? static_cast<char>(ch) : '_');
   }
   return token;
-}
-
-robobaton_demo::PipelineHooks MainPipelineHooks(MainPipelineHooksUser* user) {
-  robobaton_demo::PipelineHooks hooks{};
-  if (user != nullptr && user->bag_recorder != nullptr) {
-    hooks.on_frame_set = ObserveFrameSetForBag;
-  }
-  if (user != nullptr && user->capture_recorder != nullptr) {
-    // 采集挂在 on_queued_frame：worker 线程、RTSP send 之前，group 屏障同步语义不变。
-    hooks.on_queued_frame = ObserveQueuedFrameForCapture;
-  }
-  hooks.user = user;
-#ifdef RELEASE008_TESTING
-  const char* inject = std::getenv("RELEASE008_TEST_JOIN_FAILURE");
-  if (inject != nullptr && inject[0] != '\0') {
-    hooks.join_thread = InjectJoinFailure;
-  }
-#endif
-  return hooks;
 }
 
 
