@@ -35,6 +35,10 @@ constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
 constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
 constexpr uint32_t kDefaultImuSampleRateHz = 1000U;
+constexpr uint32_t kDefaultCaptureFrameCount = 100U;
+constexpr uint32_t kDefaultCaptureWarmupSeconds = 5U;
+constexpr uint32_t kMaxCaptureWarmupSeconds = 60U;
+constexpr uint32_t kMaxCaptureFrameCount = 100U;
 
 constexpr uint32_t kDefaultImuPrintRateHz = 10U;
 extern std::atomic<bool> g_stop_requested;
@@ -93,6 +97,10 @@ struct Options {
   uint32_t record_frame_skip = 0U;
   std::string record_bag_path;
   std::string record_mp4_directory;
+  bool capture_enabled = false;
+  std::string capture_directory;
+  uint32_t capture_frame_count = kDefaultCaptureFrameCount;
+  uint32_t capture_warmup_seconds = kDefaultCaptureWarmupSeconds;
   RtspPreviewFailurePolicy rtsp_preview_failure_policy =
       RtspPreviewFailurePolicy::kFailClosed;
 };

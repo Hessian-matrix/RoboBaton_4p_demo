@@ -113,6 +113,7 @@ add_executable(sensor_demo
   src/h264_mp4_recorder.cpp
   src/rosbag_v2_writer.cpp
   src/sensor_bag_recorder.cpp
+  src/tee_capture_recorder.cpp
   src/x5_jpeg_encoder.cpp
 )
 

@@ -23,6 +23,8 @@ class RtspChannels {
   RtspChannels& operator=(const RtspChannels&) = delete;
 
   bool SetEncodedFrameObserver(EncodedFrameObserver observer, void* user) noexcept;
+  // 第二个 observer slot：供 tee 采集与 MP4 消费者同时订阅编码 access unit。
+  bool SetCaptureEncodedFrameObserver(EncodedFrameObserver observer, void* user) noexcept;
   int32_t Open(int camera_id, int port, const Options& options) noexcept;
   int32_t Send(int camera_id, QueuedFrame& frame) noexcept;
   bool CaptureStatuses() noexcept;
@@ -48,6 +50,8 @@ class RtspChannels {
   std::array<EncodedObserverContext, kMaxChannels> encoded_contexts_{};
   EncodedFrameObserver encoded_observer_ = nullptr;
   void* encoded_observer_user_ = nullptr;
+  EncodedFrameObserver capture_encoded_observer_ = nullptr;
+  void* capture_encoded_observer_user_ = nullptr;
   std::array<uint32_t, kMaxChannels> widths_{};
   std::array<uint32_t, kMaxChannels> heights_{};
   std::array<prrtsp_stream_status_v2, kMaxChannels> statuses_{};

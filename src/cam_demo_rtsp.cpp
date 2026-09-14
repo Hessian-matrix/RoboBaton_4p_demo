@@ -36,16 +36,33 @@ bool RtspChannels::SetEncodedFrameObserver(EncodedFrameObserver observer,
   return true;
 }
 
+bool RtspChannels::SetCaptureEncodedFrameObserver(EncodedFrameObserver observer,
+                                                  void* user) noexcept {
+  if ((observer == nullptr && user != nullptr) || OpenHandleCount() != 0U) {
+    return false;
+  }
+  capture_encoded_observer_ = observer;
+  capture_encoded_observer_user_ = user;
+  return true;
+}
+
 void RtspChannels::EncodedFrameBridge(const prrtsp_encoded_frame_v2* frame,
                                       void* user) noexcept {
   try {
     auto* context = static_cast<EncodedObserverContext*>(user);
-    if (frame == nullptr || context == nullptr || context->owner == nullptr ||
-        context->owner->encoded_observer_ == nullptr) {
+    if (frame == nullptr || context == nullptr || context->owner == nullptr) {
       return;
     }
-    context->owner->encoded_observer_(context->camera_id, *frame,
-                                      context->owner->encoded_observer_user_);
+    // 两个 slot 独立分发：主 observer（MP4）与 tee 采集 observer 互不干扰。
+    if (context->owner->encoded_observer_ != nullptr) {
+      context->owner->encoded_observer_(context->camera_id, *frame,
+                                        context->owner->encoded_observer_user_);
+    }
+    if (context->owner->capture_encoded_observer_ != nullptr) {
+      context->owner->capture_encoded_observer_(
+          context->camera_id, *frame,
+          context->owner->capture_encoded_observer_user_);
+    }
   } catch (...) {
     // 编码observer是非阻塞旁路；异常不得跨越PRRTSP C callback边界。
   }
@@ -96,7 +113,8 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
   }
 
   prrtsp_stream_config_v2 config{};
-  config.struct_size = encoded_observer_ == nullptr
+  config.struct_size = (encoded_observer_ == nullptr &&
+                        capture_encoded_observer_ == nullptr)
                            ? PRRTSP_STREAM_CONFIG_V2_1_SIZE
                            : PRRTSP_STREAM_CONFIG_V2_2_SIZE;
   config.flags = PRRTSP_STREAM_FLAG_EXTERNAL_NV12;
@@ -109,7 +127,7 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
   config.port = static_cast<uint32_t>(port);
   config.operation_timeout_ms = 1000U;
   config.codec = codec;
-  if (encoded_observer_ != nullptr) {
+  if (encoded_observer_ != nullptr || capture_encoded_observer_ != nullptr) {
     config.encoded_frame_callback = EncodedFrameBridge;
     config.encoded_frame_user = &encoded_contexts_[camera_id];
   }

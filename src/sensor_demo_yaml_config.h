@@ -11,6 +11,10 @@ struct SensorDemoYamlConfigState {
   bool save_data_enabled = false;
   std::string save_data_format = "mp4";
   std::string save_data_path = "/root/demo/save_mp4/";
+  bool capture_enabled = false;
+  std::string capture_directory = "/root/demo/capture/";
+  uint32_t capture_frame_count = kDefaultCaptureFrameCount;
+  uint32_t capture_warmup_seconds = kDefaultCaptureWarmupSeconds;
 };
 
 // sensor_demo 运行包内的用户 YAML 配置相对路径。

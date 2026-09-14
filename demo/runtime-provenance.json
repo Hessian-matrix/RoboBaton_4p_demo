@@ -2,10 +2,10 @@
   "artifact": {
     "files": {
       "VERSION": "cc52f678848b814373757b460383bf61960e4943c203735adde0a350b3e50989",
-      "bin/cam_demo": "6a4ab03144ce0b12097c246b996d6be34dbc3bfc23f6ad869e5907e5708041e2",
+      "bin/cam_demo": "67edfd364ae4241543429176a5613079de004f48f9aba561da7ea31aae60474a",
       "bin/ffprobe": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
       "bin/imu_reader_demo": "5bcc262ae53947eb46f97fe927d2e37399679424c4cb658b98729ac0d7096663",
-      "bin/sensor_demo": "01207e0be9e1ce33b4cf3df25a79f3b0f6cdfa7cd2d0500cb15fb093a9048018",
+      "bin/sensor_demo": "f2623d4b1a0f1ea1282544753814bdc6dc6787686ffc27e0be68e8925ed65a74",
       "bin/serial_port_demo": "3d916304fe0a44a7fddc09a554356a2519f3b960f82bc395a3aa9b69c523a629",
       "cam_demo": "99f2bb3caae5e0b396d2f1e4ae2df2871e9fe5e5de058c35632b401b459befb5",
       "config/sensor_config.yaml": "56c9de6f8385d995b18669e10a6b5448db932995d641cd6d8e9c6bfde2fbb4ed",
@@ -25,7 +25,7 @@
     }
   },
   "inputs": {
-    "CMakeLists.txt": "643c31c482a96c6a1caad9bacc1757b2a9831e077377a5807b53c646d686692f",
+    "CMakeLists.txt": "26b7b0a3f513274c7a7d8205de1e59bb7c0cbc2690b80ca195c12601900fb282",
     "VERSION": "cc52f678848b814373757b460383bf61960e4943c203735adde0a350b3e50989",
     "config/sensor_config.yaml": "56c9de6f8385d995b18669e10a6b5448db932995d641cd6d8e9c6bfde2fbb4ed",
     "include/icm42688_driver.h": "4efa09400da7eeeec413432f737331d08e433196fdd7d31d7bee671d2ba27161",
@@ -45,13 +45,13 @@
     "scripts/verify_runtime_package.py": "2da4c94154af4168d2bdb9e0881e1e2660664d7d56a78a8ba81c85f00b5cef57",
     "src/cam_demo.cpp": "aaada2c62f9675f33539098b562a82b1c49bc96d98b521df69f2e7184074ea0a",
     "src/cam_demo_common.cpp": "4d0a786eec959bb6888f79281554f3b90f288c6bd61d031e8cff7146a7fd2b73",
-    "src/cam_demo_common.h": "02d1cbe3bc512f0f3c4d13b2814fd7ae8c5fbf2803a02cd09f2fd6efb6eed8ef",
-    "src/cam_demo_config.cpp": "fe9e9b2f91fedb404537c249b621a6e5995d2a698a180f0593052dfbdfbd4414",
+    "src/cam_demo_common.h": "47792836962c59fa3f6a72e6e55870f7e1d3730f3e1b0d73b0bcc03893d93be0",
+    "src/cam_demo_config.cpp": "a2c18f2463b73d0e589b81b9dd47391e3510852c7acd60b98b4b0a4693d540ab",
     "src/cam_demo_config.h": "2e4f7174695845079fd3a5efc24a82488fa02d83147ad332163d778cfbe5efe6",
     "src/cam_demo_pipeline.cpp": "e4a8696360eb45ab3d9bf3f3493b8cadfe98148fb9fd877536efa232b57d90bc",
     "src/cam_demo_pipeline.h": "ad1b5c4a3e04399a214cf08f7c2227350e85eac292b95ad96398305ae7dc422e",
-    "src/cam_demo_rtsp.cpp": "3374395ffde98da90fd13f8a8e90cdf7dd151d5ee1a044949d77eefd957c667b",
-    "src/cam_demo_rtsp.h": "c2a16e334ec517409d5c11ebd600118e3115e0231234880ce5ded7f6185ab2da",
+    "src/cam_demo_rtsp.cpp": "d374e10766de2a1b9bfb56aca8f11796ada9a8bf80a6341f3311442b546865fe",
+    "src/cam_demo_rtsp.h": "3bd1f8945914344b5c2bc127cb5c40c5d6da5392591b55681d1e926aaa54b9a7",
     "src/frozen_system_clock.cpp": "578c94f652ccb1ce6b549553ae2451be58f5cb5bba0ae336291b27070cc1b7e4",
     "src/frozen_system_clock.h": "4299f43548d5083f413cd87e445f4d5b3996459e55b6725b52572a53086c9885",
     "src/h264_mp4_recorder.cpp": "2e3b2edaffb6563ddc017ab6397db3a9d28f581df8a53d5fa898588b09dbf197",
@@ -61,10 +61,12 @@
     "src/rosbag_v2_writer.h": "12ef5ce8d496f432b8b36b4ed03da93ce9c0d0697f5beb3d38bcc775b10110a2",
     "src/sensor_bag_recorder.cpp": "353f1d973534a9a66e69824404d1577b9c73e5e402cfdb466d8beb0c8937443c",
     "src/sensor_bag_recorder.h": "0abd4652bdfc13980192d0e544af21018a23559181d217dd421c5ed906e48f27",
-    "src/sensor_demo.cpp": "f2752f40970ac29db50f68405d541a20132a71282881efda10ad4ed907c2b796",
-    "src/sensor_demo_yaml_config.cpp": "0cfab0f80f1ba6f0890901f834d066899e8b46cb48be282bae1f7bce996b3d10",
-    "src/sensor_demo_yaml_config.h": "e51a38ed5abc372dad5481a882c0b1833cf9462d801cc7dfe716a2cd3349c86c",
+    "src/sensor_demo.cpp": "0f0584e67e915df4989e366e867276010a6c9030bbc54a44767afec705fc818c",
+    "src/sensor_demo_yaml_config.cpp": "11defbfd86cf863af721c2efd7075007be99ca1b7e3b9a58c06d6ee8c4f915ae",
+    "src/sensor_demo_yaml_config.h": "7e7c420846dd1b81773ce64ffc289112d6bf51b525d56e867d9ad605b8aeb94f",
     "src/serial_port_demo.cpp": "88c357eb45208c4dd19ecf5b46ab08b8cefe6347866792dfc80f016400e0ca4b",
+    "src/tee_capture_recorder.cpp": "f29b3967222943fcc2fb1a9facefbf47ec870a0233f67551386e6aaea1f38cf8",
+    "src/tee_capture_recorder.h": "4931f7fcf3c74b3de2a6e26a51d244f480279ae7e4458969782081b775ad1323",
     "src/x5_jpeg_encoder.cpp": "baa61540e17698201a6bb70c2993a7b01c0d4c82f37a1eae8c99774a9793b48c",
     "src/x5_jpeg_encoder.h": "748bff22e4a2274c01bf5672f64c478b3d5945625486492f6a35ac5c06754217"
   },
@@ -72,11 +74,11 @@
   "repository_states": {
     "runtime_source": {
       "commit": "46c319866e70c55e034230c9ca641959d02257fe",
-      "status": "1 MM N... 100644 100644 100644 91f3305bfd1c8403b4369a863d8c291ad464920d 3592a0c8bf9060590ada953f470bfd9fd03b884a README.md\n1 MM N... 100644 100644 100644 08c066a12e1548f8d7503431608192b20add0d80 2d14f83837e9990eca10d6cf28672a161f3f4162 README_EN.md\n1 A. N... 000000 100755 100755 0000000000000000000000000000000000000000 d29bdd5f47a95c95f7d1ed3ea8f91513e623c600 scripts/env_setup/x5-pps-pin.sh\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 6a4a8c52bf06a89799da3f408a54fae0515d5e92 scripts/env_setup/x5pps.ko\n1 .M N... 100644 100644 100644 f6361c33093d66d53d9553f7ba92e9acf8cdb050 f6361c33093d66d53d9553f7ba92e9acf8cdb050 src/cam_demo_config.cpp\n1 M. N... 100644 100644 100644 dbe2c66de0412995435ad6cb7a3d3d90c6b1474b 86cf483fff93f4d9b53beef05f89637bbaa9f6fb src/sensor_demo_yaml_config.cpp\n1 M. N... 100644 100644 100644 a3031ff7532a6736989b5ba242ddb829bdad5df4 08b465428093c11e84aa0694ba1a61de412ee97f src/sensor_demo_yaml_config.h"
+      "status": "1 .M N... 100644 100644 100644 3a73f8c19f2b83aa52cb0873d5e12d0ba3a49040 3a73f8c19f2b83aa52cb0873d5e12d0ba3a49040 CMakeLists.txt\n1 M. N... 100644 100644 100644 91f3305bfd1c8403b4369a863d8c291ad464920d f6843d294bd95bc65c6ba3b4aa81795f6c4a1256 README.md\n1 M. N... 100644 100644 100644 08c066a12e1548f8d7503431608192b20add0d80 d8f6e5c4690b2a666375f4f1495cfbc36dec8c7e README_EN.md\n1 A. N... 000000 100755 100755 0000000000000000000000000000000000000000 d29bdd5f47a95c95f7d1ed3ea8f91513e623c600 scripts/env_setup/x5-pps-pin.sh\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 6a4a8c52bf06a89799da3f408a54fae0515d5e92 scripts/env_setup/x5pps.ko\n1 .M N... 100644 100644 100644 e7f1a98ea423d8f48b424035907b1cf2cc3ea383 e7f1a98ea423d8f48b424035907b1cf2cc3ea383 src/cam_demo_common.h\n1 MM N... 100644 100644 100644 f6361c33093d66d53d9553f7ba92e9acf8cdb050 59bcb9fe58eaecc06e2aeba471251428223fe206 src/cam_demo_config.cpp\n1 .M N... 100644 100644 100644 b22b5b441faaf27bf26d3e446fab35e27c22332e b22b5b441faaf27bf26d3e446fab35e27c22332e src/cam_demo_rtsp.cpp\n1 .M N... 100644 100644 100644 0e0b94cad2142b4da85918291d8fcd5a20cbfecf 0e0b94cad2142b4da85918291d8fcd5a20cbfecf src/cam_demo_rtsp.h\n1 .M N... 100644 100644 100644 65137667262f3d211d28bb951a81e6217853cba9 65137667262f3d211d28bb951a81e6217853cba9 src/sensor_demo.cpp\n1 MM N... 100644 100644 100644 dbe2c66de0412995435ad6cb7a3d3d90c6b1474b 86cf483fff93f4d9b53beef05f89637bbaa9f6fb src/sensor_demo_yaml_config.cpp\n1 MM N... 100644 100644 100644 a3031ff7532a6736989b5ba242ddb829bdad5df4 08b465428093c11e84aa0694ba1a61de412ee97f src/sensor_demo_yaml_config.h\n? docs/tee-capture-test-guide.md\n? scripts/nv12_tee_extract.py\n? src/tee_capture_recorder.cpp\n? src/tee_capture_recorder.h"
     },
     "superproject": {
       "commit": "13b69b3b936ae266735540cea58a12e899f6219f",
-      "status": "1 MM N... 100644 100644 100644 03d7ed07dd7f1506ac1cd47e955a91687afd2754 dc444a96d8c27899565af20f6b6dbaa8ca9b98c5 README.md\n1 M. N... 100644 100644 100644 fdd4235ad474b8e3c3e5c8f3933c609322606dfd 145704b9f29a1377e26cc10d006f592fd1b57929 USAGE.md\n1 M. N... 100644 100644 100644 c56f3c6466d9ef115f8e14f4ace032068e63301d e0bfe54e31d8d4f2e80cc45d7ed7088aed1a9ac0 docs/decisions/2026-08-02-default-camera-fps-30.md\n1 M. N... 100644 100644 100644 ba94a681522ec539e05b6ddbdcc44adc094c3db9 88c955183e275fe38d08acffdf6d05135dff783f docs/decisions/2026-08-17-60fps-policy-by-persistence-mode.md\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 b33df271ee39eb4ef661f0959d06f4ae306e8c1c docs/decisions/2026-09-09-camera-fps-product-policy.md\n1 MM N... 100644 100644 100644 217ec21fd2815ad426137f153c37caeee7d4476f c5d10af972e9b27afdbb12377a0176ad311faf29 docs/project_code_and_function_understanding.md\n1 .M S.MU 160000 160000 160000 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 sub_module/4P_doc\n1 .M S.M. 160000 160000 160000 89a112365c44cf43bb0bcf495c991d94706e2a3a 89a112365c44cf43bb0bcf495c991d94706e2a3a sub_module/RoboBaton_4P_ROS2_demo\n1 MM N... 100755 100755 100755 d8a79f4519b599cdb559293fc89df5ad0065c860 118029b750303849bfe15d5766d632d0f1cd9f5d tests/default_camera_fps_contract_test.py\n1 M. N... 100644 100644 100644 caca1d5916d95ea33a30a1e0ce73bc71c38fd7af a2062f7329309816d94ae85306c652358970e63e tests/robobaton_4p_demo/package_runtime_script_test.py\n1 MM N... 100644 100644 100644 3e43a21d2d2e38d289a7867b027c502365dab778 1f65ca4187a1cebbbfb18402d9565041da7f5cb3 tests/robobaton_4p_demo/release008_consumer_lifecycle_test.cpp\n1 M. N... 100644 100644 100644 9721166df4fe8757e724f72b1787944f29564727 80089eab11a30f0199f014fff3e6cf068f5f7bb8 tests/robobaton_4p_ros2_demo/host/cam_demo_config_test.cpp"
+      "status": "1 M. N... 100644 100644 100644 03d7ed07dd7f1506ac1cd47e955a91687afd2754 31ce741c0f4fbe6c8924138b40e1d9c3a4792e44 README.md\n1 .M N... 100644 100644 100644 91c7ab12dafcfeaa1cadb08b19101138cf7352be 91c7ab12dafcfeaa1cadb08b19101138cf7352be RTSP_SO-MP4/prrtsp_v2.c\n1 M. N... 100644 100644 100644 fdd4235ad474b8e3c3e5c8f3933c609322606dfd 145704b9f29a1377e26cc10d006f592fd1b57929 USAGE.md\n1 M. N... 100644 100644 100644 c56f3c6466d9ef115f8e14f4ace032068e63301d e0bfe54e31d8d4f2e80cc45d7ed7088aed1a9ac0 docs/decisions/2026-08-02-default-camera-fps-30.md\n1 M. N... 100644 100644 100644 ba94a681522ec539e05b6ddbdcc44adc094c3db9 88c955183e275fe38d08acffdf6d05135dff783f docs/decisions/2026-08-17-60fps-policy-by-persistence-mode.md\n1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 b33df271ee39eb4ef661f0959d06f4ae306e8c1c docs/decisions/2026-09-09-camera-fps-product-policy.md\n1 MM N... 100644 100644 100644 217ec21fd2815ad426137f153c37caeee7d4476f 26e64171a59b9c312f76954a2f9ad398948b04ae docs/project_code_and_function_understanding.md\n1 .M S.M. 160000 160000 160000 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 742f2dfa46d3fa922ad10ceaebc8eb7e90698ef7 sub_module/4P_doc\n1 .M S.M. 160000 160000 160000 89a112365c44cf43bb0bcf495c991d94706e2a3a 89a112365c44cf43bb0bcf495c991d94706e2a3a sub_module/RoboBaton_4P_ROS2_demo\n1 MM N... 100755 100755 100755 d8a79f4519b599cdb559293fc89df5ad0065c860 118029b750303849bfe15d5766d632d0f1cd9f5d tests/default_camera_fps_contract_test.py\n1 .M N... 100644 100644 100644 300b09cbf9f83a6558553378b06d161dc7b2964b 300b09cbf9f83a6558553378b06d161dc7b2964b tests/prrtsp_abi_contract_test.py\n1 .M N... 100644 100644 100644 1a6ed3f766cd1fbeee763de43438d3034c1cac40 1a6ed3f766cd1fbeee763de43438d3034c1cac40 tests/prrtsp_lifecycle_behavior_test.c\n1 M. N... 100644 100644 100644 caca1d5916d95ea33a30a1e0ce73bc71c38fd7af a2062f7329309816d94ae85306c652358970e63e tests/robobaton_4p_demo/package_runtime_script_test.py\n1 MM N... 100644 100644 100644 3e43a21d2d2e38d289a7867b027c502365dab778 1f65ca4187a1cebbbfb18402d9565041da7f5cb3 tests/robobaton_4p_demo/release008_consumer_lifecycle_test.cpp\n1 .M N... 100644 100644 100644 7b09ae28210de4e7cb660e32e4ff6d9258171a75 7b09ae28210de4e7cb660e32e4ff6d9258171a75 tests/robobaton_4p_demo/release008_contract_test.py\n1 .M N... 100755 100755 100755 6572a831c022c7775f0940f5d3e31477281e595c 6572a831c022c7775f0940f5d3e31477281e595c tests/robobaton_4p_demo/system_timestamp_contract_test.py\n1 M. N... 100644 100644 100644 9721166df4fe8757e724f72b1787944f29564727 80089eab11a30f0199f014fff3e6cf068f5f7bb8 tests/robobaton_4p_ros2_demo/host/cam_demo_config_test.cpp\n1 .M N... 100755 100755 100755 d1c0976f64f6e9dd7d077fe9359eb50cebaf56b8 d1c0976f64f6e9dd7d077fe9359eb50cebaf56b8 tests/robobaton_4p_ros2_demo/perf/test_imu_rate_monitor_contract.py\n1 .M N... 100755 100755 100755 5a96cb07a325f5c8b199f262513ab76806451d6f 5a96cb07a325f5c8b199f262513ab76806451d6f tests/robobaton_4p_ros2_demo/perf/test_runtime_env_script_contract.py\n1 .M N... 100755 100755 100755 cf0dab7009dd828986223ce3d96a0f25fb6eb856 cf0dab7009dd828986223ce3d96a0f25fb6eb856 tests/robobaton_4p_ros2_demo/perf/test_sensor_timestamp_contract.py"
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",

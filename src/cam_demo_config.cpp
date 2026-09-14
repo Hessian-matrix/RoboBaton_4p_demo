@@ -59,6 +59,12 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
     std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
     std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
+    std::cout << "  --capture-dir <absolute-directory> Tee raw NV12 planes plus encoded access units after warmup; default off\n";
+    std::cout << "  --capture-frame-count <1.." << kMaxCaptureFrameCount
+              << "> Frames per camera to capture, default " << kDefaultCaptureFrameCount << "\n";
+    std::cout << "  --capture-warmup-seconds <1.." << kMaxCaptureWarmupSeconds
+              << "> Wait after camera start before capture, default "
+              << kDefaultCaptureWarmupSeconds << "\n";
   }
   std::cout << "  -h, --help        Show this help\n";
 }
@@ -326,6 +332,19 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   if (options.trigger_mode != "software_gpio" && options.trigger_mode != "none") {
     throw std::invalid_argument("--trigger-mode must be one of software_gpio or none");
   }
+  if (!options.capture_directory.empty() && options.capture_directory.front() != '/') {
+    throw std::invalid_argument("--capture-dir/capture.save_path path must be absolute");
+  }
+  if (options.capture_frame_count == 0U ||
+      options.capture_frame_count > kMaxCaptureFrameCount) {
+    throw std::invalid_argument("--capture-frame-count must be in 1.." +
+                                std::to_string(kMaxCaptureFrameCount));
+  }
+  if (options.capture_warmup_seconds == 0U ||
+      options.capture_warmup_seconds > kMaxCaptureWarmupSeconds) {
+    throw std::invalid_argument("--capture-warmup-seconds must be in 1.." +
+                                std::to_string(kMaxCaptureWarmupSeconds));
+  }
 }
 
 }  // namespace
@@ -428,6 +447,21 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
           ParseUint32(RequireValue(argc, argv, &i, "--record-frame-skip"),
                       "--record-frame-skip");
       cli_parse_state.record_frame_skip_set = true;
+    } else if (accept_imu_options && arg == "--capture-dir") {
+      options.capture_directory = RequireValue(argc, argv, &i, "--capture-dir");
+      if (options.capture_directory.empty() ||
+          options.capture_directory.front() != '/') {
+        throw std::invalid_argument("--capture-dir path must be absolute");
+      }
+      options.capture_enabled = true;
+    } else if (accept_imu_options && arg == "--capture-frame-count") {
+      options.capture_frame_count =
+          ParseUint32(RequireValue(argc, argv, &i, "--capture-frame-count"),
+                      "--capture-frame-count");
+    } else if (accept_imu_options && arg == "--capture-warmup-seconds") {
+      options.capture_warmup_seconds =
+          ParseUint32(RequireValue(argc, argv, &i, "--capture-warmup-seconds"),
+                      "--capture-warmup-seconds");
     } else if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0], accept_imu_options);
       std::exit(0);

@@ -85,7 +85,7 @@ std::size_t CountLeadingSpaces(const std::string& text) noexcept {
 
 bool IsSupportedSection(const std::string& section) noexcept {
   return section == "camera" || section == "rtsp" || section == "imu" ||
-         section == "save_data";
+         section == "save_data" || section == "capture";
 }
 
 int ParseInt(const std::string& text, const char* name) {
@@ -205,7 +205,12 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  save: false\n"
          << "  format: mp4\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.save_data_path << "\n"
-         << "  skip: false\n";
+         << "  skip: false\n"
+         << "capture:\n"
+         << "  save: false\n"
+         << "  save_path: " << SensorDemoYamlConfigState{}.capture_directory << "\n"
+         << "  frame_count: " << SensorDemoYamlConfigState{}.capture_frame_count << "\n"
+         << "  warmup_seconds: " << SensorDemoYamlConfigState{}.capture_warmup_seconds << "\n";
   return output.str();
 }
 
@@ -232,6 +237,15 @@ void ApplySaveDataSelection(Options* options, const SensorDemoYamlConfigState& s
   } else if (state.save_data_format == "mp4") {
     options->record_mp4_directory = state.save_data_path;
   }
+}
+
+// capture 开关关闭时清空目录，保证运行期单一判定依据是 capture_directory 非空。
+void ApplyCaptureSelection(Options* options, const SensorDemoYamlConfigState& state) {
+  options->capture_enabled = state.capture_enabled;
+  options->capture_directory =
+      state.capture_enabled ? state.capture_directory : std::string();
+  options->capture_frame_count = state.capture_frame_count;
+  options->capture_warmup_seconds = state.capture_warmup_seconds;
 }
 
 bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
@@ -280,6 +294,21 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     ApplySaveDataSelection(options, *state);
   } else if (key == "save_data.skip") {
     options->record_frame_skip = ParseBool(value, name.c_str()) ? 1U : 0U;
+  } else if (key == "capture.save") {
+    state->capture_enabled = ParseBool(value, name.c_str());
+    ApplyCaptureSelection(options, *state);
+  } else if (key == "capture.save_path") {
+    if (value.empty() || value.front() != '/') {
+      throw std::invalid_argument("capture.save_path must be an absolute path");
+    }
+    state->capture_directory = value;
+    ApplyCaptureSelection(options, *state);
+  } else if (key == "capture.frame_count") {
+    state->capture_frame_count = ParseUint32(value, name.c_str());
+    ApplyCaptureSelection(options, *state);
+  } else if (key == "capture.warmup_seconds") {
+    state->capture_warmup_seconds = ParseUint32(value, name.c_str());
+    ApplyCaptureSelection(options, *state);
   } else {
     return false;
   }
