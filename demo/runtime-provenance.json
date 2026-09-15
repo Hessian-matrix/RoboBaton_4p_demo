@@ -78,20 +78,20 @@
   "release_version": "1.2.0",
   "repository_states": {
     "runtime_source": {
-      "commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c",
-      "status": "1 .M N... 100644 100644 100644 5e517bfd684ac3998d002a2c94e1b2826a828e3b 5e517bfd684ac3998d002a2c94e1b2826a828e3b src/mosaic_rtsp_demo.cpp"
+      "commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e",
+      "status": ""
     },
     "superproject": {
-      "commit": "271f6180f8c0eeee37886e09e714103f9dc8e7ff",
-      "status": "1 .M N... 100644 100644 100644 64a3108ca8c224c678f75daf56dcb3c970d2d1ff 64a3108ca8c224c678f75daf56dcb3c970d2d1ff docs/plan/nonROS/plans/2026-07-30-mosaic-rtsp-standalone-demo-plan.md\n1 .M N... 100755 100755 100755 7e14305b0b9c92bf77d4dda51944385fed5901a0 7e14305b0b9c92bf77d4dda51944385fed5901a0 scripts/validation/robobaton_4p_demo/mosaic_rtsp_30fps_smoke.sh\n1 .M N... 100755 100755 100755 ec7609e0bb0b13418de96713c420556f286f1d3e ec7609e0bb0b13418de96713c420556f286f1d3e scripts/validation/robobaton_4p_demo/mosaic_rtsp_cpu_stress_matrix.sh\n1 .M S.M. 160000 160000 160000 2c0e9b844751cc4a5995535c4dc417b23756fb19 2c0e9b844751cc4a5995535c4dc417b23756fb19 sub_module/4P_doc\n1 .M N... 100755 100755 100755 0b4523b094bcd841b9e0a2fe454def94ab1e6fc3 0b4523b094bcd841b9e0a2fe454def94ab1e6fc3 tests/robobaton_4p_demo/mosaic_rtsp_30fps_smoke_contract_test.py\n1 .M N... 100755 100755 100755 eacc928ae254e557c492ccd3d0e5a08bcfb3da5f eacc928ae254e557c492ccd3d0e5a08bcfb3da5f tests/robobaton_4p_demo/mosaic_rtsp_cpu_stress_contract_test.py\n1 .M N... 100644 100644 100644 492ec0978993d1025345347ee580a7fc21eb1f48 492ec0978993d1025345347ee580a7fc21eb1f48 tests/robobaton_4p_demo/release008_contract_test.py"
+      "commit": "2a60f9e4c189f29a36e8751b765d4c9a6e6dc6ce",
+      "status": ""
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c",
+    "repository_commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "271f6180f8c0eeee37886e09e714103f9dc8e7ff",
-    "superproject_gitlink_commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c"
+    "superproject_commit": "2a60f9e4c189f29a36e8751b765d4c9a6e6dc6ce",
+    "superproject_gitlink_commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e"
   },
   "toolchain": {
     "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",
