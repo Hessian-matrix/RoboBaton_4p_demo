@@ -11,12 +11,12 @@ This is the public non-ROS demo repository for RoboBaton 4P. It provides the X5 
 ## Contents
 
 ```text
-demo/       Complete X5 package for `/root/demo`
+demo/       Complete X5 package for `/root/demo` (includes the `mosaic_rtsp_demo` four-view example)
 include/    Public C headers
 lib/        Prebuilt libraries matching the current demo and headers
 config/     Default `sensor_demo` YAML
-src/        Demo source
-scripts/    Build, packaging, and runtime verification entry points
+src/        Demo source (includes `mosaic_rtsp_demo.cpp` / `mosaic_nv12.*`)
+scripts/    Build, packaging, and runtime verification entry points (includes `build_mosaic_rtsp_demo.sh`)
 ```
 
 Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the configuration file.
@@ -30,10 +30,13 @@ On the board, query program and runtime-library versions:
 ```bash
 cd /root/demo
 ./cam_demo --version
+./mosaic_rtsp_demo --version
 ./sensor_demo --version
 ./imu_reader_demo --version
 ./serial_port_demo --version
 ```
+
+Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42688`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42688`. This detects mixed packages.
 
 These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html), [API reference](https://4p-docs.readthedocs.io/en/latest/api-reference.html), and [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html).
 
@@ -103,6 +106,7 @@ cmake --build build_x5 -j
 Maintainers refresh the complete runtime package with:
 
 ```bash
+TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_mosaic_rtsp_demo.sh
 scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
 python3 scripts/verify_runtime_package.py demo
 ```
@@ -154,5 +158,17 @@ When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION
 - [Hardware and safety](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html)
 - [Troubleshooting](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html)
 - [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html)
+
+### Mosaic RTSP Demo
+
+Four-view mosaic RTSP example:
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+Fixed RTSP URL `rtsp://<x5-ip>:558/PRR`; supports `--fps <25|30|40|50|60>`. For detailed parameters, run statistics, and boundaries, see [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic).
 
 License and third-party component information are defined by this repository's `LICENSE` and release documentation.

@@ -5,6 +5,7 @@
       "bin/cam_demo": "9236b8b35e1b87f6fb2570727d3f6232e5aec86f24cbe6812758a01add7da647",
       "bin/ffprobe": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
       "bin/imu_reader_demo": "29f4b89043308913699d7f40a6b28d37047d0ab07e1b9f90a7d920bfc37a26e6",
+      "bin/mosaic_rtsp_demo": "91f8ce1e57cfd55eabf6dc551ca65dd608f6fcfdf544e0062ecda972eb87a2ff",
       "bin/sensor_demo": "9666a15c28681c40e2d2a0c3c908cfa0737b21ce28add03cf6c6598c963516bc",
       "bin/serial_port_demo": "e48b71c450d70a13f660be32808c6ea6aa40994960efa51eedc281826b73e554",
       "cam_demo": "99f2bb3caae5e0b396d2f1e4ae2df2871e9fe5e5de058c35632b401b459befb5",
@@ -14,18 +15,19 @@
       "lib/libicm42688.so": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
       "lib/libicm42688.so.2": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
       "lib/libicm42688.so.2.1.0": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
-      "lib/libprrtsp.so": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
-      "lib/libprrtsp.so.2": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
-      "lib/libprrtsp.so.2.0.0": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
+      "lib/libprrtsp.so": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
+      "lib/libprrtsp.so.2": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
+      "lib/libprrtsp.so.2.0.0": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
       "lib/libsc132.so": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
       "lib/libsc132.so.2": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
       "lib/libsc132.so.2.0.1": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
+      "mosaic_rtsp_demo": "3dc41e2d2b13ba05197242953ee282118b5f64fbe5a2a57de9e46705cfdee4cf",
       "sensor_demo": "391176354b05f90932b1ed03e7937f7156f500ea8e69deb24e7708b102ef0e87",
       "serial_port_demo": "ae6a119db70599483c6a636542715986984dd8a7f14745843583ea24aa4e87be"
     }
   },
   "inputs": {
-    "CMakeLists.txt": "69676a9f3a58c81a4d39ea303c3a471877d01fa59ad3c854de2b0ab28e4c6548",
+    "CMakeLists.txt": "03ef482d2523c574e3ace42d33415a6d634f57ccc65eb99251634dd4ce5992db",
     "VERSION": "1e5b51cde515396a9fa762909cf8ca6584ccc564b325d2eebeea76175fe95c4d",
     "config/sensor_config.yaml": "698f106883bf6b69e1432ada2cf69f69d9dacafb9a34a8d9b9087f6e695246eb",
     "include/icm42688_driver.h": "4efa09400da7eeeec413432f737331d08e433196fdd7d31d7bee671d2ba27161",
@@ -34,15 +36,15 @@
     "lib/libicm42688.so": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
     "lib/libicm42688.so.2": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
     "lib/libicm42688.so.2.1.0": "d0167bd26fc95a7cc70fd1e34c89d30cf9bdcde6bbd5184419ae89fdb47aeb43",
-    "lib/libprrtsp.so": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
-    "lib/libprrtsp.so.2": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
-    "lib/libprrtsp.so.2.0.0": "04ef4a9f792e014b9768b1135aa77a8dd42eddc9daf889d0a3bada296cdd4002",
+    "lib/libprrtsp.so": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
+    "lib/libprrtsp.so.2": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
+    "lib/libprrtsp.so.2.0.0": "b5781d7ee76e0e5e79c09af92e52da5352bd1debf72046c8bbcd7785e231ad86",
     "lib/libsc132.so": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
     "lib/libsc132.so.2": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
     "lib/libsc132.so.2.0.1": "0abfee696267a141ccca9d97be77abe9322550c5961ffadf0d6d14bb3bdad832",
-    "scripts/package_runtime.sh": "489b163298b9f81431541e646d88f35f48d94b5c964c4b8f53e7b85d437fb4a2",
+    "scripts/package_runtime.sh": "b28b776e7e99b97ee72483e4a37156a3b048000acae2ae7c713f421a2e06b4d6",
     "scripts/runtime_ffprobe_frame_count.sh": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
-    "scripts/verify_runtime_package.py": "e6f096cf26b15385eeaf2efe8b7202ef9b29928b1d8faac289a281c0518351d8",
+    "scripts/verify_runtime_package.py": "eee93a632e3b608aeae103fd8b0194e22be8b0bbed559a322f33972d9a5e77f8",
     "src/cam_demo.cpp": "aaada2c62f9675f33539098b562a82b1c49bc96d98b521df69f2e7184074ea0a",
     "src/cam_demo_common.cpp": "5f146f019e64aba909a786c5549638a0ae3d4d4de546acda4d352fbc716b92eb",
     "src/cam_demo_common.h": "0356e10ba0e8efc8e26e358cd778e1da58c301b92dba983b1d18de5703ac3237",
@@ -57,6 +59,9 @@
     "src/h264_mp4_recorder.cpp": "2e3b2edaffb6563ddc017ab6397db3a9d28f581df8a53d5fa898588b09dbf197",
     "src/h264_mp4_recorder.h": "9728d85d1055692ed8ec3581a848d100aafbc2b39058cef8845fed896ba33194",
     "src/imu_reader_demo.cpp": "9255bd48500d7a64329808ab109a0cf5398018e4ce73bed4084a5864ef0877f8",
+    "src/mosaic_nv12.cpp": "1c07ac96fcac3f83c23897232cc69ec0d421f3b83630b81b4127e24699d18a72",
+    "src/mosaic_nv12.h": "602d8e76b503a50fdf692a2d4fef279b626427f2a83f46b59d5fcafc56a114bf",
+    "src/mosaic_rtsp_demo.cpp": "4b297fed715632ae6a667f04d530e98049eadff03e5ca28da3d1c529af9923e0",
     "src/rosbag_v2_writer.cpp": "3d606d346e6670d036d010d7224bd77f9ee615cbc0303f3a10ef668cefa5d96b",
     "src/rosbag_v2_writer.h": "12ef5ce8d496f432b8b36b4ed03da93ce9c0d0697f5beb3d38bcc775b10110a2",
     "src/sensor_bag_recorder.cpp": "353f1d973534a9a66e69824404d1577b9c73e5e402cfdb466d8beb0c8937443c",
@@ -73,20 +78,20 @@
   "release_version": "1.2.0",
   "repository_states": {
     "runtime_source": {
-      "commit": "a30b5d6a5ff8b95824d63fbda80e151f64a04876",
-      "status": "1 .M N... 100644 100644 100644 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 lib/libicm42688.so\n1 .M N... 100644 100644 100644 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 lib/libicm42688.so.2\n1 .M N... 100644 100644 100644 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 6b7d3010e0f37ca4da65f1798c6f0b5a8492bde4 lib/libicm42688.so.2.1.0\n1 .M N... 100644 100644 100644 df26ea709767064ded360f39248c599d3613a329 df26ea709767064ded360f39248c599d3613a329 lib/libprrtsp.so\n1 .M N... 100644 100644 100644 df26ea709767064ded360f39248c599d3613a329 df26ea709767064ded360f39248c599d3613a329 lib/libprrtsp.so.2\n1 .M N... 100644 100644 100644 df26ea709767064ded360f39248c599d3613a329 df26ea709767064ded360f39248c599d3613a329 lib/libprrtsp.so.2.0.0\n1 .M N... 100644 100644 100644 6246212d60368fa6163c7951839fef19ff661131 6246212d60368fa6163c7951839fef19ff661131 lib/libsc132.so\n1 .M N... 100644 100644 100644 6246212d60368fa6163c7951839fef19ff661131 6246212d60368fa6163c7951839fef19ff661131 lib/libsc132.so.2\n1 .M N... 100644 100644 100644 6246212d60368fa6163c7951839fef19ff661131 6246212d60368fa6163c7951839fef19ff661131 lib/libsc132.so.2.0.1"
+      "commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e",
+      "status": ""
     },
     "superproject": {
-      "commit": "dd556490904f2277bebceb4ccff34a42467dc28f",
+      "commit": "2a60f9e4c189f29a36e8751b765d4c9a6e6dc6ce",
       "status": ""
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "a30b5d6a5ff8b95824d63fbda80e151f64a04876",
+    "repository_commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "dd556490904f2277bebceb4ccff34a42467dc28f",
-    "superproject_gitlink_commit": "a30b5d6a5ff8b95824d63fbda80e151f64a04876"
+    "superproject_commit": "2a60f9e4c189f29a36e8751b765d4c9a6e6dc6ce",
+    "superproject_gitlink_commit": "a58b5d94ff2bfa6afc8e916f69e019da7748577e"
   },
   "toolchain": {
     "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",
