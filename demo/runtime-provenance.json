@@ -5,7 +5,7 @@
       "bin/cam_demo": "9236b8b35e1b87f6fb2570727d3f6232e5aec86f24cbe6812758a01add7da647",
       "bin/ffprobe": "f30298fa3ab686f7534389487beec6333606a4f63ce6d97cd9f7ee350e389413",
       "bin/imu_reader_demo": "29f4b89043308913699d7f40a6b28d37047d0ab07e1b9f90a7d920bfc37a26e6",
-      "bin/mosaic_rtsp_demo": "e719d738b97f33d0a15ffc767dddcc1f2a894a31570b0fc76614065fb8397d50",
+      "bin/mosaic_rtsp_demo": "91f8ce1e57cfd55eabf6dc551ca65dd608f6fcfdf544e0062ecda972eb87a2ff",
       "bin/sensor_demo": "9666a15c28681c40e2d2a0c3c908cfa0737b21ce28add03cf6c6598c963516bc",
       "bin/serial_port_demo": "e48b71c450d70a13f660be32808c6ea6aa40994960efa51eedc281826b73e554",
       "cam_demo": "99f2bb3caae5e0b396d2f1e4ae2df2871e9fe5e5de058c35632b401b459befb5",
@@ -61,7 +61,7 @@
     "src/imu_reader_demo.cpp": "9255bd48500d7a64329808ab109a0cf5398018e4ce73bed4084a5864ef0877f8",
     "src/mosaic_nv12.cpp": "1c07ac96fcac3f83c23897232cc69ec0d421f3b83630b81b4127e24699d18a72",
     "src/mosaic_nv12.h": "602d8e76b503a50fdf692a2d4fef279b626427f2a83f46b59d5fcafc56a114bf",
-    "src/mosaic_rtsp_demo.cpp": "0664fdd49d1ef0a25d6f8ce6038e3d303d0a910f344225bb7724cbdeb9d40d8b",
+    "src/mosaic_rtsp_demo.cpp": "4b297fed715632ae6a667f04d530e98049eadff03e5ca28da3d1c529af9923e0",
     "src/rosbag_v2_writer.cpp": "3d606d346e6670d036d010d7224bd77f9ee615cbc0303f3a10ef668cefa5d96b",
     "src/rosbag_v2_writer.h": "12ef5ce8d496f432b8b36b4ed03da93ce9c0d0697f5beb3d38bcc775b10110a2",
     "src/sensor_bag_recorder.cpp": "353f1d973534a9a66e69824404d1577b9c73e5e402cfdb466d8beb0c8937443c",
@@ -78,20 +78,20 @@
   "release_version": "1.2.0",
   "repository_states": {
     "runtime_source": {
-      "commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a",
-      "status": "1 .M N... 100644 100644 100644 41d086343389e5d080be69120b8784a4f2c8dab3 41d086343389e5d080be69120b8784a4f2c8dab3 README.md\n1 .M N... 100644 100644 100644 d0f60814baf77a40dc1965265d67b477df8cb5d3 d0f60814baf77a40dc1965265d67b477df8cb5d3 README_EN.md"
+      "commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c",
+      "status": "1 .M N... 100644 100644 100644 5e517bfd684ac3998d002a2c94e1b2826a828e3b 5e517bfd684ac3998d002a2c94e1b2826a828e3b src/mosaic_rtsp_demo.cpp"
     },
     "superproject": {
-      "commit": "6d73bc61559f4675a42a9f94afbb61d299646868",
-      "status": "1 .M SC.. 160000 160000 160000 a4a00346a1724d1488875455a01eb51cb523206a a4a00346a1724d1488875455a01eb51cb523206a sub_module/4P_doc"
+      "commit": "271f6180f8c0eeee37886e09e714103f9dc8e7ff",
+      "status": "1 .M N... 100644 100644 100644 64a3108ca8c224c678f75daf56dcb3c970d2d1ff 64a3108ca8c224c678f75daf56dcb3c970d2d1ff docs/plan/nonROS/plans/2026-07-30-mosaic-rtsp-standalone-demo-plan.md\n1 .M N... 100755 100755 100755 7e14305b0b9c92bf77d4dda51944385fed5901a0 7e14305b0b9c92bf77d4dda51944385fed5901a0 scripts/validation/robobaton_4p_demo/mosaic_rtsp_30fps_smoke.sh\n1 .M N... 100755 100755 100755 ec7609e0bb0b13418de96713c420556f286f1d3e ec7609e0bb0b13418de96713c420556f286f1d3e scripts/validation/robobaton_4p_demo/mosaic_rtsp_cpu_stress_matrix.sh\n1 .M S.M. 160000 160000 160000 2c0e9b844751cc4a5995535c4dc417b23756fb19 2c0e9b844751cc4a5995535c4dc417b23756fb19 sub_module/4P_doc\n1 .M N... 100755 100755 100755 0b4523b094bcd841b9e0a2fe454def94ab1e6fc3 0b4523b094bcd841b9e0a2fe454def94ab1e6fc3 tests/robobaton_4p_demo/mosaic_rtsp_30fps_smoke_contract_test.py\n1 .M N... 100755 100755 100755 eacc928ae254e557c492ccd3d0e5a08bcfb3da5f eacc928ae254e557c492ccd3d0e5a08bcfb3da5f tests/robobaton_4p_demo/mosaic_rtsp_cpu_stress_contract_test.py\n1 .M N... 100644 100644 100644 492ec0978993d1025345347ee580a7fc21eb1f48 492ec0978993d1025345347ee580a7fc21eb1f48 tests/robobaton_4p_demo/release008_contract_test.py"
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a",
+    "repository_commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "6d73bc61559f4675a42a9f94afbb61d299646868",
-    "superproject_gitlink_commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a"
+    "superproject_commit": "271f6180f8c0eeee37886e09e714103f9dc8e7ff",
+    "superproject_gitlink_commit": "73e9bfaafbd9fcfc293c384b52513b6a4016bd8c"
   },
   "toolchain": {
     "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",

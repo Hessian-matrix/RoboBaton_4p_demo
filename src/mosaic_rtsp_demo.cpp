@@ -781,7 +781,7 @@ void PrintUsage(const char* program) {
             << " H.264 " << kMosaicBitrateKbps << "kbps default " << kDefaultMosaicFps
             << "fps rtsp://<board>:" << kMosaicPort << kMosaicPath << "\n"
             << "  --fps <25|30|40|50|60> Camera trigger and encoder metadata fps, default "
-            << kDefaultMosaicFps << "; 60 is stress-only\n";
+            << kDefaultMosaicFps << "\n";
 }
 
 void PrintMetric(const char* name, uint64_t value) {
