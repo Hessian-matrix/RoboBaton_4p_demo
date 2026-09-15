@@ -11,12 +11,12 @@
 ## 包含内容
 
 ```text
-demo/       可部署到 X5 `/root/demo` 的完整运行包
+demo/       可部署到 X5 `/root/demo` 的完整运行包（含 `mosaic_rtsp_demo` 四路拼接示例）
 include/    公开 C 头文件
 lib/        与当前 Demo/头文件匹配的预编译库
 config/     `sensor_demo` 默认 YAML
-src/        Demo 示例源码
-scripts/    构建、打包和运行包验证入口
+src/        Demo 示例源码（含 `mosaic_rtsp_demo.cpp` / `mosaic_nv12.*`）
+scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_demo.sh`）
 ```
 
 用户通常只需要 `demo/`。不要只替换单个 ELF、单个 `.so` 或配置文件。
@@ -30,10 +30,13 @@ scripts/    构建、打包和运行包验证入口
 ```bash
 cd /root/demo
 ./cam_demo --version
+./mosaic_rtsp_demo --version
 ./sensor_demo --version
 ./imu_reader_demo --version
 ./serial_port_demo --version
 ```
+
+各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42688`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42688`，用于发现程序与 SO 混装。
 
 这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/en/latest/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/en/latest/changelog.html)。
 
@@ -57,9 +60,36 @@ cd /root/demo
 
 只运行相机/RTSP：
 
+`cam_demo` 演示如何同时使用：
+
+- `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
+- `libprrtsp.so`：把四路 NV12 帧送入 X5 编码器并输出 RTSP
+
+五个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
+
 ```bash
 ./cam_demo
 ```
+
+### Mosaic RTSP Demo
+
+`mosaic_rtsp_demo` 把四路 SC132 `1280x1088` NV12 frame-set 在 CPU 内合成到 hbmem NV12 DMA 输出缓冲，并通过 `libprrtsp.so` 的 external NV12 输入输出固定 H.264 RTSP，避免 PRRTSP 再复制整帧：
+
+```bash
+./mosaic_rtsp_demo
+./mosaic_rtsp_demo --fps 40
+./mosaic_rtsp_demo --fps 50
+```
+
+固定 RTSP 地址：
+
+```text
+rtsp://<x5-ip>:558/PRR
+```
+
+该程序固定四路、H.264、8000kbps、正装方向、RTSP 端口 `558` 和 path `/PRR`，支持 `--fps <25|30|40|50|60>`。默认 30fps；25/30/40/50 已按 V1 稳定功能档验收通过；60fps 仅作为显式 stress-only 压力档，不属于稳定发布 profile。
+
+退出时会输出 `queue_full_drop`、`invalid_group`、`copy_failure`、`send_failure`、`retain_release_balance`、`copy_duration_avg_ms`、`send_duration_avg_ms` 和 PRRTSP 计数；`retain_release_balance=0` 表示跨线程保留的 SC132 frame 已全部归还。维护者验收口径为四档均在 CPU busy 约 98.6% 的板端压力窗口内保持 `2560x2176` H.264 目标帧率、零 queue drop、零 invalid group、零 copy/send failure 和零 retain 泄漏；内部 runner 与原始证据不属于公开 demo 交付内容。
 
 只运行 IMU：
 
