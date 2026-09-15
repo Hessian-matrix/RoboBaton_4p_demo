@@ -161,7 +161,7 @@ When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION
 
 ### Mosaic RTSP Demo
 
-`mosaic_rtsp_demo` CPU-composites four synchronized SC132 `1280x1088` NV12 frame sets into an hbmem NV12 DMA output buffer, then publishes a fixed H.264 RTSP stream through `libprrtsp.so` external NV12 input without an extra full-frame PRRTSP copy:
+Four-view mosaic RTSP example:
 
 ```bash
 ./mosaic_rtsp_demo
@@ -169,14 +169,6 @@ When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION
 ./mosaic_rtsp_demo --fps 50
 ```
 
-Fixed RTSP URL:
-
-```text
-rtsp://<x5-ip>:558/PRR
-```
-
-This program is fixed to four cameras, H.264, 8000kbps, upright output, RTSP port `558`, and path `/PRR`; it supports `--fps <25|30|40|50|60>`. The default is 30fps. 25/30/40/50 have passed the V1 stable functional acceptance scope; 60fps is explicit stress-only and is not a stable release profile.
-
-On exit it prints `queue_full_drop`, `invalid_group`, `copy_failure`, `send_failure`, `retain_release_balance`, `copy_duration_avg_ms`, `send_duration_avg_ms`, and PRRTSP counters; `retain_release_balance=0` means all SC132 frames retained across threads were returned. Maintainer acceptance requires all four stable modes to keep the `2560x2176` H.264 target rate during a board-side CPU-busy window around 98.6%, with zero queue drops, zero invalid groups, zero copy/send failures, and zero retained-frame leaks. Internal runners and raw evidence are not part of this public demo delivery.
+Fixed RTSP URL `rtsp://<x5-ip>:558/PRR`; supports `--fps <25|30|40|50|60>`. For detailed parameters, run statistics, and boundaries, see [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic).
 
 License and third-party component information are defined by this repository's `LICENSE` and release documentation.

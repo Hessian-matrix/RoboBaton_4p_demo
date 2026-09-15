@@ -78,20 +78,20 @@
   "release_version": "1.2.0",
   "repository_states": {
     "runtime_source": {
-      "commit": "30d1b2e505ef4c666ac6729acaed8f3b8676e522",
-      "status": ""
+      "commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a",
+      "status": "1 .M N... 100644 100644 100644 41d086343389e5d080be69120b8784a4f2c8dab3 41d086343389e5d080be69120b8784a4f2c8dab3 README.md\n1 .M N... 100644 100644 100644 d0f60814baf77a40dc1965265d67b477df8cb5d3 d0f60814baf77a40dc1965265d67b477df8cb5d3 README_EN.md"
     },
     "superproject": {
-      "commit": "67d996c7d7e9e223da8ea765f609bc294b885b87",
-      "status": ""
+      "commit": "6d73bc61559f4675a42a9f94afbb61d299646868",
+      "status": "1 .M SC.. 160000 160000 160000 a4a00346a1724d1488875455a01eb51cb523206a a4a00346a1724d1488875455a01eb51cb523206a sub_module/4P_doc"
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "30d1b2e505ef4c666ac6729acaed8f3b8676e522",
+    "repository_commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "67d996c7d7e9e223da8ea765f609bc294b885b87",
-    "superproject_gitlink_commit": "30d1b2e505ef4c666ac6729acaed8f3b8676e522"
+    "superproject_commit": "6d73bc61559f4675a42a9f94afbb61d299646868",
+    "superproject_gitlink_commit": "3c182e2ea389ad56ea2416a06ad66459ce756a0a"
   },
   "toolchain": {
     "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",

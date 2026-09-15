@@ -73,7 +73,7 @@ cd /root/demo
 
 ### Mosaic RTSP Demo
 
-`mosaic_rtsp_demo` 把四路 SC132 `1280x1088` NV12 frame-set 在 CPU 内合成到 hbmem NV12 DMA 输出缓冲，并通过 `libprrtsp.so` 的 external NV12 输入输出固定 H.264 RTSP，避免 PRRTSP 再复制整帧：
+四路拼接 RTSP 示例：
 
 ```bash
 ./mosaic_rtsp_demo
@@ -81,15 +81,7 @@ cd /root/demo
 ./mosaic_rtsp_demo --fps 50
 ```
 
-固定 RTSP 地址：
-
-```text
-rtsp://<x5-ip>:558/PRR
-```
-
-该程序固定四路、H.264、8000kbps、正装方向、RTSP 端口 `558` 和 path `/PRR`，支持 `--fps <25|30|40|50|60>`。默认 30fps；25/30/40/50 已按 V1 稳定功能档验收通过；60fps 仅作为显式 stress-only 压力档，不属于稳定发布 profile。
-
-退出时会输出 `queue_full_drop`、`invalid_group`、`copy_failure`、`send_failure`、`retain_release_balance`、`copy_duration_avg_ms`、`send_duration_avg_ms` 和 PRRTSP 计数；`retain_release_balance=0` 表示跨线程保留的 SC132 frame 已全部归还。维护者验收口径为四档均在 CPU busy 约 98.6% 的板端压力窗口内保持 `2560x2176` H.264 目标帧率、零 queue drop、零 invalid group、零 copy/send failure 和零 retain 泄漏；内部 runner 与原始证据不属于公开 demo 交付内容。
+固定 RTSP 地址 `rtsp://<x5-ip>:558/PRR`，支持 `--fps <25|30|40|50|60>`。详细参数、运行统计与边界见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic)。
 
 只运行 IMU：
 
