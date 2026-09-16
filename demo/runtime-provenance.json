@@ -78,20 +78,20 @@
   "release_version": "1.3.0",
   "repository_states": {
     "runtime_source": {
-      "commit": "72eeac40e23d50ed19a9185ce173351cce85770d",
+      "commit": "d1d3daf22cbe1e38a61bb70d82460268b830e7de",
       "status": ""
     },
     "superproject": {
-      "commit": "52c248b2cde617ad3e3795db2123aea98e04375a",
+      "commit": "80e675f4e27d38c542aac6f21fca6d4623a23c00",
       "status": ""
     }
   },
   "schema": "robobaton-non-ros-runtime-provenance-v2",
   "source": {
-    "repository_commit": "72eeac40e23d50ed19a9185ce173351cce85770d",
+    "repository_commit": "d1d3daf22cbe1e38a61bb70d82460268b830e7de",
     "repository_path": "sub_module/RoboBaton_4p_demo",
-    "superproject_commit": "52c248b2cde617ad3e3795db2123aea98e04375a",
-    "superproject_gitlink_commit": "72eeac40e23d50ed19a9185ce173351cce85770d"
+    "superproject_commit": "80e675f4e27d38c542aac6f21fca6d4623a23c00",
+    "superproject_gitlink_commit": "d1d3daf22cbe1e38a61bb70d82460268b830e7de"
   },
   "toolchain": {
     "build_dir": "/root/x5/4cam/sub_module/RoboBaton_4p_demo/build_x5",
