@@ -163,6 +163,14 @@ if [[ ! -f "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" ]]; then
   echo "Missing runtime ffprobe helper: ${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" >&2
   exit 1
 fi
+if [[ ! -f "${SCRIPT_DIR}/start_sensor_demo.sh" ]]; then
+  echo "Missing runtime autostart launcher: ${SCRIPT_DIR}/start_sensor_demo.sh" >&2
+  exit 1
+fi
+if [[ ! -f "${SCRIPT_DIR}/rosbag_info.py" ]]; then
+  echo "Missing runtime rosbag info tool: ${SCRIPT_DIR}/rosbag_info.py" >&2
+  exit 1
+fi
 
 if [[ ! -f "${TOOLCHAIN_FILE}" ]]; then
   echo "Missing consumer toolchain file: ${TOOLCHAIN_FILE}" >&2
@@ -234,6 +242,8 @@ cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
 cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
+cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
+cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
   libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
@@ -278,8 +288,8 @@ EOF
 done
 
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
-chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo"
-chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe"
+chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/start_sensor_demo.sh"
+chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \

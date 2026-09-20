@@ -44,6 +44,8 @@ EXPECTED_LIBRARY_COPIES = {
 }
 EXPECTED_SCRIPT_COPIES = {
     "scripts/runtime_ffprobe_frame_count.sh": "bin/ffprobe",
+    "scripts/start_sensor_demo.sh": "start_sensor_demo.sh",
+    "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
     "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
@@ -65,6 +67,7 @@ REQUIRED_FILES = {
     "imu_reader_demo",
     "sensor_demo",
     "serial_port_demo",
+    "start_sensor_demo.sh",
     "env.sh",
     "config/sensor_config.yaml",
     "bin/cam_demo",
@@ -73,6 +76,7 @@ REQUIRED_FILES = {
     "bin/sensor_demo",
     "bin/serial_port_demo",
     "bin/ffprobe",
+    "bin/rosbag_info.py",
     *EXPECTED_VERSION_DEFINITIONS,
     *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
 }
@@ -520,7 +524,7 @@ def verify_package(
     if (package_dir / "VERSION").read_text(encoding="utf-8").strip() != RELEASE_VERSION:
         raise AssertionError("runtime VERSION does not match the release version")
 
-    for relative in ["cam_demo", "imu_reader_demo", "mosaic_rtsp_demo", "sensor_demo", "serial_port_demo", "bin/ffprobe", *EXPECTED_VERSION_NEEDS]:
+    for relative in ["cam_demo", "imu_reader_demo", "mosaic_rtsp_demo", "sensor_demo", "serial_port_demo", "start_sensor_demo.sh", "bin/ffprobe", "bin/rosbag_info.py", *EXPECTED_VERSION_NEEDS]:
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")

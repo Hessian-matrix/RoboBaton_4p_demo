@@ -97,6 +97,20 @@ cd /root/demo
 
 首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/en/latest/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/en/latest/quick-start.html)。
 
+## 开机自启动
+
+`sensor_demo` 的开机自启动由运行包顶层脚本 `start_sensor_demo.sh` 管理：
+
+```bash
+cd /root/demo
+./start_sensor_demo.sh            # 前台启动 sensor_demo（等效 ./sensor_demo）
+./start_sensor_demo.sh enable     # 安装开机自启动（需要 root）
+./start_sensor_demo.sh disable    # 取消开机自启动（需要 root）
+./start_sensor_demo.sh status     # 查看自启动与运行状态
+```
+
+开机自启动通过板端 `/userdata/startup.sh` 实现（系统 `S99auto_startup` 在 `/userdata` 挂载后执行）；脚本只追加/删除自己带标记的块，不影响其它脚本（如 `wifi_setup.sh`）写入的内容。自启动使用包内默认配置，直接修改 `config/sensor_config.yaml` 即可调整，无需重新执行 `enable`。
+
 ## 保存数据
 
 `sensor_demo` 默认不自动保存；默认保存格式字段为 MP4，默认路径为 `/root/demo/save_mp4/`。需要启用保存时显式选择一种模式：

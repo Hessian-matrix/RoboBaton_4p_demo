@@ -78,6 +78,20 @@ UART1/UART7 example:
 
 For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-docs.readthedocs.io/en/latest/first-boot.html) and [Quick start](https://4p-docs.readthedocs.io/en/latest/quick-start.html).
 
+### Start sensor_demo at boot
+
+Boot autostart of `sensor_demo` is managed by the top-level `start_sensor_demo.sh`:
+
+```bash
+cd /root/demo
+./start_sensor_demo.sh            # run sensor_demo in the foreground (same as ./sensor_demo)
+./start_sensor_demo.sh enable     # install boot autostart (requires root)
+./start_sensor_demo.sh disable    # remove boot autostart (requires root)
+./start_sensor_demo.sh status     # show autostart and process state
+```
+
+Autostart is implemented through `/userdata/startup.sh`, executed by the system `S99auto_startup` after `/userdata` is mounted. The script only appends/removes its own marked block and never overwrites content written by other scripts such as `wifi_setup.sh`. Autostart uses the packaged default configuration; edit `config/sensor_config.yaml` to adjust it, no need to re-run `enable`.
+
 ## Persistence
 
 `sensor_demo` does not persist data automatically. The default format field is MP4 and the default path is `/root/demo/save_mp4/`. Explicitly select one mode when enabling persistence:
