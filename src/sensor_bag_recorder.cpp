@@ -660,7 +660,7 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       raw.group_timestamp_ns = job.group_timestamp_ns;
       raw.group_max_skew_ns = frame_set.max_skew_ns;
       raw.camera_timestamp_ns = item.timestamp_ns;
-      raw.rtsp_timestamp_ns = frame_set.group_timestamp_ns;
+      raw.rtsp_timestamp_ns = item.timestamp_ns;
       raw.group_timestamp_domain = Sc132OutputTimestampDomain(options_);
       raw.camera_timestamp_domain = raw.group_timestamp_domain;
       raw.rtsp_timestamp_domain = raw.group_timestamp_domain;

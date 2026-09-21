@@ -130,7 +130,6 @@ For toolchain preparation, dependencies, build boundaries, and package verificat
 ## Deployment
 
 The board target directory is `/root/demo`. Deployment must follow:
-
 ```text
 unique temporary directory
 → complete manifest verification

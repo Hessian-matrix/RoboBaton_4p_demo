@@ -399,7 +399,7 @@ class FramePipeline::Impl {
       job.group_timestamp_ns = output_group_timestamp_ns;
       job.group_max_skew_ns = frame_set.max_skew_ns;
       job.camera_timestamp_ns = output_camera_timestamp_ns;
-      job.rtsp_timestamp_ns = output_group_timestamp_ns;
+      job.rtsp_timestamp_ns = output_camera_timestamp_ns;
       job.group_timestamp_domain = sc132_timestamp_domain;
       job.camera_timestamp_domain = sc132_timestamp_domain;
       job.rtsp_timestamp_domain = sc132_timestamp_domain;

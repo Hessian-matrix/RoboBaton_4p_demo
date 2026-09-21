@@ -26,7 +26,6 @@ scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_dem
 本仓库、`demo/`、预编译库和公开文档按同一发布组合使用。请先确认 `VERSION`、仓库 tag 和运行包 `manifest.sha256`，不要混用不同版本的源码、头文件、动态库和运行包。
 
 板端可查询程序和运行库版本：
-
 ```bash
 cd /root/demo
 ./cam_demo --version
@@ -59,7 +58,6 @@ cd /root/demo
 ```
 
 只运行相机/RTSP：
-
 `cam_demo` 演示如何同时使用：
 
 - `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
@@ -84,7 +82,6 @@ cd /root/demo
 固定 RTSP 地址 `rtsp://<x5-ip>:558/PRR`，支持 `--fps <25|30|40|50|60>`。详细参数、运行统计与边界见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic)。
 
 只运行 IMU：
-
 ```bash
 ./imu_reader_demo
 ```
