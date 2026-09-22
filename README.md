@@ -6,7 +6,7 @@
 
 这是 RoboBaton 4P 的 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42688 IMU 示例、UART1/UART7 示例、公开头文件和匹配的预编译运行库。
 
-> **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/en/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
+> **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
 
 ## 包含内容
 
@@ -38,7 +38,7 @@ cd /root/demo
 
 各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42688`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42688`，用于发现程序与 SO 混装。
 
-这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/en/latest/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/en/latest/changelog.html)。
+这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)。
 
 ## Demo 选择
 
@@ -81,7 +81,7 @@ cd /root/demo
 ./mosaic_rtsp_demo --fps 50
 ```
 
-固定 RTSP 地址 `rtsp://<x5-ip>:558/PRR`，支持 `--fps <25|30|40|50|60>`。详细参数、运行统计与边界见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic)。
+固定 RTSP 地址 `rtsp://<x5-ip>:558/PRR`，支持 `--fps <25|30|40|50|60>`。详细参数、运行统计与边界见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-mosaic)。
 
 只运行 IMU：
 
@@ -95,7 +95,7 @@ cd /root/demo
 ./serial_port_demo
 ```
 
-首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/en/latest/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/en/latest/quick-start.html)。
+首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)。
 
 ## 开机自启动
 
@@ -123,7 +123,7 @@ cd /root/demo
 ./sensor_demo --record-mp4-dir /data/mp4_session
 ```
 
-ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只适用于 ROS1 bag。完整输出文件、停止顺序、完整性判定、partial/recovery 和离线转换见 [数据保存](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html)。
+ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只适用于 ROS1 bag。完整输出文件、停止顺序、完整性判定、partial/recovery 和离线转换见 [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
 
 ## 从源码构建
 
@@ -143,7 +143,7 @@ scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
 python3 scripts/verify_runtime_package.py demo
 ```
 
-完整工具链、依赖、构建边界和运行包验证见 [公开 Demo 源码编译](https://4p-docs.readthedocs.io/en/latest/open-source-build.html)。
+完整工具链、依赖、构建边界和运行包验证见 [公开 Demo 源码编译](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)。
 
 ## 部署
 
@@ -159,7 +159,7 @@ python3 scripts/verify_runtime_package.py demo
 → 失败恢复最近备份
 ```
 
-不要使用“先删除 `/root/demo`，再上传新包”的方式，也不要在 `cam-service` 停止时进行相机测试。完整命令见 [部署、升级与回滚](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html)。
+不要使用“先删除 `/root/demo`，再上传新包”的方式，也不要在 `cam-service` 停止时进行相机测试。完整命令见 [部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)。
 
 ## 支持边界摘要
 
@@ -169,26 +169,26 @@ python3 scripts/verify_runtime_package.py demo
 - DEBUG_UART 为 `1.8V`；UART1/UART7 为 `3.3V`。UART1/UART7 的 `3V3` 支持输入/输出和外设供电，两个接口共享合计 `500mA` 限制并支持热插拔；硬件通信已通过 V1 验收。
 - 相机运行依赖 X5 板端 `cam-service`；本仓库不是通用主机运行包。
 
-完整相机、IMU、UART、时间戳、帧率和数据语义见 [数据合同](https://4p-docs.readthedocs.io/en/latest/data-contracts.html)、[non-ROS Demo 使用](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html) 和 [硬件连接与安全](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html)。
+完整相机、IMU、UART、时间戳、帧率和数据语义见 [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)、[non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html) 和 [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)。
 
 ## 故障排查
 
-遇到启动、动态库、RTSP、IMU 或 UART 问题时，请保留 `VERSION`、manifest 校验结果、执行命令、退出码和必要日志，不要提交真实 IP、凭据或内部路径。排查入口：[故障排查](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html)。
+遇到启动、动态库、RTSP、IMU 或 UART 问题时，请保留 `VERSION`、manifest 校验结果、执行命令、退出码和必要日志，不要提交真实 IP、凭据或内部路径。排查入口：[故障排查](https://4p-docs.readthedocs.io/zh-cn/latest/troubleshooting.html)。
 
 ## 公开文档索引
 
-- [产品介绍](https://4p-docs.readthedocs.io/en/latest/Product_Introduction.html)
-- [产品版本与兼容性](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html)
-- [首次上电与开机使用](https://4p-docs.readthedocs.io/en/latest/first-boot.html)
-- [快速开始](https://4p-docs.readthedocs.io/en/latest/quick-start.html)
-- [non-ROS Demo 使用](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html)
-- [部署、升级与回滚](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html)
-- [公开 Demo 源码编译](https://4p-docs.readthedocs.io/en/latest/open-source-build.html)
-- [数据保存](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html)
-- [数据合同](https://4p-docs.readthedocs.io/en/latest/data-contracts.html)
-- [API 参考](https://4p-docs.readthedocs.io/en/latest/api-reference.html)
-- [硬件连接与安全](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html)
-- [故障排查](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html)
-- [版本更新记录](https://4p-docs.readthedocs.io/en/latest/changelog.html)
+- [产品介绍](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/Product_Introduction.html)
+- [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)
+- [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html)
+- [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)
+- [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html)
+- [部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)
+- [公开 Demo 源码编译](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)
+- [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)
+- [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)
+- [API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html)
+- [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)
+- [故障排查](https://4p-docs.readthedocs.io/zh-cn/latest/troubleshooting.html)
+- [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)
 
 许可证和第三方组件说明以本仓库的 `LICENSE` 及发布说明为准。

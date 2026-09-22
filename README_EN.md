@@ -6,7 +6,7 @@
 
 This is the public non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42688 IMU examples, UART1/UART7 examples, public headers, and matching prebuilt runtime libraries.
 
-> **The [4P_doc](https://4p-docs.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
+> **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
 
 ## Contents
 
@@ -38,7 +38,7 @@ cd /root/demo
 
 Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42688`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42688`. This detects mixed packages.
 
-These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html), [API reference](https://4p-docs.readthedocs.io/en/latest/api-reference.html), and [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html).
+These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html), [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html), and [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html).
 
 ## Choose a demo
 
@@ -76,7 +76,7 @@ UART1/UART7 example:
 ./serial_port_demo
 ```
 
-For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-docs.readthedocs.io/en/latest/first-boot.html) and [Quick start](https://4p-docs.readthedocs.io/en/latest/quick-start.html).
+For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html).
 
 ### Start sensor_demo at boot
 
@@ -104,7 +104,7 @@ Autostart is implemented through `/userdata/startup.sh`, executed by the system 
 ./sensor_demo --record-mp4-dir /data/mp4_session
 ```
 
-ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html).
+ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
 
 ## Build from source
 
@@ -125,7 +125,7 @@ scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
 python3 scripts/verify_runtime_package.py demo
 ```
 
-For toolchain preparation, dependencies, build boundaries, and package verification, see [Open-source demo build](https://4p-docs.readthedocs.io/en/latest/open-source-build.html).
+For toolchain preparation, dependencies, build boundaries, and package verification, see [Open-source demo build](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html).
 
 ## Deployment
 
@@ -141,7 +141,7 @@ unique temporary directory
 → restore the latest backup on failure
 ```
 
-Do not delete `/root/demo` before uploading a new package, and do not test the camera with `cam-service` stopped. For the complete procedure, see [Deployment, upgrade, and rollback](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html).
+Do not delete `/root/demo` before uploading a new package, and do not test the camera with `cam-service` stopped. For the complete procedure, see [Deployment, upgrade, and rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html).
 
 ## Support-boundary summary
 
@@ -151,27 +151,27 @@ Do not delete `/root/demo` before uploading a new package, and do not test the c
 - DEBUG_UART is `1.8V`; UART1/UART7 are `3.3V`. Their `3V3` pins support input/output and peripheral power; the two interfaces share a formal `500mA` limit and support hot-plugging. Hardware communication passed V1 acceptance.
 - Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
 
-For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-docs.readthedocs.io/en/latest/data-contracts.html), [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html), and [Hardware and safety](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html).
+For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html), [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html), and [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html).
 
 ## Troubleshooting
 
-When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION`, manifest results, the command, exit code, and necessary logs. Do not submit real IPs, credentials, or internal paths. Start with [Troubleshooting](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html).
+When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION`, manifest results, the command, exit code, and necessary logs. Do not submit real IPs, credentials, or internal paths. Start with [Troubleshooting](https://4p-doc-en.readthedocs.io/en/latest/troubleshooting.html).
 
 ## Public documentation index
 
-- [Product introduction](https://4p-docs.readthedocs.io/en/latest/Product_Introduction.html)
-- [Product and compatibility](https://4p-docs.readthedocs.io/en/latest/product-and-compatibility.html)
-- [First power-on](https://4p-docs.readthedocs.io/en/latest/first-boot.html)
-- [Quick start](https://4p-docs.readthedocs.io/en/latest/quick-start.html)
-- [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html)
-- [Deployment, upgrade, and rollback](https://4p-docs.readthedocs.io/en/latest/deployment-and-upgrade.html)
-- [Open-source demo build](https://4p-docs.readthedocs.io/en/latest/open-source-build.html)
-- [Data persistence](https://4p-docs.readthedocs.io/en/latest/save-data-guide.html)
-- [Data contracts](https://4p-docs.readthedocs.io/en/latest/data-contracts.html)
-- [API reference](https://4p-docs.readthedocs.io/en/latest/api-reference.html)
-- [Hardware and safety](https://4p-docs.readthedocs.io/en/latest/hardware-and-safety.html)
-- [Troubleshooting](https://4p-docs.readthedocs.io/en/latest/troubleshooting.html)
-- [Changelog](https://4p-docs.readthedocs.io/en/latest/changelog.html)
+- [Product introduction](https://4p-doc-en.readthedocs.io/en/latest/getting-started/Product_Introduction.html)
+- [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html)
+- [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html)
+- [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html)
+- [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html)
+- [Deployment, upgrade, and rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html)
+- [Open-source demo build](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html)
+- [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html)
+- [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html)
+- [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html)
+- [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html)
+- [Troubleshooting](https://4p-doc-en.readthedocs.io/en/latest/troubleshooting.html)
+- [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html)
 
 ### Mosaic RTSP Demo
 
@@ -183,6 +183,6 @@ Four-view mosaic RTSP example:
 ./mosaic_rtsp_demo --fps 50
 ```
 
-Fixed RTSP URL `rtsp://<x5-ip>:558/PRR`; supports `--fps <25|30|40|50|60>`. For detailed parameters, run statistics, and boundaries, see [non-ROS Demo usage](https://4p-docs.readthedocs.io/en/latest/non-ros-demo.html#non-ros-mosaic).
+Fixed RTSP URL `rtsp://<x5-ip>:558/PRR`; supports `--fps <25|30|40|50|60>`. For detailed parameters, run statistics, and boundaries, see [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-mosaic).
 
 License and third-party component information are defined by this repository's `LICENSE` and release documentation.
