@@ -108,22 +108,24 @@ ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete fou
 
 ## Build from source
 
-This repository is cross-compiled on the development host and the generated package runs on X5. Before building, provide matching `./include`, `./lib`, the X5 cross-compilation package, and host CMake:
+Cross-compile on an Ubuntu 22.04 x86_64 host and run the generated package on X5. Provide matching `./include`, `./lib`, the `x5_4cam_cross_toolchain_20261009` bundle, and host CMake. See the build page below for download availability and host installation steps.
 
 ```bash
-export TOOLCHAIN_FILE="/path/to/aarch64_x5_host_toolchain.cmake"
+export X5_TOOLCHAIN_ROOT="/path/to/x5_4cam_cross_toolchain_20261009"
+source "$X5_TOOLCHAIN_ROOT/setup_4cam_cross_env.sh"
 cmake -S . -B build_x5 \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
-cmake --build build_x5 -j
+cmake --build build_x5 --parallel 4
 ```
 
 Maintainers refresh the complete runtime package with:
 
 ```bash
-TOOLCHAIN_FILE=/path/to/aarch64_x5_host_toolchain.cmake scripts/build_mosaic_rtsp_demo.sh
 scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
 python3 scripts/verify_runtime_package.py demo
 ```
+
+Packaging supports standalone clones and verifies the source commit, file hashes, and complete runtime package. A custom `--build-dir` must stay inside the source repository; use a new build directory after switching bundles.
 
 For toolchain preparation, dependencies, build boundaries, and package verification, see [Open-source demo build](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html).
 

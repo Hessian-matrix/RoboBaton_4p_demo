@@ -48,11 +48,11 @@ EXPECTED_SCRIPT_COPIES = {
     "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
-    "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "bin/serial_port_demo": {"libc.so.6", "ld-linux-aarch64.so.1"},
+    "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6"},
+    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
+    "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6"},
+    "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
+    "bin/serial_port_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
     "lib/libicm42688.so.2.1.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
@@ -119,6 +119,15 @@ def dynamic_symbols(path: Path) -> set[str]:
     )
 
 
+def verify_consumer_needed(path: Path, expected: set[str]) -> None:
+    actual = needed(path)
+    # PT_INTERP is checked separately. Toolchains may also emit the loader in DT_NEEDED.
+    if actual - {"ld-linux-aarch64.so.1"} != expected:
+        raise AssertionError(
+            f"DT_NEEDED mismatch for {path}: actual={sorted(actual)} expected={sorted(expected)}"
+        )
+
+
 def verify_aarch64_executable(path: Path) -> None:
     header = readelf(path, "-h")
     elf_class = re.search(r"^\s*Class:\s+(\S+)\s*$", header, re.MULTILINE)
@@ -161,13 +170,15 @@ def workspace_context(repo_root: Path) -> tuple[Path, str]:
     repository_top = Path(git_output(repo_root, "rev-parse", "--show-toplevel")).resolve()
     if repository_top != repo_root.resolve():
         raise AssertionError(f"runtime source root is not a Git worktree root: {repo_root}")
-    if repo_root.parent.name != "sub_module":
-        raise AssertionError(f"runtime source is outside the required sub_module layout: {repo_root}")
-    workspace_root = repo_root.parents[1].resolve()
-    superproject_top = Path(git_output(workspace_root, "rev-parse", "--show-toplevel")).resolve()
-    if superproject_top != workspace_root:
-        raise AssertionError(f"runtime superproject root mismatch: {superproject_top} != {workspace_root}")
-    return workspace_root, repo_root.relative_to(workspace_root).as_posix()
+    if repo_root.parent.name == "sub_module":
+        workspace_root = repo_root.parents[1].resolve()
+        try:
+            superproject_top = Path(git_output(workspace_root, "rev-parse", "--show-toplevel")).resolve()
+        except subprocess.CalledProcessError:
+            superproject_top = None
+        if superproject_top == workspace_root:
+            return workspace_root, repo_root.relative_to(workspace_root).as_posix()
+    return repo_root.resolve(), "."
 
 
 def git_status(repo_root: Path, excluded_path: Path | None = None) -> str:
@@ -324,19 +335,23 @@ def capture_source_snapshot(
     repo_root: Path, package_dir: Path | None = None
 ) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
     workspace_root, repository_path = workspace_context(repo_root)
-    runtime_repository = workspace_root / repository_path
-    superproject_status = git_status(workspace_root, runtime_repository)
     repository_status = git_status(repo_root, package_dir)
-    superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
     repository_commit = git_output(repo_root, "rev-parse", "HEAD")
-    gitlink_commit = git_output(
-        workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
-    )
-    if gitlink_commit != repository_commit:
-        raise AssertionError(
-            "runtime provenance source HEAD does not match the superproject gitlink: "
-            f"repository={repository_commit} gitlink={gitlink_commit}"
+    superproject_commit = None
+    gitlink_commit = None
+    superproject_status = ""
+    if repository_path != ".":
+        runtime_repository = workspace_root / repository_path
+        superproject_status = git_status(workspace_root, runtime_repository)
+        superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
+        gitlink_commit = git_output(
+            workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
         )
+        if gitlink_commit != repository_commit:
+            raise AssertionError(
+                "runtime provenance source HEAD does not match the superproject gitlink: "
+                f"repository={repository_commit} gitlink={gitlink_commit}"
+            )
 
     # 允许 release 仓直接从当前工作树打包；这里记录的是 package 时刻的完整快照。
     inputs = repo_input_hashes(repo_root)
@@ -414,23 +429,26 @@ def verify_provenance(
     superproject_commit = source.get("superproject_commit")
     repository_commit = source.get("repository_commit")
     gitlink_commit = source.get("superproject_gitlink_commit")
-    for label, commit in (
-        ("superproject", superproject_commit),
-        ("runtime source", repository_commit),
-        ("superproject gitlink", gitlink_commit),
-    ):
-        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
-            raise AssertionError(f"runtime provenance {label} commit is invalid")
+    if not isinstance(repository_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", repository_commit):
+        raise AssertionError("runtime provenance runtime source commit is invalid")
+    if repository_path == ".":
+        if superproject_commit is not None or gitlink_commit is not None:
+            raise AssertionError("standalone runtime provenance must not claim a superproject")
+    else:
+        for label, commit in (("superproject", superproject_commit), ("superproject gitlink", gitlink_commit)):
+            if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+                raise AssertionError(f"runtime provenance {label} commit is invalid")
     try:
-        git_output(workspace_root, "cat-file", "-e", f"{superproject_commit}^{{commit}}")
         git_output(repo_root, "cat-file", "-e", f"{repository_commit}^{{commit}}")
-        committed_gitlink = git_output(
-            workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
-        )
+        if repository_path != ".":
+            git_output(workspace_root, "cat-file", "-e", f"{superproject_commit}^{{commit}}")
+            committed_gitlink = git_output(
+                workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
+            )
+            if committed_gitlink != repository_commit or gitlink_commit != repository_commit:
+                raise AssertionError("runtime provenance source commit/gitlink binding mismatch")
     except subprocess.CalledProcessError as error:
-        raise AssertionError("runtime provenance source commit is unavailable") from error
-    if committed_gitlink != repository_commit or gitlink_commit != repository_commit:
-        raise AssertionError("runtime provenance source commit/gitlink binding mismatch")
+        raise AssertionError("runtime provenance source commit is unavailable")
 
     repository_states = provenance.get("repository_states")
     if not isinstance(repository_states, dict):
@@ -532,12 +550,7 @@ def verify_package(
     for relative, expected_needed in EXPECTED_NEEDED.items():
         executable = package_dir / relative
         verify_aarch64_executable(executable)
-        actual_needed = needed(executable)
-        if actual_needed != expected_needed:
-            raise AssertionError(
-                f"DT_NEEDED mismatch for {relative}: actual={sorted(actual_needed)} "
-                f"expected={sorted(expected_needed)}"
-            )
+        verify_consumer_needed(executable, expected_needed)
 
     for relative, expected_needed in EXPECTED_LIBRARY_NEEDED.items():
         actual_needed = needed(package_dir / relative)

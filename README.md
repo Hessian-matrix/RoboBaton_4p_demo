@@ -127,13 +127,14 @@ ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只�
 
 ## 从源码构建
 
-本仓库用于开发机交叉编译，X5 板端只运行生成的运行包。构建前需要匹配的 `./include`、`./lib`、X5 交叉编译包和主机 CMake：
+本仓库在 Ubuntu 22.04 x86_64 开发机交叉编译，X5 板端运行生成的运行包。构建前准备匹配的 `./include`、`./lib`、`x5_4cam_cross_toolchain_20261009` 工具包和主机 CMake；下载发布状态与主机安装步骤见下方源码编译页。
 
 ```bash
-export TOOLCHAIN_FILE="/path/to/aarch64_x5_host_toolchain.cmake"
+export X5_TOOLCHAIN_ROOT="/path/to/x5_4cam_cross_toolchain_20261009"
+source "$X5_TOOLCHAIN_ROOT/setup_4cam_cross_env.sh"
 cmake -S . -B build_x5 \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
-cmake --build build_x5 -j
+cmake --build build_x5 --parallel 4
 ```
 
 维护者刷新完整运行包时使用：
@@ -142,6 +143,8 @@ cmake --build build_x5 -j
 scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
 python3 scripts/verify_runtime_package.py demo
 ```
+
+打包支持独立克隆仓库，校验源提交、文件哈希及完整运行包。自定义 `--build-dir` 必须位于源码仓库内；切换工具包后使用新的构建目录。
 
 完整工具链、依赖、构建边界和运行包验证见 [公开 Demo 源码编译](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)。
 
