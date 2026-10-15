@@ -30,7 +30,7 @@ MIN_GROUP_ID=""
 OUTPUT_DIR="${PROJECT_DIR}/regression_logs"
 KILL_EXISTING=0
 KEEP_REMOTE_LOG=0
-TRIGGER_MODE="software_gpio"
+TRIGGER_MODE="vin_lpwm"
 
 usage() {
   cat <<'USAGE'
@@ -48,7 +48,7 @@ Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
   --fps <25|30|40|50|60>  Camera/encoder FPS, default 30
-  --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio or none; default software_gpio/GPIO417
+  --trigger-mode <mode>       SC132_TRIGGER_MODE: vin_lpwm or none; default vin_lpwm (VIN 硬件触发)
   --output-dir <path>         Local log output directory, default ./regression_logs
 
 Evaluation thresholds:
@@ -100,9 +100,9 @@ if ! [[ "${FPS}" =~ ^[0-9]+$ ]] || (( FPS != 25 && FPS != 30 && FPS != 40 && FPS
 fi
 
 case "${TRIGGER_MODE}" in
-  software_gpio|gpio|none|off) ;;
+  vin_lpwm|lpwm|none|off) ;;
   *)
-    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported values are software_gpio and none" >&2
+    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported values are vin_lpwm and none" >&2
     exit 2
     ;;
 esac
@@ -353,7 +353,7 @@ fi
 ssh_remote "cat '${REMOTE_LOG}' 2>/dev/null || true" > "${LOCAL_LOG}"
 echo "log=${LOCAL_LOG}"
 
-fatal_pattern='Segmentation fault|core dumped|symbol lookup error|GLIBCXX|undefined symbol|No Camera Sensor found|create_and_run_vflow failed|failed for sensor|ret[ =-]+-36|ret[ =-]+-10|init RTSP channel .* failed|invalid NV12 DMA|transform pool exhausted|queue_full_rejects=[1-9][0-9]*|timestamp queue invalid|no valid GPIO417 trigger timestamp|SC frame queue closed or full'
+fatal_pattern='Segmentation fault|core dumped|symbol lookup error|GLIBCXX|undefined symbol|No Camera Sensor found|create_and_run_vflow failed|failed for sensor|ret[ =-]+-36|ret[ =-]+-10|init RTSP channel .* failed|invalid NV12 DMA|transform pool exhausted|queue_full_rejects=[1-9][0-9]*|timestamp queue invalid|no valid software GPIO trigger timestamp|SC frame queue closed or full'
 fatal_matches="$(grep -Ein "${fatal_pattern}" "${LOCAL_LOG}" || true)"
 if [[ -n "${fatal_matches}" ]]; then
   echo "${fatal_matches}" >&2

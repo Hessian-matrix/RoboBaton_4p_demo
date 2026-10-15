@@ -16,7 +16,7 @@
 #include <thread>
 
 extern "C" {
-#include "icm42688_driver.h"
+#include "icm42670_driver.h"
 #include "prrtsp_v2.h"
 #include "sc132camera.h"
 }
@@ -338,6 +338,7 @@ std::string TerminalToken(const std::string& value) {
 struct ImuStats {
   uint64_t samples = 0U;
   uint64_t invalid_samples = 0U;
+  uint64_t invalid_packet_drops = 0U;
   uint64_t timestamp_duplicates = 0U;
   uint64_t timestamp_regressions = 0U;
   uint64_t sequence_gaps = 0U;
@@ -357,85 +358,56 @@ struct ImuStats {
   uint32_t max_timestamp_uncertainty_us = 0U;
   uint32_t previous_mapper_failure_count = 0U;
   bool max_consecutive_drops_valid = true;
-
   void ObserveMapperFailureCount(uint32_t mapper_failure_count) noexcept {
     if (mapper_failure_count < previous_mapper_failure_count) {
       max_consecutive_drops_valid = false;
     } else {
       const uint32_t delta = mapper_failure_count - previous_mapper_failure_count;
-      if (delta > max_consecutive_drops) {
-        max_consecutive_drops = delta;
-      }
+      if (delta > max_consecutive_drops) max_consecutive_drops = delta;
     }
     previous_mapper_failure_count = mapper_failure_count;
-    if (mapper_failure_count > timing_sample_drops) {
-      timing_sample_drops = mapper_failure_count;
-    }
+    if (mapper_failure_count > timing_sample_drops) timing_sample_drops = mapper_failure_count;
   }
-
-  void Observe(const icm42688_sample_t& sample) noexcept {
-    if (sample.struct_size != sizeof(sample)) {
-      ++invalid_samples;
-      return;
-    }
-
+  void Observe(const icm42670_sample_t& sample) noexcept {
+    if (sample.struct_size != sizeof(sample)) { ++invalid_samples; return; }
     ObserveMapperFailureCount(sample.mapper_failure_count);
     if (sample_sequence_initialized) {
-      if (sample.sample_sequence == last_sample_sequence) {
-        ++sequence_duplicates;
-      } else if (sample.sample_sequence < last_sample_sequence) {
-        ++sequence_regressions;
-      } else {
+      if (sample.sample_sequence == last_sample_sequence) ++sequence_duplicates;
+      else if (sample.sample_sequence < last_sample_sequence) ++sequence_regressions;
+      else {
         const uint64_t missing = sample.sample_sequence - last_sample_sequence - 1U;
-        sequence_gaps = missing > std::numeric_limits<uint64_t>::max() - sequence_gaps
-                            ? std::numeric_limits<uint64_t>::max()
-                            : sequence_gaps + missing;
+        sequence_gaps = missing > std::numeric_limits<uint64_t>::max() - sequence_gaps ? std::numeric_limits<uint64_t>::max() : sequence_gaps + missing;
       }
     }
-    last_sample_sequence = sample.sample_sequence;
-    sample_sequence_initialized = true;
+    last_sample_sequence = sample.sample_sequence; sample_sequence_initialized = true;
     gpio_event_gap_count = std::max(gpio_event_gap_count, sample.gpio_event_gap_count);
     fifo_overflow_count = std::max(fifo_overflow_count, sample.fifo_overflow_count);
-    if (sample.timestamp_uncertainty_us > max_timestamp_uncertainty_us) {
-      max_timestamp_uncertainty_us = sample.timestamp_uncertainty_us;
-    }
+    max_timestamp_uncertainty_us = std::max(max_timestamp_uncertainty_us, sample.timestamp_uncertainty_us);
     const uint64_t timestamp_ns = sample.sample_timestamp_ns;
-    // 第一帧只建立时基，不产生采样间隔。
-    if (samples == 0U) {
-      first_timestamp_ns = timestamp_ns;
-    } else if (timestamp_ns == last_timestamp_ns) {
-      ++timestamp_duplicates;
-    } else if (timestamp_ns < last_timestamp_ns) {
-      ++timestamp_regressions;
-    } else {
-      // 只有前进的时间戳参与采样间隔统计。
+    if (samples == 0U) first_timestamp_ns = timestamp_ns;
+    else if (timestamp_ns == last_timestamp_ns) ++timestamp_duplicates;
+    else if (timestamp_ns < last_timestamp_ns) ++timestamp_regressions;
+    else {
       const uint64_t delta_ns = timestamp_ns - last_timestamp_ns;
-      if (min_dt_ns == 0U || delta_ns < min_dt_ns) {
-        min_dt_ns = delta_ns;
-      }
-      if (delta_ns > max_dt_ns) {
-        max_dt_ns = delta_ns;
-      }
+      if (min_dt_ns == 0U || delta_ns < min_dt_ns) min_dt_ns = delta_ns;
+      if (delta_ns > max_dt_ns) max_dt_ns = delta_ns;
       dt_sum_ns += delta_ns;
     }
-    last_timestamp_ns = timestamp_ns;
-    ++samples;
+    last_timestamp_ns = timestamp_ns; ++samples;
   }
-
   double EffectiveHz() const noexcept {
-    if (samples < 2U || last_timestamp_ns <= first_timestamp_ns) {
-      return 0.0;
-    }
-    return static_cast<double>(samples - 1U) * 1'000'000'000.0 /
-           static_cast<double>(last_timestamp_ns - first_timestamp_ns);
+    if (samples < 2U || last_timestamp_ns <= first_timestamp_ns) return 0.0;
+    return static_cast<double>(samples - 1U) * 1'000'000'000.0 / static_cast<double>(last_timestamp_ns - first_timestamp_ns);
   }
 };
 
+
 robobaton_demo::H264Mp4SourceHealth MakeMp4SourceHealth(
-    const ImuStats& stats, const icm42688_runtime_health_t* final_health) noexcept {
+    const ImuStats& stats, const icm42670_runtime_health_t* final_health) noexcept {
   robobaton_demo::H264Mp4SourceHealth health;
   health.samples = stats.samples;
   health.invalid_samples = stats.invalid_samples;
+  health.invalid_packet_drops = 0U;
   health.timestamp_duplicates = stats.timestamp_duplicates;
   health.timestamp_regressions = stats.timestamp_regressions;
   health.sequence_gaps = stats.sequence_gaps;
@@ -453,18 +425,13 @@ robobaton_demo::H264Mp4SourceHealth MakeMp4SourceHealth(
   if (health.producer_final_health_valid) {
     health.producer_session_generation = final_health->session_generation;
     health.producer_published_samples = final_health->published_samples;
-    health.gpio_event_gap_count =
-        std::max(health.gpio_event_gap_count, final_health->gpio_event_gap_count);
-    health.fifo_overflow_count =
-        std::max(health.fifo_overflow_count, final_health->fifo_overflow_count);
-    if (final_health->mapper_failure_count < stats.previous_mapper_failure_count) {
-      health.mapper_counter_valid = false;
-    }
+    health.gpio_event_gap_count = std::max(health.gpio_event_gap_count, final_health->gpio_event_gap_count);
+    health.fifo_overflow_count = std::max(health.fifo_overflow_count, final_health->fifo_overflow_count);
+    if (final_health->mapper_failure_count < stats.previous_mapper_failure_count) health.mapper_counter_valid = false;
     health.timing_sample_drops = final_health->mapper_failure_count;
-    health.max_consecutive_drops = std::max(
-        health.max_consecutive_drops, final_health->max_consecutive_timing_drop_count);
-    health.uncertainty_over_200_drops =
-        final_health->uncertainty_over_200_drop_count;
+    health.invalid_packet_drops = final_health->invalid_packet_drop_count;
+    health.max_consecutive_drops = std::max(health.max_consecutive_drops, final_health->max_consecutive_timing_drop_count);
+    health.uncertainty_over_200_drops = final_health->uncertainty_over_200_drop_count;
   } else {
     health.mapper_counter_valid = false;
   }
@@ -478,7 +445,7 @@ struct SensorDemoShutdownContext {
   std::thread* imu_thread = nullptr;
   std::atomic<int>* imu_result = nullptr;
   ImuStats* imu_stats = nullptr;
-  icm42688_runtime_health_t* imu_final_health = nullptr;
+  icm42670_runtime_health_t* imu_final_health = nullptr;
   int* exit_code = nullptr;
   bool record_bag_requested = false;
   bool record_mp4_requested = false;
@@ -552,7 +519,7 @@ struct SensorImuObserverState {
   robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
 };
 
-void ObserveSensorImuSample(const icm42688_sample_t& sample, void* user) {
+void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
   auto* state = static_cast<SensorImuObserverState*>(user);
   if (state == nullptr) {
     return;
@@ -579,7 +546,7 @@ SensorDemoImuStatsTestResult ObserveSensorDemoImuStatsForTest(
     const uint32_t* mapper_failure_counts, std::size_t count) {
   ImuStats stats;
   for (std::size_t index = 0; index < count; ++index) {
-    icm42688_sample_t sample{};
+    icm42670_sample_t sample{};
     sample.struct_size = sizeof(sample);
     sample.sample_timestamp_ns = static_cast<uint64_t>(index + 1U) * 1'000'000ULL;
     sample.mapper_failure_count = mapper_failure_counts[index];
@@ -602,8 +569,8 @@ bool SensorDemoMp4CameraMaskAllowedForTest(uint32_t camera_mask) noexcept {
 }
 
 H264Mp4SourceHealth SensorDemoMp4SourceHealthForTest(
-    const icm42688_sample_t* samples, std::size_t count,
-    const icm42688_runtime_health_t* final_health) {
+    const icm42670_sample_t* samples, std::size_t count,
+    const icm42670_runtime_health_t* final_health) {
   ImuStats stats;
   if (samples == nullptr && count != 0U) {
     stats.max_consecutive_drops_valid = false;
@@ -634,8 +601,8 @@ int main(int argc, char** argv) {
 
   if (argc == 2 && std::string(argv[1]) == "--version") {
     std::cout << "sensor_demo " << ROBOBATON_RELEASE_VERSION << "\n"
-              << "libicm42688 " << icm42688_get_version() << " abi="
-              << ICM42688_ABI_VERSION_MAJOR << "." << ICM42688_ABI_VERSION_MINOR << "\n"
+              << "libicm42670 " << icm42670_get_version() << " abi="
+              << ICM42670_ABI_VERSION_MAJOR << "." << ICM42670_ABI_VERSION_MINOR << "\n"
               << "libsc132 " << sc132_get_version() << " abi="
               << SC132_ABI_VERSION_MAJOR << "." << SC132_ABI_VERSION_MINOR << "\n"
               << "libprrtsp " << prrtsp_get_version() << " abi=2.0\n";
@@ -657,7 +624,7 @@ int main(int argc, char** argv) {
   // 0 同时表示参数错误等硬件前失败路径尚未启动 IMU 线程。
   std::atomic<int> imu_result{0};
   ImuStats imu_stats;
-  icm42688_runtime_health_t imu_final_health = ICM42688_RUNTIME_HEALTH_INIT;
+  icm42670_runtime_health_t imu_final_health = ICM42670_RUNTIME_HEALTH_INIT;
   ImuPrintState imu_print_state;
   SensorImuObserverState imu_observer;
   ImuConsumerOptions imu_options;
@@ -666,7 +633,7 @@ int main(int argc, char** argv) {
   std::unique_ptr<FramePipeline> pipeline;
   std::unique_ptr<FrozenSystemClock> system_clock;
   std::unique_ptr<ScopedNonblockingFd> output_mode;
-  uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  uint32_t imu_sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   SensorBagRecorder recorder;
   H264Mp4Recorder mp4_recorder;
   TeeCaptureRecorder capture_recorder;

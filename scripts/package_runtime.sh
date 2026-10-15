@@ -21,7 +21,7 @@ Behavior:
   prebuilt runtime libraries already present in ./lib, then publish a verified
   runtime package to ./demo.
 
-  This script does not build ICM42688, SC132, or PRRTSP producer sources.
+  This script does not build ICM42670, SC132, or PRRTSP producer sources.
   Producer libraries and the public ICM header must already be present in this
   release repository before this script is run.
 
@@ -143,16 +143,16 @@ fi
 
 
 for library in \
-  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
+  libicm42670.so.2.0.0 libicm42670.so.2 libicm42670.so \
+  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
     echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
     exit 1
   fi
 done
-if [[ ! -f "${PROJECT_DIR}/include/icm42688_driver.h" ]]; then
-  echo "Missing release public header: ${PROJECT_DIR}/include/icm42688_driver.h" >&2
+if [[ ! -f "${PROJECT_DIR}/include/icm42670_driver.h" ]]; then
+  echo "Missing release public header: ${PROJECT_DIR}/include/icm42670_driver.h" >&2
   exit 1
 fi
 if [[ ! -f "${PROJECT_DIR}/config/sensor_config.yaml" ]]; then
@@ -245,8 +245,8 @@ cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
-  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
+  libicm42670.so.2.0.0 libicm42670.so.2 libicm42670.so \
+  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done

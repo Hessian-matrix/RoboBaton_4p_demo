@@ -13,7 +13,7 @@
 #include "frozen_system_clock.h"
 
 extern "C" {
-#include "icm42688_driver.h"
+#include "icm42670_driver.h"
 }
 
 namespace robobaton_demo {
@@ -33,8 +33,8 @@ constexpr int kDefaultDiagnosticIntervalMs = 1000;
 constexpr uint32_t kDefaultSourceLivenessTimeoutMs = 2000U;
 constexpr uint64_t kDefaultFrameSetMaxSkewNs = SC132_FRAME_SET_DEFAULT_MAX_SKEW_NS;
 constexpr uint32_t kDefaultFrameSetTimeoutMs = 100;
-constexpr const char* kDefaultSc132TriggerMode = "software_gpio";
-constexpr uint32_t kDefaultImuSampleRateHz = 1000U;
+constexpr const char* kDefaultSc132TriggerMode = "vin_lpwm";
+constexpr uint32_t kDefaultImuSampleRateHz = 800U;
 constexpr uint32_t kDefaultCaptureFrameCount = 100U;
 constexpr uint32_t kDefaultCaptureWarmupSeconds = 5U;
 constexpr uint32_t kMaxCaptureWarmupSeconds = 60U;
@@ -89,7 +89,7 @@ struct Options {
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
   uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
-  uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  uint32_t imu_sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
@@ -145,11 +145,11 @@ struct QueuedFrame {
 
 struct ImuConsumerOptions {
   uint32_t sample_rate_hz = kDefaultImuSampleRateHz;
-  uint32_t sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  uint32_t sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
   const FrozenSystemClock* system_clock = nullptr;
-  icm42688_runtime_health_t* final_health = nullptr;
+  icm42670_runtime_health_t* final_health = nullptr;
 };
 
 #ifdef RELEASE008_TESTING
@@ -158,7 +158,7 @@ uint32_t ImuIdleWaitCountForTest();
 std::size_t ImuPendingCapacityForTest();
 #endif
 
-using ImuSampleObserver = void (*)(const icm42688_sample_t& sample, void* user);
+using ImuSampleObserver = void (*)(const icm42670_sample_t& sample, void* user);
 
 // adapter 独占 ICM C handle，并在 callback trampoline 截断 observer 异常。
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
@@ -212,7 +212,7 @@ struct ImuPrintState {
 uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz);
 // CLI observer 使用单次非阻塞 write；慢/关闭的输出端只丢日志，
 // 消费仍覆盖每个 IMU 样本。
-void PrintImuSample(const icm42688_sample_t& sample, void* user);
+void PrintImuSample(const icm42670_sample_t& sample, void* user);
 
 uint64_t SteadyClockNowNs();
 int RtspPortForChannel(const Options& options, int channel);

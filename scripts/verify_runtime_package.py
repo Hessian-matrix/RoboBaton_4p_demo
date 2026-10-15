@@ -23,23 +23,23 @@ RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
     "bin/mosaic_rtsp_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
-    "bin/sensor_demo": {"ICM42688_X5_2.0", "ICM42688_X5_2.1",
+    "bin/imu_reader_demo": {"ICM42670_X5_2.0"},
+    "bin/sensor_demo": {"ICM42670_X5_2.0",
                         "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42688.so.2.1.0": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
-    "lib/libsc132.so.2.0.1": {"LIBSC132_2.0"},
+    "lib/libicm42670.so.2.0.0": {"ICM42670_X5_2.0"},
+    "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
     "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42688.so.2.1.0": "libicm42688.so.2",
-    "lib/libsc132.so.2.0.1": "libsc132.so.2",
+    "lib/libicm42670.so.2.0.0": "libicm42670.so.2",
+    "lib/libsc132.so.2.0.0": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
 }
 EXPECTED_LIBRARY_COPIES = {
-    "lib/libicm42688.so.2.1.0": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
-    "lib/libsc132.so.2.0.1": {"lib/libsc132.so.2", "lib/libsc132.so"},
+    "lib/libicm42670.so.2.0.0": {"lib/libicm42670.so.2", "lib/libicm42670.so"},
+    "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
     "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
 }
 EXPECTED_SCRIPT_COPIES = {
@@ -48,15 +48,15 @@ EXPECTED_SCRIPT_COPIES = {
     "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
-    "bin/imu_reader_demo": {"libicm42688.so.2", "libm.so.6", "libc.so.6"},
-    "bin/sensor_demo": {"libicm42688.so.2", "libsc132.so.2", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
+    "bin/imu_reader_demo": {"libicm42670.so.2", "libm.so.6", "libc.so.6"},
+    "bin/sensor_demo": {"libicm42670.so.2", "libsc132.so.2", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
     "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6"},
     "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
     "bin/serial_port_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42688.so.2.1.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libsc132.so.2.0.1": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42670.so.2.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
@@ -222,7 +222,7 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
         repo_root / "VERSION",
         repo_root / "CMakeLists.txt",
         repo_root / "config/sensor_config.yaml",
-        repo_root / "include/icm42688_driver.h",
+        repo_root / "include/icm42670_driver.h",
         repo_root / "include/sc132camera.h",
         repo_root / "include/prrtsp_v2.h",
         repo_root / "scripts/package_runtime.sh",
@@ -566,7 +566,7 @@ def verify_package(
         old_versions = {
             name
             for name in versions
-            if name.endswith("_1.0") and name.startswith(("ICM42688_", "LIBSC132_", "LIBPRRTSP_"))
+            if name.startswith("ICM42688_") or (name.endswith("_1.0") and name.startswith(("LIBSC132_", "LIBPRRTSP_")))
         }
         if missing_versions or old_versions:
             raise AssertionError(
@@ -589,8 +589,8 @@ def verify_package(
             )
 
     version_getters = {
-        "lib/libicm42688.so.2.1.0": "icm42688_get_version",
-        "lib/libsc132.so.2.0.1": "sc132_get_version",
+        "lib/libicm42670.so.2.0.0": "icm42670_get_version",
+        "lib/libsc132.so.2.0.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
     }
     for relative, symbol in version_getters.items():

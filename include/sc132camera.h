@@ -72,7 +72,7 @@ typedef struct sc132_frame_set {
 
 /*
  * DMA 帧只允许只读访问；以下合同明确时间域、借用引用和跨回调保留规则。
- * timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的 GPIO417
+ * timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的公共触发线
  * 上升沿时间，组内各路完全相同；其他模式优先使用 sensor/VIO 随帧时间，缺失时退回
  * 系统出帧时间。所有模式均不保证与墙上时钟同域。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。

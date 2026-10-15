@@ -21,14 +21,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.0")
-if(NOT EXISTS "${ICM42688_SO}")
-  message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.1.0 and compatibility copies exist in this demo's lib/ directory.")
+set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2.0.0")
+if(NOT EXISTS "${ICM42670_SO}")
+  message(FATAL_ERROR "Missing ${ICM42670_SO}. Run the canonical producer build so libicm42670.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
-set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.1")
+set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.1 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
 set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0")
@@ -74,9 +74,9 @@ if(NOT X5_MULTIMEDIA_SO OR NOT X5_HBMEM_SO)
   message(FATAL_ERROR "Missing X5 multimedia/hbmem libraries required by sensor_demo --record-bag")
 endif()
 
-add_library(icm42688_x5 SHARED IMPORTED GLOBAL)
-set_target_properties(icm42688_x5 PROPERTIES
-  IMPORTED_LOCATION "${ICM42688_SO}"
+add_library(icm42670_x5 SHARED IMPORTED GLOBAL)
+set_target_properties(icm42670_x5 PROPERTIES
+  IMPORTED_LOCATION "${ICM42670_SO}"
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
@@ -179,7 +179,7 @@ target_compile_options(mosaic_rtsp_demo PRIVATE
 )
 target_compile_definitions(sensor_demo PRIVATE SENSOR_DEMO_NO_MAIN)
 
-target_link_libraries(imu_reader_demo PRIVATE icm42688_x5)
+target_link_libraries(imu_reader_demo PRIVATE icm42670_x5)
 target_link_options(imu_reader_demo PRIVATE
   -static-libstdc++
   -static-libgcc
@@ -206,7 +206,7 @@ if(X5_HOBOT_LIB_DIR)
   target_link_options(mosaic_rtsp_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
 target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
-target_link_libraries(sensor_demo PRIVATE icm42688_x5 sc132_v2 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
+target_link_libraries(sensor_demo PRIVATE icm42670_x5 sc132_v2 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
 target_link_libraries(mosaic_rtsp_demo PRIVATE sc132_v2 prrtsp_v2 ${X5_HBMEM_SO} Threads::Threads)
 target_link_options(cam_demo PRIVATE
   -static-libstdc++
@@ -220,7 +220,7 @@ target_link_options(mosaic_rtsp_demo PRIVATE
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
 )
-# libicm42688 已依赖共享 C++ 运行库，sensor_demo 复用同一映射，避免静态和动态运行库同时驻留。
+# libicm42670 已依赖共享 C++ 运行库，sensor_demo 复用同一映射，避免静态和动态运行库同时驻留。
 target_link_options(sensor_demo PRIVATE
   "LINKER:--export-dynamic"
   "LINKER:--no-allow-shlib-undefined"
@@ -256,10 +256,10 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo mosaic_rts
 )
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.1"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0"
@@ -269,7 +269,7 @@ install(FILES
 )
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/icm42688_driver.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/icm42670_driver.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/sc132camera.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/include/prrtsp_v2.h"
   DESTINATION include

@@ -4,9 +4,11 @@
 
 ![RoboBaton 4P](image/4P_Cam.png)
 
-这是 RoboBaton 4P 的 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42688 IMU 示例、UART1/UART7 示例、公开头文件和匹配的预编译运行库。
+这是 RoboBaton 4P 的 V2 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42670-P IMU 示例、UART1/UART7 示例、公开头文件和匹配的预编译运行库。
 
 > **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
+
+当前源码使用 `icm42670_*` / `icm42670_driver.h`，SONAME `libicm42670.so.2`、real SO `libicm42670.so.2.0.0`、符号节点 `ICM42670_X5_2.0`。旧 V1 下载包不能用于该接口；软件 `VERSION` 不因硬件切换自动递增，V2 实板验收状态须单独确认。上图是 V1 产品示意，不是 V2 pinout 或照片证据。
 
 ## 包含内容
 
@@ -36,7 +38,7 @@ cd /root/demo
 ./serial_port_demo --version
 ```
 
-各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42688`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42688`，用于发现程序与 SO 混装。
+各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42670`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42670`，用于发现程序与 SO 混装。
 
 这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)。
 
@@ -168,8 +170,9 @@ python3 scripts/verify_runtime_package.py demo
 
 - 相机输出为 NV12，默认 `1280x1088`，可选 VSE 硬件整幅缩放画布 `640x480`、`720x480`、`1280x720`；RTSP 默认 H.264、H.265 可选，path 为 `/PRR`，四路默认端口为 `554..557`。
 - 相机公开支持 `25/30/40/50/60fps`，默认 `30fps`；`rotate=180` 只支持 `30fps`。
-- IMU 支持 `25/50/100/200/500/1000/2000Hz`，默认 `1000Hz`，使用 sensor-timestamp FIFO；当前不提供TF 或标定。
-- DEBUG_UART 为 `1.8V`；UART1/UART7 为 `3.3V`。UART1/UART7 的 `3V3` 支持输入/输出和外设供电，两个接口共享合计 `500mA` 限制并支持热插拔；硬件通信已通过 V1 验收。
+- IMU 原生支持 `25/50/100/200/400/800/1600Hz`，默认 `800Hz`，使用 sensor-timestamp FIFO；旧 `500/1000/2000Hz` 明确拒绝，不会自动重采样。
+- 相机触发由 producer 解析 `34130000.gpio` offset `0`，INT1 为 `34120000.gpio` offset `8`。V2 IMU FSYNC 输入与相机触发共网，但不提供相机/IMU 硬件对齐、TF 或标定。
+- V2 UART pinout、电平、供电限值与热插拔边界待确认；V1 的 `500mA` 限值和历史验收不能用于 V2 接线。
 - 相机运行依赖 X5 板端 `cam-service`；本仓库不是通用主机运行包。
 
 完整相机、IMU、UART、时间戳、帧率和数据语义见 [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)、[non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html) 和 [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)。

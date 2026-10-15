@@ -365,7 +365,7 @@ void WriteImuHeader(std::ostream& output) {
   output << '\n';
 }
 
-void WriteImuRow(std::ostream& output, const icm42688_sample_t& sample) {
+void WriteImuRow(std::ostream& output, const icm42670_sample_t& sample) {
   output << sample.sample_timestamp_ns << ',' << sample.sample_sequence
          << ",imu_link,0.000000000000000,0.000000000000000,0.000000000000000,"
             "1.000000000000000";
@@ -820,10 +820,10 @@ class H264Mp4Recorder::Impl {
     condition_.notify_one();
   }
 
-  void ObserveImu(const icm42688_sample_t& sample) noexcept {
+  void ObserveImu(const icm42670_sample_t& sample) noexcept {
     std::unique_lock<std::mutex> lock(mutex_);
     if (!started_ || stopping_) return;
-    if (sample.struct_size < sizeof(icm42688_sample_t) ||
+    if (sample.struct_size < sizeof(icm42670_sample_t) ||
         sample.sample_timestamp_ns == 0U ||
         (last_imu_timestamp_ns_ != 0U &&
          sample.sample_timestamp_ns <= last_imu_timestamp_ns_)) {
@@ -924,6 +924,7 @@ class H264Mp4Recorder::Impl {
         source_health.samples > 0U &&
         source_health.samples == stats.imu_samples_admitted &&
         source_health.invalid_samples == 0U &&
+        source_health.invalid_packet_drops == 0U &&
         source_health.timestamp_duplicates == 0U &&
         source_health.timestamp_regressions == 0U &&
         source_health.sequence_gaps == 0U &&
@@ -1246,7 +1247,7 @@ class H264Mp4Recorder::Impl {
   void WorkerEntry() noexcept {
     while (true) {
       EncodedJob frame;
-      std::array<icm42688_sample_t, kImuWriteBatch> imu_batch{};
+      std::array<icm42670_sample_t, kImuWriteBatch> imu_batch{};
       size_t imu_count = 0U;
       bool have_frame = false;
       {
@@ -1486,6 +1487,8 @@ class H264Mp4Recorder::Impl {
              << "  \"imu_source_samples\": " << source_health.samples << ",\n"
              << "  \"imu_source_invalid_samples\": "
              << source_health.invalid_samples << ",\n"
+             << "  \"imu_source_invalid_packet_drops\": "
+             << source_health.invalid_packet_drops << ",\n"
              << "  \"imu_source_timestamp_duplicates\": "
              << source_health.timestamp_duplicates << ",\n"
              << "  \"imu_source_timestamp_regressions\": "
@@ -1762,7 +1765,7 @@ class H264Mp4Recorder::Impl {
   std::condition_variable condition_;
   std::thread worker_;
   std::deque<EncodedJob> encoded_queue_;
-  std::deque<icm42688_sample_t> imu_queue_;
+  std::deque<icm42670_sample_t> imu_queue_;
   std::array<std::ofstream, kMaxChannels> raw_files_;
   std::array<std::ofstream, kMaxChannels> timestamp_files_;
   std::array<std::vector<uint8_t>, kMaxChannels> cached_sps_;
@@ -1831,7 +1834,7 @@ void H264Mp4Recorder::ObserveEncodedFrame(
   if (enabled()) impl_->ObserveEncodedFrame(camera_id, frame);
 }
 
-void H264Mp4Recorder::ObserveImu(const icm42688_sample_t& sample) noexcept {
+void H264Mp4Recorder::ObserveImu(const icm42670_sample_t& sample) noexcept {
   if (enabled()) impl_->ObserveImu(sample);
 }
 

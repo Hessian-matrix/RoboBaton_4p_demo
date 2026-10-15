@@ -22,7 +22,7 @@
 #include <thread>
 
 extern "C" {
-#include "icm42688_driver.h"
+#include "icm42670_driver.h"
 }
 
 #ifndef ROBOBATON_RELEASE_VERSION
@@ -47,7 +47,7 @@ struct IcmCallbackContext {
   std::atomic<uint32_t> emitted{0U};
   std::mutex pending_mutex;
   // 固定容量 FIFO 保持 burst 顺序并避免 callback 路径动态分配。
-  std::array<icm42688_sample_t, kPendingCapacity> pending_samples{};
+  std::array<icm42670_sample_t, kPendingCapacity> pending_samples{};
   std::size_t pending_head = 0U;
   std::size_t pending_size = 0U;
   ImuSampleObserver observer = nullptr;
@@ -55,7 +55,7 @@ struct IcmCallbackContext {
 };
 
 // callback 只发布数据或首错；stop/destroy 由 lifecycle owner 执行。
-void IcmCallback(const icm42688_sample_t* sample, void* user) noexcept {
+void IcmCallback(const icm42670_sample_t* sample, void* user) noexcept {
   auto* context = static_cast<IcmCallbackContext*>(user);
   if (context == nullptr || !context->accepting.load(std::memory_order_acquire)) {
     return;
@@ -113,46 +113,46 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     return 1;
   }
 
-  icm42688_config_t config = ICM42688_CONFIG_INIT;
+  icm42670_config_t config = ICM42670_CONFIG_INIT;
   config.sample_rate_hz = options.sample_rate_hz;
   config.fifo_watermark_samples = 1U;
-  config.read_mode = ICM42688_READ_MODE_SENSOR_TIMESTAMP_FIFO;
-  // 策略通过 ABI v2 reserved[0] 传递，不能扩展公开 config 布局。
-  config.reserved[ICM42688_CONFIG_SAMPLE_DROP_POLICY_INDEX] = options.sample_drop_policy;
+  config.read_mode = ICM42670_READ_MODE_SENSOR_TIMESTAMP_FIFO;
+  // reserved[0] carries the sample-drop policy in the fixed config layout.
+  config.reserved[ICM42670_CONFIG_SAMPLE_DROP_POLICY_INDEX] = options.sample_drop_policy;
 
   if (options.final_health != nullptr) {
-    *options.final_health = ICM42688_RUNTIME_HEALTH_INIT;
+    *options.final_health = ICM42670_RUNTIME_HEALTH_INIT;
   }
   IcmCallbackContext context;
   context.observer = observer;
   context.observer_user = observer_user;
-  icm42688_handle_t* handle = nullptr;
+  icm42670_handle_t* handle = nullptr;
 
-  int result = icm42688_create(&config, &handle);
-  if (result != ICM42688_STATUS_OK || handle == nullptr) {
+  int result = icm42670_create(&config, &handle);
+  if (result != ICM42670_STATUS_OK || handle == nullptr) {
     if (handle != nullptr) {
-      icm42688_destroy(handle);
+      icm42670_destroy(handle);
     }
     return 1;
   }
 
-  result = icm42688_set_callback(handle, IcmCallback, &context);
-  if (result != ICM42688_STATUS_OK) {
+  result = icm42670_set_callback(handle, IcmCallback, &context);
+  if (result != ICM42670_STATUS_OK) {
     context.accepting.store(false, std::memory_order_release);
-    icm42688_destroy(handle);
+    icm42670_destroy(handle);
     return 1;
   }
 
-  result = icm42688_start(handle);
-  if (result != ICM42688_STATUS_OK) {
+  result = icm42670_start(handle);
+  if (result != ICM42670_STATUS_OK) {
     context.accepting.store(false, std::memory_order_release);
     // start 失败后仍由 create owner 销毁非空 handle。
-    icm42688_destroy(handle);
+    icm42670_destroy(handle);
     return 1;
   }
 
   bool count_reached = false;
-  const auto emit_sample = [&](icm42688_sample_t sample) noexcept {
+  const auto emit_sample = [&](icm42670_sample_t sample) noexcept {
     try {
       if (options.system_clock != nullptr) {
         sample.host_timestamp_ns = options.system_clock->MapRawNs(sample.host_timestamp_ns);
@@ -175,7 +175,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
          (options.stop_requested == nullptr ||
           !options.stop_requested->load(std::memory_order_acquire)) &&
          !context.callback_failed.load(std::memory_order_acquire)) {
-    icm42688_sample_t sample{};
+    icm42670_sample_t sample{};
     bool has_sample = false;
     {
       std::lock_guard<std::mutex> lock(context.pending_mutex);
@@ -204,7 +204,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
         g_imu_signal_stop != 0 ||
         (options.stop_requested != nullptr &&
          options.stop_requested->load(std::memory_order_acquire));
-    if (!owner_stop_requested && icm42688_is_running(handle) == 0) {
+    if (!owner_stop_requested && icm42670_is_running(handle) == 0) {
       // producer 在未达 count 且未收到 owner 停止请求前退出，只能在空队列边界确认已 drain 后 fail-closed。
       context.callback_failed.store(true, std::memory_order_release);
       context.accepting.store(false, std::memory_order_release);
@@ -235,14 +235,14 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   if (!drain_after_stop) {
     close_admission();
   }
-  const int stop_result = icm42688_stop(handle);
+  const int stop_result = icm42670_stop(handle);
   if (drain_after_stop) {
     close_admission();
   }
-  if (drain_after_stop && stop_result == ICM42688_STATUS_OK &&
+  if (drain_after_stop && stop_result == ICM42670_STATUS_OK &&
       !context.callback_failed.load(std::memory_order_acquire)) {
     while (true) {
-      icm42688_sample_t sample{};
+      icm42670_sample_t sample{};
       {
         std::lock_guard<std::mutex> lock(context.pending_mutex);
         if (context.pending_size == 0U) {
@@ -258,16 +258,16 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
       }
     }
   }
-  int health_result = ICM42688_STATUS_OK;
+  int health_result = ICM42670_STATUS_OK;
   if (options.final_health != nullptr) {
-    health_result = stop_result == ICM42688_STATUS_OK
-                        ? icm42688_get_runtime_health(handle, options.final_health)
-                        : ICM42688_STATUS_INVALID_STATE;
+    health_result = stop_result == ICM42670_STATUS_OK
+                        ? icm42670_get_runtime_health(handle, options.final_health)
+                        : ICM42670_STATUS_INVALID_STATE;
   }
   const bool failed = context.callback_failed.load(std::memory_order_acquire) ||
-                      stop_result != ICM42688_STATUS_OK ||
-                      health_result != ICM42688_STATUS_OK;
-  icm42688_destroy(handle);
+                      stop_result != ICM42670_STATUS_OK ||
+                      health_result != ICM42670_STATUS_OK;
+  icm42670_destroy(handle);
   return failed ? 1 : 0;
 }
 
@@ -280,7 +280,7 @@ uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz) {
          (sample_rate_hz % print_rate_hz == 0U ? 0U : 1U);
 }
 
-void PrintImuSample(const icm42688_sample_t& sample, void* user) {
+void PrintImuSample(const icm42670_sample_t& sample, void* user) {
   auto* state = static_cast<ImuPrintState*>(user);
   if (state == nullptr) {
     return;
@@ -424,9 +424,9 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
                               "--sample-rate-hz");
       if (options.sample_rate_hz != 25U && options.sample_rate_hz != 50U &&
           options.sample_rate_hz != 100U && options.sample_rate_hz != 200U &&
-          options.sample_rate_hz != 500U && options.sample_rate_hz != 1000U &&
-          options.sample_rate_hz != 2000U) {
-        throw std::invalid_argument("--sample-rate-hz must be 25, 50, 100, 200, 500, 1000, or 2000");
+          options.sample_rate_hz != 400U && options.sample_rate_hz != 800U &&
+          options.sample_rate_hz != 1600U) {
+        throw std::invalid_argument("--sample-rate-hz must be 25, 50, 100, 200, 400, 800, or 1600");
       }
     } else if (argument == "--count") {
       options.count =
@@ -440,7 +440,7 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       print_metrics_enabled = true;
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: imu_reader_demo [options]:\n"
-                << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+                << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
                 << robobaton_demo::kDefaultImuSampleRateHz << "\n"
                 << "  --count N Number of IMU samples to consume before exit, default 0 (run until signal)\n"
                 << "  --print-rate-hz HZ Terminal output rate, default min(sample-rate-hz, 10); 0 disables output\n"
@@ -469,8 +469,8 @@ int main(int argc, char** argv) {
   try {
     if (argc == 2 && std::string(argv[1]) == "--version") {
       std::cout << "imu_reader_demo " << ROBOBATON_RELEASE_VERSION << "\n"
-                << "libicm42688 " << icm42688_get_version() << " abi="
-                << ICM42688_ABI_VERSION_MAJOR << "." << ICM42688_ABI_VERSION_MINOR << "\n";
+                << "libicm42670 " << icm42670_get_version() << " abi="
+                << ICM42670_ABI_VERSION_MAJOR << "." << ICM42670_ABI_VERSION_MINOR << "\n";
       return 0;
     }
     signal(SIGINT, SignalHandler);

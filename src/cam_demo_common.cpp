@@ -85,9 +85,9 @@ const char* VideoCodecName(VideoCodec codec) noexcept {
 
 const char* ImuSampleDropPolicyName(uint32_t policy) noexcept {
   switch (policy) {
-    case ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED:
+    case ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED:
       return "allow-counted";
-    case ICM42688_SAMPLE_DROP_POLICY_STRICT:
+    case ICM42670_SAMPLE_DROP_POLICY_STRICT:
       return "strict";
     default:
       return "invalid";

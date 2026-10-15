@@ -438,7 +438,7 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   }
   encoded_queue_count_ = 0U;
   encoded_input_closed_ = false;
-  imu_queue_.assign(kImuQueueCapacity, icm42688_sample_t{});
+  imu_queue_.assign(kImuQueueCapacity, icm42670_sample_t{});
   imu_queue_head_ = 0U;
   imu_queue_count_ = 0U;
   frame_queue_at_capacity_ = QueueAtCapacityTracker{};
@@ -760,7 +760,7 @@ void SensorBagRecorder::ObserveFrameSet(const sc132_frame_set_t& frame_set) {
   }
 }
 
-void SensorBagRecorder::ObserveImu(const icm42688_sample_t& sample) {
+void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
   if (!enabled_) {
     return;
   }
@@ -1258,7 +1258,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
   ApplyRecorderWorkerPriority(kRecorderWriterNice);
   std::vector<uint8_t> imu_payload;
   imu_payload.reserve(320U);
-  std::array<icm42688_sample_t, kWriterImuHighWatermarkDrainBatch> imu_batch{};
+  std::array<icm42670_sample_t, kWriterImuHighWatermarkDrainBatch> imu_batch{};
   std::vector<PendingEncodedWrite> pending_images;
   pending_images.reserve(kWriterImagePrefetchLimit);
   size_t pending_image_head = 0U;
@@ -1314,7 +1314,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
       return false;
     }
   };
-  const auto write_imu_sample = [&](const icm42688_sample_t& sample) -> bool {
+  const auto write_imu_sample = [&](const icm42670_sample_t& sample) -> bool {
     try {
       WriteImuSample(sample, &imu_payload);
       image_burst_count = 0U;
@@ -1551,7 +1551,7 @@ void SensorBagRecorder::ReleaseEncodedFrameJob(EncodedFrameJob* encoded) noexcep
   }
 }
 
-size_t SensorBagRecorder::PopImuBatch(icm42688_sample_t* samples,
+size_t SensorBagRecorder::PopImuBatch(icm42670_sample_t* samples,
                                       size_t max_samples) noexcept {
   if (samples == nullptr || max_samples == 0U) {
     return 0U;
@@ -1748,7 +1748,7 @@ void SensorBagRecorder::WriteEncodedFrameToBag(const EncodedFrameJob& encoded,
   }
   ObserveWriterTiming(order_wait_ns, 0U, writer_hold_ns, true);
 }
-void SensorBagRecorder::WriteImuSample(const icm42688_sample_t& sample,
+void SensorBagRecorder::WriteImuSample(const icm42670_sample_t& sample,
                                        std::vector<uint8_t>* payload) {
   if (payload == nullptr) {
     throw std::runtime_error("missing IMU payload buffer");

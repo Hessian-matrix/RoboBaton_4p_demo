@@ -39,6 +39,7 @@ struct H264Mp4RecorderStats {
 struct H264Mp4SourceHealth {
   uint64_t samples = 0U;
   uint64_t invalid_samples = 0U;
+  uint64_t invalid_packet_drops = 0U;
   uint64_t timestamp_duplicates = 0U;
   uint64_t timestamp_regressions = 0U;
   uint64_t sequence_gaps = 0U;
@@ -91,7 +92,7 @@ class H264Mp4Recorder final {
   void Start(const Options& options, const std::string& output_directory);
   void ObserveEncodedFrame(int camera_id,
                            const prrtsp_encoded_frame_v2& frame) noexcept;
-  void ObserveImu(const icm42688_sample_t& sample) noexcept;
+  void ObserveImu(const icm42670_sample_t& sample) noexcept;
   void SetSourceHealth(const H264Mp4SourceHealth& health) noexcept;
   H264Mp4FinishResult Finish(bool session_success) noexcept;
   void Abort() noexcept;

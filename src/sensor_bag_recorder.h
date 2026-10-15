@@ -147,7 +147,7 @@ class SensorBagRecorder final {
   FrameSetAdmissionStatus TryAcceptFrameSet(const sc132_frame_set_t& frame_set) noexcept;
   void ObserveFrame(const QueuedFrame& frame);
   void ObserveFrameSet(const sc132_frame_set_t& frame_set);
-  void ObserveImu(const icm42688_sample_t& sample);
+  void ObserveImu(const icm42670_sample_t& sample);
   SensorBagFinishResult Finish(bool session_success) noexcept;
   void Abort() noexcept;
 
@@ -212,7 +212,7 @@ class SensorBagRecorder final {
   void StopWorkers() noexcept;
   bool PopFrame(int camera_id, SensorBagFrameJob* job) noexcept;
   bool PopNextEncodedFrame(EncodedFrameJob* encoded, uint64_t* order_wait_ns) noexcept;
-  size_t PopImuBatch(icm42688_sample_t* samples, size_t max_samples) noexcept;
+  size_t PopImuBatch(icm42670_sample_t* samples, size_t max_samples) noexcept;
   bool WriterInputReady() noexcept;
   bool WriterInputsClosed() noexcept;
   bool HasClosedEncodedOrderGap() noexcept;
@@ -222,7 +222,7 @@ class SensorBagRecorder final {
   void ReleaseEncodedFrameJob(EncodedFrameJob* encoded) noexcept;
   void PublishEncodedFrame(EncodedFrameJob encoded);
   void WriteEncodedFrameToBag(const EncodedFrameJob& encoded, uint64_t order_wait_ns);
-  void WriteImuSample(const icm42688_sample_t& sample, std::vector<uint8_t>* payload);
+  void WriteImuSample(const icm42670_sample_t& sample, std::vector<uint8_t>* payload);
   void ObserveCopyTiming(uint64_t copy_ns,
                          const X5JpegNv12CopyResult& copy_result) noexcept;
   void ObserveJpegTiming(uint64_t encode_ns) noexcept;
@@ -272,7 +272,7 @@ class SensorBagRecorder final {
   std::vector<std::thread> workers_;
   std::mutex imu_queue_mutex_;
   std::condition_variable imu_queue_condition_;
-  std::vector<icm42688_sample_t> imu_queue_;
+  std::vector<icm42670_sample_t> imu_queue_;
   std::mutex encoded_mutex_;
   std::condition_variable encoded_condition_;
   std::vector<EncodedFrameSlot> encoded_slots_;

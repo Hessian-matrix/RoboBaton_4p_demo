@@ -44,12 +44,12 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --max-skew-ns <ns> Frame-set timestamp skew limit, default "
             << kDefaultFrameSetMaxSkewNs << "\n"
             << "  --frame-timeout-ms <ms> Frame-set pending timeout, default 100\n"
-            << "  --trigger-mode <software_gpio|none> SC132 trigger output mode, default "
+            << "  --trigger-mode <vin_lpwm|none> SC132 trigger output mode, default "
             << kDefaultSc132TriggerMode << "\n";
   if (include_imu_options) {
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
               << " YAML config is loaded before CLI options; missing file is created with defaults\n";
-    std::cout << "  --sample-rate-hz <25|50|100|200|500|1000|2000> IMU sample rate, default "
+    std::cout << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
 
     std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
@@ -148,10 +148,10 @@ VideoCodec ParseVideoCodec(const std::string& text) {
 // 将 sensor_demo 的策略文本映射到 ABI v2 reserved[0] 允许的公开枚举。
 uint32_t ParseImuSampleDropPolicy(const std::string& text) {
   if (text == "allow-counted") {
-    return ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+    return ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   }
   if (text == "strict") {
-    return ICM42688_SAMPLE_DROP_POLICY_STRICT;
+    return ICM42670_SAMPLE_DROP_POLICY_STRICT;
   }
   throw std::invalid_argument(
       "--imu-sample-drop-policy must be allow-counted or strict");
@@ -225,13 +225,13 @@ void FinalizeParsedOptions(Options* options, const ParseState& config_state,
   ValidateOptions(*options, cli_state.record_frame_skip_set);
 }
 
-// 功能：按 libicm42688 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
+// 功能：按 libicm42670 C ABI 当前公开的离散 ODR 表校验 IMU 采样率。
 // 输入：sample_rate_hz 为用户命令行值。
 // 输出：支持则 true，否则 false。
 bool IsSupportedImuSampleRateHz(uint32_t sample_rate_hz) {
   return sample_rate_hz == 25U || sample_rate_hz == 50U || sample_rate_hz == 100U ||
-         sample_rate_hz == 200U || sample_rate_hz == 500U || sample_rate_hz == 1000U ||
-         sample_rate_hz == 2000U;
+         sample_rate_hz == 200U || sample_rate_hz == 400U || sample_rate_hz == 800U ||
+         sample_rate_hz == 1600U;
 }
 
 // 功能：按libsc132当前公开的离散帧率表校验相机帧率。
@@ -298,7 +298,7 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--frame-timeout-ms must be positive");
   }
   if (!IsSupportedImuSampleRateHz(options.imu_sample_rate_hz)) {
-    throw std::invalid_argument("--sample-rate-hz must be 25, 50, 100, 200, 500, 1000, or 2000");
+    throw std::invalid_argument("--sample-rate-hz must be 25, 50, 100, 200, 400, 800, or 1600");
   }
   if (options.record_frame_skip > 1U) {
     throw std::invalid_argument("--record-frame-skip must be 0 or 1");
@@ -326,12 +326,12 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
   }
-  if (options.imu_sample_drop_policy > ICM42688_SAMPLE_DROP_POLICY_STRICT) {
+  if (options.imu_sample_drop_policy > ICM42670_SAMPLE_DROP_POLICY_STRICT) {
     throw std::invalid_argument(
         "--imu-sample-drop-policy must be allow-counted or strict");
   }
-  if (options.trigger_mode != "software_gpio" && options.trigger_mode != "none") {
-    throw std::invalid_argument("--trigger-mode must be one of software_gpio or none");
+  if (options.trigger_mode != "vin_lpwm" && options.trigger_mode != "none") {
+    throw std::invalid_argument("--trigger-mode must be one of vin_lpwm or none");
   }
   if (!options.capture_directory.empty() && options.capture_directory.front() != '/') {
     throw std::invalid_argument("--capture-dir/capture.save_path path must be absolute");
@@ -485,16 +485,22 @@ Options ParseSensorDemoCommandLineWithConfig(int argc, char** argv, Options opti
   return ParseCommandLineImpl(argc, argv, true, std::move(options), sensor_config_state);
 }
 
-// 功能：把命令行选择的触发模式写入 libsc132 使用的环境变量。
-// 输入：options.trigger_mode，支持 software_gpio、none 以及兼容别名。
-// 副作用：覆盖当前进程的 SC132_TRIGGER_MODE；software_gpio 模式使用 GPIO417。
+// 功能：把触发模式写入 libsc132 使用的环境变量。
+// 输入：options.trigger_mode，公开只接受 vin_lpwm、none。
+// 环境变量已预设 SC132_TRIGGER_MODE 时保留预设值，供 software_gpio 调试路径直驱。
+// 副作用：设置进程内环境变量 SC132_TRIGGER_MODE；触发线路由 libsc132 的板级绑定决定。
 void ConfigureSc132TriggerMode(const Options& options) {
-  // 命令行参数优先于 shell 环境。
+  const char* preset = std::getenv(kSc132TriggerModeEnv);
+  if (preset != nullptr && preset[0] != '\0') {
+    std::cout << kSc132TriggerModeEnv << "=" << preset
+              << " (preset env retained for software_gpio debug)\n";
+    return;
+  }
   if (setenv(kSc132TriggerModeEnv, options.trigger_mode.c_str(), 1) != 0) {
     throw std::runtime_error("set SC132_TRIGGER_MODE failed");
   }
   std::cout << kSc132TriggerModeEnv << "=" << options.trigger_mode
-            << " (GPIO417 is used when mode=software_gpio)\n";
+            << " (trigger ownership is resolved by libsc132)\n";
 }
 
 // 功能：为内部单颗25fps smoke自动补齐兼容的60fps base sensor profile。

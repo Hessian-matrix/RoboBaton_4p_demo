@@ -4,9 +4,11 @@
 
 ![RoboBaton 4P](image/4P_Cam.png)
 
-This is the public non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42688 IMU examples, UART1/UART7 examples, public headers, and matching prebuilt runtime libraries.
+This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42670-P IMU examples, UART1/UART7 examples, public headers, and matching prebuilt runtime libraries.
 
 > **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
+
+Current source uses `icm42670_*` / `icm42670_driver.h`, SONAME `libicm42670.so.2`, real SO `libicm42670.so.2.0.0`, and symbol node `ICM42670_X5_2.0`. Old V1 downloads do not implement this interface; software `VERSION` does not automatically increase with the hardware cutover, and V2 board acceptance must be established separately. The image above is a V1 product illustration, not V2 pinout or photographic evidence.
 
 ## Contents
 
@@ -36,7 +38,7 @@ cd /root/demo
 ./serial_port_demo --version
 ```
 
-Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42688`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42688`. This detects mixed packages.
+Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42670`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42670`. This detects mixed packages.
 
 These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html), [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html), and [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html).
 
@@ -149,8 +151,9 @@ Do not delete `/root/demo` before uploading a new package, and do not test the c
 
 - Camera output is NV12, `1280x1088` by default, with optional VSE hardware full-frame scaled canvases `640x480`, `720x480`, and `1280x720`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
 - The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
-- The IMU supports `25/50/100/200/500/1000/2000Hz`, default `1000Hz`, and uses the sensor-timestamp FIFO path. TF and calibration are not provided.
-- DEBUG_UART is `1.8V`; UART1/UART7 are `3.3V`. Their `3V3` pins support input/output and peripheral power; the two interfaces share a formal `500mA` limit and support hot-plugging. Hardware communication passed V1 acceptance.
+- The IMU natively supports `25/50/100/200/400/800/1600Hz`, default `800Hz`, using sensor-timestamp FIFO. Old `500/1000/2000Hz` values are explicitly rejected, not silently resampled.
+- The producer resolves camera trigger controller `34130000.gpio` offset `0`; INT1 uses `34120000.gpio` offset `8`. The V2 IMU FSYNC input shares the camera trigger net, but camera/IMU hardware alignment, TF, and calibration are not provided.
+- V2 UART pinout, voltage levels, power limits, and hot-plug boundaries are pending confirmation; the V1 `500mA` limit and historical acceptance cannot be used for V2 wiring.
 - Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
 
 For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html), [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html), and [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html).
