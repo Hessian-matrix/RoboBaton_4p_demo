@@ -8,7 +8,7 @@
 
 > **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
 
-当前源码使用 `icm42670_*` / `icm42670_driver.h`，SONAME `libicm42670.so.2`、real SO `libicm42670.so.2.0.0`、符号节点 `ICM42670_X5_2.0`。旧 V1 下载包不能用于该接口；软件 `VERSION` 不因硬件切换自动递增，V2 实板验收状态须单独确认。上图是 V1 产品示意，不是 V2 pinout 或照片证据。
+当前源码使用 `icm42670_*` / `icm42670_driver.h`，SONAME `libicm42670.so.2`、real SO `libicm42670.so.2.0.0`。IMU ABI 2.1 的基础函数保留 `ICM42670_X5_2.0`，新增 FSYNC callback 位于 `ICM42670_X5_2.1`。旧 V1 下载包不能用于该接口；软件版本、文档修订和板端验收分别识别，同一版本字符串不证明 manifest 相同。上图是 V1 产品示意，不是 V2 pinout 或照片证据。
 
 ## 包含内容
 
@@ -22,6 +22,8 @@ scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_dem
 ```
 
 用户通常只需要 `demo/`。不要只替换单个 ELF、单个 `.so` 或配置文件。
+
+当前相机 ABI 2.2 在 `sc132_frame_info_t.exposure` 中提供逐帧冻结的 ISP 曝光观测；bag 帧元数据、MP4 `exposure.jsonl` 和 tee 索引同步保存。`status=1` 仅为估计值，不是该帧实际生效曝光或真实曝光中心；`status=0` 为不可用。字段、关联键及限制见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)。
 
 ## 版本与运行包匹配
 
@@ -48,6 +50,7 @@ cd /root/demo
 |---|---|
 | `sensor_demo` | 四路相机、RTSP 和 IMU 联合运行；可选择 ROS1 bag 或 H.264 MP4 保存 |
 | `cam_demo` | 四路相机和 RTSP |
+| `mosaic_rtsp_demo` | 四路 NV12 拼接为一路 RTSP，默认端口 `558` |
 | `imu_reader_demo` | 独立 IMU 读取 |
 | `serial_port_demo` | UART1/UART7 串口示例；不适用于 DEBUG_UART |
 
@@ -127,6 +130,8 @@ cd /root/demo
 
 ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只适用于 ROS1 bag。完整输出文件、停止顺序、完整性判定、partial/recovery 和离线转换见 [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
 
+当前 MP4 session 始终创建 `exposure.jsonl` 和 `fsync.jsonl`，后者仅在 FSYNC 启用后有记录。曝光 sidecar 是输入帧观测，可能多于编码保存帧；按相机与微秒量化组触发时间对照 CSV，不按行号或源帧号直接索引 MP4。默认 `--imu-sample-drop-policy allow-counted` 可继续计数丢样；bag complete 不单独保证 producer 零丢样，MP4 complete 还检查最终 producer 健康和样本计数。完整数据集必须回读实际载荷，不能只看退出码或 MP4 能否播放。
+
 ## 从源码构建
 
 本仓库在 Ubuntu 22.04 x86_64 开发机交叉编译，X5 板端运行生成的运行包。构建前准备匹配的 `./include`、`./lib`、`x5_4cam_cross_toolchain_20261009` 工具包和主机 CMake；下载发布状态与主机安装步骤见下方源码编译页。
@@ -171,8 +176,10 @@ python3 scripts/verify_runtime_package.py demo
 - 相机输出为 NV12，默认 `1280x1088`，可选 VSE 硬件整幅缩放画布 `640x480`、`720x480`、`1280x720`；RTSP 默认 H.264、H.265 可选，path 为 `/PRR`，四路默认端口为 `554..557`。
 - 相机公开支持 `25/30/40/50/60fps`，默认 `30fps`；`rotate=180` 只支持 `30fps`。
 - IMU 原生支持 `25/50/100/200/400/800/1600Hz`，默认 `800Hz`，使用 sensor-timestamp FIFO；旧 `500/1000/2000Hz` 明确拒绝，不会自动重采样。
-- 相机触发由 producer 解析 `34130000.gpio` offset `0`，INT1 为 `34120000.gpio` offset `8`。V2 IMU FSYNC 输入与相机触发共网，但不提供相机/IMU 硬件对齐、TF 或标定。
-- V2 UART pinout、电平、供电限值与热插拔边界待确认；V1 的 `500mA` 限值和历史验收不能用于 V2 接线。
+- 所有相机采集入口仅支持 VIN LPWM 硬件触发；相机与 IMU FSYNC 共用 LPWM IO，INT1 为 `34120000.gpio` offset `8`。相机硬件触发沿、IMU 样本及 INT1 时间统一映射至 `CLOCK_REALTIME`，CLI/保存原样保留；bag record time 独立读取 realtime。运行中桥接持续更新，允许系统校时回拨，内部超时仍用单调时钟。相机需要 X5 `/dev/mem` 只读访问；捕获/有界映射缺失即停止，不用到帧时间兜底。同域不提供 FSYNC 样本/曝光关联、TF 或标定。
+- `sensor_demo --fsync --sample-rate-hz 1600` 或 YAML `imu.fsync_enabled: true` 显式开启触发—样本关联（默认关闭，仅 `800/1600Hz`）；结果输出 stdout、bag `/robobaton/fsync` 或 MP4 `fsync.jsonl`。只接受 `status=1`，缺失/歧义显式报告；不改变采样相位，不承诺曝光同步或零丢失。
+- IMU consumer 使用 `SCHED_RR/3`，采集 owner 使用 `SCHED_FIFO/20`，相机 RAW observer 使用 `SCHED_FIFO/60`，独立 INT1 时钟 observer 使用 `SCHED_FIFO/30`；两个 observer 均继承允许 CPU 集合、每轮休眠 `50µs`，需实时调度权限。INT1 observer 低于板端默认 GPIO IRQ 的 FIFO/50，并在 SPI 等待和 callback 延迟期间保留沿时证书。跨优先级队列使用优先级继承锁，但应用不自动修改系统 IRQ/debug 配置。压测须检查 stop 后最终 `IMU_RUNTIME_HEALTH` 并回读实际保存载荷；计数丢弃不等于零丢失。
+- UART1/UART7 保持 `3.3V`，DEBUG_UART 保持 `1.8V`；V2 UART7 5pin 有独立 IO 默认作 PPS 输入，无需复用 RX/TX。完整 pinout、供电脚限值与热插拔边界以正式 V2 硬件资料为准，不沿用 V1 `500mA` 或历史验收。
 - 相机运行依赖 X5 板端 `cam-service`；本仓库不是通用主机运行包。
 
 完整相机、IMU、UART、时间戳、帧率和数据语义见 [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)、[non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html) 和 [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)。

@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 #define ICM42670_ABI_VERSION_MAJOR 2U
-#define ICM42670_ABI_VERSION_MINOR 0U
+#define ICM42670_ABI_VERSION_MINOR 1U
 
 typedef struct icm42670_handle icm42670_handle_t;
 
@@ -40,6 +40,10 @@ typedef enum icm42670_sample_drop_policy {
 } icm42670_sample_drop_policy_t;
 
 #define ICM42670_CONFIG_SAMPLE_DROP_POLICY_INDEX 0U
+/* Set reserved[1] to 1 for rising-edge hardware FSYNC capture; default is off. */
+#define ICM42670_CONFIG_FSYNC_ENABLE_INDEX 1U
+#define ICM42670_HEALTH_FSYNC_CAPTURED_INDEX 0U
+#define ICM42670_HEALTH_FSYNC_DROPPED_INDEX 1U
 
 typedef struct icm42670_config {
   uint32_t struct_size;
@@ -80,12 +84,13 @@ typedef struct icm42670_sample {
   uint32_t struct_size;
   /* reserved0 reports observed FIFO timestamp low16 rollovers in this session. */
   uint32_t reserved0;
-  /* host_timestamp_ns is the paired INT1 edge converted to CLOCK_MONOTONIC_RAW. */
+  /* Paired INT1 edge in CLOCK_REALTIME system ns; not the sample timestamp. */
   uint64_t host_timestamp_ns;
   double temperature_c;
   double accel_mps2[3];
   double gyro_rps[3];
   icm42670_raw_sample_t raw;
+  /* FIFO TMST→RAW→CLOCK_REALTIME sample time; follows wall-clock steps, including backward. */
   uint64_t sample_timestamp_ns;
   uint64_t sample_sequence;
   uint32_t timestamp_uncertainty_us;
@@ -102,6 +107,30 @@ typedef struct icm42670_sample {
  */
 typedef void (*icm42670_sample_callback_t)(const icm42670_sample_t *sample,
                                            void *user_data);
+
+/* Same admitted sample, delivered after its sample callback on the same worker.
+ * RAW fields are for association only; public timestamps remain CLOCK_REALTIME.
+ * uncertainty_ns bounds the reconstructed edge, including FIFO reconstruction.
+ * Sequence counts every hardware tag, including events rejected by timing policy.
+ * Lifetime, exception and stop rules are identical to the sample callback.
+ */
+typedef struct icm42670_fsync_event {
+  uint32_t struct_size;
+  uint32_t session_generation;
+  uint64_t fsync_sequence;
+  uint64_t sample_sequence;
+  uint64_t sample_timestamp_ns;
+  uint64_t fsync_timestamp_ns;
+  uint64_t sample_raw_timestamp_ns;
+  uint64_t fsync_raw_timestamp_ns;
+  uint64_t fsync_to_sample_ns;
+  uint64_t uncertainty_ns;
+} icm42670_fsync_event_t;
+typedef void (*icm42670_fsync_callback_t)(const icm42670_fsync_event_t *event,
+                                         void *user_data);
+ICM42670_X5_API int icm42670_set_fsync_callback(icm42670_handle_t *handle,
+                                               icm42670_fsync_callback_t callback,
+                                               void *user_data);
 
 ICM42670_X5_API int icm42670_create(const icm42670_config_t *config,
                                     icm42670_handle_t **out_handle);

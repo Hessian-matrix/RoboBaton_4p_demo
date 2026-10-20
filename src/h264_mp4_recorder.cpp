@@ -1,3 +1,4 @@
+#include "fsync_association.h"
 #include "h264_mp4_recorder.h"
 
 #include <fcntl.h>
@@ -617,7 +618,7 @@ class H264Mp4Recorder::Impl {
   };
 
   void Start(const Options& options, const std::string& output_directory) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     if (started_) {
       throw std::logic_error("H264 MP4 recorder already started");
     }
@@ -686,6 +687,10 @@ class H264Mp4Recorder::Impl {
             << "frame_index,timestamp_ns,key_frame,encoded_bytes\n";
       }
       imu_file_.open(staging_path_ / "imu.csv", std::ios::trunc);
+      fsync_file_.open(staging_path_ / "fsync.jsonl", std::ios::trunc);
+      exposure_file_.open(staging_path_ / "exposure.jsonl", std::ios::trunc);
+      if (!exposure_file_) throw std::runtime_error("open exposure sidecar failed");
+      if (!fsync_file_) throw std::runtime_error("open FSYNC sidecar failed");
       if (!imu_file_) {
         throw std::runtime_error("open H264 MP4 IMU CSV failed");
       }
@@ -704,7 +709,7 @@ class H264Mp4Recorder::Impl {
 
   void ObserveEncodedFrame(int camera_id,
                            const prrtsp_encoded_frame_v2& frame) noexcept {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_ || !CameraEnabled(camera_mask_, camera_id)) return;
     if (frame.struct_size < PRRTSP_ENCODED_FRAME_V2_0_SIZE ||
         frame.codec != PRRTSP_CODEC_H264 || frame.data_address == 0U ||
@@ -747,13 +752,6 @@ class H264Mp4Recorder::Impl {
       SetFatalLocked("invalid encoded H264 timestamp");
       return;
     }
-    if (last_seen_timestamp_ns_[camera_id] != 0U &&
-        frame.timestamp_ns <= last_seen_timestamp_ns_[camera_id]) {
-      DropEncodedFrameLocked(camera_id, false, false);
-      SetFatalLocked("encoded H264 timestamp is not strictly increasing");
-      return;
-    }
-    last_seen_timestamp_ns_[camera_id] = frame.timestamp_ns;
     const bool key_frame = access_unit.has_idr;
     if (resync_required_[camera_id] && !key_frame) {
       DropEncodedFrameLocked(camera_id, false, false);
@@ -820,18 +818,41 @@ class H264Mp4Recorder::Impl {
     condition_.notify_one();
   }
 
+  void ObserveFsync(const FsyncAssociationRecord& record) noexcept {
+    std::lock_guard<RealtimeMutex> lock(mutex_);
+    if (!started_ || stopping_) return;
+    if (fsync_count_ == fsync_queue_.size()) { SetFatalLocked("FSYNC MP4 queue full"); return; }
+    fsync_queue_[(fsync_head_ + fsync_count_++) % fsync_queue_.size()] = record;
+    condition_.notify_one();
+  }
+  void ObserveFrameSet(const sc132_frame_set_t& set) noexcept {
+    std::lock_guard<RealtimeMutex> lock(mutex_);
+    if (!started_ || stopping_) return;
+    if (set.camera_count > kMaxChannels ||
+        exposure_count_ + set.camera_count > exposure_queue_.size()) {
+      SetFatalLocked("exposure MP4 queue full or invalid frame set"); return;
+    }
+    for (uint32_t i = 0; i < set.camera_count; ++i) {
+      sc132_frame_info_t info{}; info.struct_size = sizeof(info);
+      if (sc132_frame_get_info(set.items[i].frame, &info) != SC132_STATUS_OK) {
+        SetFatalLocked("read MP4 source exposure failed"); return;
+      }
+      exposure_queue_[(exposure_head_ + exposure_count_++) % exposure_queue_.size()] =
+          ExposureRecord{info.camera_id, info.raw_frame_id, info.frame_id,
+                         set.group_id, set.group_timestamp_ns, info.timestamp_ns, info.exposure};
+    }
+    condition_.notify_one();
+  }
   void ObserveImu(const icm42670_sample_t& sample) noexcept {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_) return;
     if (sample.struct_size < sizeof(icm42670_sample_t) ||
         sample.sample_timestamp_ns == 0U ||
-        (last_imu_timestamp_ns_ != 0U &&
-         sample.sample_timestamp_ns <= last_imu_timestamp_ns_)) {
+        (last_imu_sequence_ != 0U && sample.sample_sequence <= last_imu_sequence_)) {
       ++stats_.imu_samples_dropped;
-      // producer 已独立记录无效/重复/回退；recorder 将其归为可发布的显式 partial。
       return;
     }
-    last_imu_timestamp_ns_ = sample.sample_timestamp_ns;
+    last_imu_sequence_ = sample.sample_sequence;
     if (imu_queue_.size() >= kImuQueueCapacity) {
       ++stats_.imu_samples_dropped;
       return;
@@ -852,7 +873,7 @@ class H264Mp4Recorder::Impl {
   }
 
   void SetSourceHealth(const H264Mp4SourceHealth& health) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_) return;
     source_health_ = health;
     source_health_set_ = true;
@@ -860,7 +881,7 @@ class H264Mp4Recorder::Impl {
 
   H264Mp4FinishResult Finish(bool session_success) noexcept {
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (finished_) return finish_result_;
       if (!started_) {
         finished_ = true;
@@ -875,7 +896,7 @@ class H264Mp4Recorder::Impl {
     if (worker_.joinable()) worker_.join();
     const bool outputs_closed = CloseOutputs();
     if (!outputs_closed) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       SetFatalLocked("close H264 MP4 outputs failed");
     }
 
@@ -896,7 +917,7 @@ class H264Mp4Recorder::Impl {
     bool source_health_set = false;
     std::string fatal_error;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       stats = stats_;
       source_health = source_health_;
       source_health_set = source_health_set_;
@@ -925,8 +946,6 @@ class H264Mp4Recorder::Impl {
         source_health.samples == stats.imu_samples_admitted &&
         source_health.invalid_samples == 0U &&
         source_health.invalid_packet_drops == 0U &&
-        source_health.timestamp_duplicates == 0U &&
-        source_health.timestamp_regressions == 0U &&
         source_health.sequence_gaps == 0U &&
         source_health.sequence_duplicates == 0U &&
         source_health.sequence_regressions == 0U &&
@@ -1068,7 +1087,7 @@ class H264Mp4Recorder::Impl {
       }
     }
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       finish_result_ = result;
       finished_ = true;
       started_ = false;
@@ -1077,36 +1096,36 @@ class H264Mp4Recorder::Impl {
   }
 
   bool HasFatalError() const noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     return !error_.empty();
   }
 
   std::string ErrorMessage() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     return error_;
   }
 
   H264Mp4RecorderStats SnapshotStats() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     return stats_;
   }
 
 #ifdef RELEASE008_TESTING
   void PauseWriterForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     writer_paused_ = true;
   }
 
   void ResumeWriterForTest() noexcept {
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       writer_paused_ = false;
     }
     condition_.notify_all();
   }
 
   void SetEncodedQueueCapacityForTest(std::size_t capacity) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     if (encoded_queue_.empty() && capacity > 0U &&
         capacity <= kEncodedQueueCapacity) {
       encoded_queue_capacity_ = capacity;
@@ -1115,7 +1134,7 @@ class H264Mp4Recorder::Impl {
   }
 
   void SetEncodedQueueByteCapacityForTest(uint64_t byte_capacity) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     if (encoded_queue_.empty() && byte_capacity > 0U &&
         byte_capacity <= kEncodedQueueByteCapacity) {
       encoded_queue_byte_capacity_ = byte_capacity;
@@ -1125,7 +1144,7 @@ class H264Mp4Recorder::Impl {
 
   void SetRemuxTimeoutForTest(uint32_t timeout_ms,
                               uint32_t terminate_grace_ms) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     if (timeout_ms > 0U && terminate_grace_ms > 0U) {
       remux_timeout_override_ms_ = timeout_ms;
       remux_terminate_grace_ms_ = terminate_grace_ms;
@@ -1137,62 +1156,62 @@ class H264Mp4Recorder::Impl {
   }
 
   void FailPublicationReceiptAfterRenameForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_receipt_after_rename_ = true;
   }
 
   void FailFinalDirectoryQuarantineForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_final_directory_quarantine_ = true;
   }
 
   void FailQuarantinedSessionParentSyncForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_quarantined_parent_sync_ = true;
   }
 
   void FailParentDirectorySyncAfterRenameForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_parent_sync_after_rename_ = true;
   }
   void FailPublicationMarkerRemovalForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_marker_removal_ = true;
   }
 
   void FailSessionStatusRewriteWriteForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_status_rewrite_write_ = true;
   }
 
   void FailSessionStatusRewriteFsyncForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_status_rewrite_fsync_ = true;
   }
 
   void FailSessionStatusRewriteRenameForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_status_rewrite_rename_ = true;
   }
 
   void FailSessionStatusRewriteDirectorySyncForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_status_rewrite_directory_sync_ = true;
   }
 
 
   void FailSessionStatusCloseForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_session_status_close_ = true;
   }
 
   void FailPublicationReceiptCloseForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_receipt_close_ = true;
   }
 
   void FailOutputCloseForTest() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     fail_output_close_ = true;
   }
 #endif
@@ -1249,13 +1268,15 @@ class H264Mp4Recorder::Impl {
       EncodedJob frame;
       std::array<icm42670_sample_t, kImuWriteBatch> imu_batch{};
       size_t imu_count = 0U;
+      FsyncAssociationRecord association; bool have_association = false;
+      ExposureRecord exposure{}; bool have_exposure = false;
       bool have_frame = false;
       {
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::unique_lock<RealtimeMutex> lock(mutex_);
         condition_.wait(lock, [this] {
           return stopping_ || !error_.empty() ||
                  (!writer_paused_ &&
-                  (!encoded_queue_.empty() || !imu_queue_.empty()));
+                  (!encoded_queue_.empty() || !imu_queue_.empty() || fsync_count_ || exposure_count_));
         });
         if (!error_.empty()) {
           DropQueuedFramesLocked();
@@ -1274,11 +1295,36 @@ class H264Mp4Recorder::Impl {
           imu_batch[imu_count++] = imu_queue_.front();
           imu_queue_.pop_front();
         }
-        if (!have_frame && imu_count == 0U && stopping_) break;
+        if (fsync_count_) {
+          association = fsync_queue_[fsync_head_]; fsync_head_ = (fsync_head_ + 1) % fsync_queue_.size();
+          --fsync_count_; have_association = true;
+        }
+        if (exposure_count_) {
+          exposure = exposure_queue_[exposure_head_];
+          exposure_head_ = (exposure_head_ + 1) % exposure_queue_.size();
+          --exposure_count_; have_exposure = true;
+        }
+        if (!have_frame && imu_count == 0U && !have_association && !have_exposure && stopping_) break;
+      }
+      if (have_association) {
+        try { char json[1024]; FormatFsyncAssociation(association,json,sizeof(json)); fsync_file_ << json << '\n'; }
+        catch (...) { std::lock_guard<RealtimeMutex> lock(mutex_); SetFatalLocked("format FSYNC sidecar failed"); }
+        if (!fsync_file_) { std::lock_guard<RealtimeMutex> lock(mutex_); SetFatalLocked("write FSYNC sidecar failed"); }
+      }
+      if (have_exposure) {
+        const auto& e = exposure.exposure;
+        exposure_file_ << "{\"camera_id\":" << exposure.camera_id
+          << ",\"raw_frame_id\":" << exposure.raw_frame_id << ",\"frame_id\":" << exposure.frame_id
+          << ",\"group_id\":" << exposure.group_id << ",\"group_timestamp_ns\":" << exposure.group_timestamp_ns
+          << ",\"camera_timestamp_ns\":" << exposure.camera_timestamp_ns
+          << ",\"exposure\":{\"status\":" << e.status << ",\"duration_ns\":" << e.duration_ns
+          << ",\"source_frame_id\":" << e.source_frame_id << ",\"source_timestamp\":" << e.source_timestamp
+          << ",\"observed_raw_ns\":" << e.observed_raw_ns << "}}\n";
+        if (!exposure_file_) { std::lock_guard<RealtimeMutex> lock(mutex_); SetFatalLocked("write exposure sidecar failed"); }
       }
 
       if (have_frame && !WriteEncodedFrame(frame)) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<RealtimeMutex> lock(mutex_);
         DropEncodedFrameLocked(frame.camera_id, false, false);
         SetFatalLocked("write encoded H264 stream failed");
         continue;
@@ -1286,11 +1332,11 @@ class H264Mp4Recorder::Impl {
       for (size_t index = 0U; index < imu_count; ++index) {
         WriteImuRow(imu_file_, imu_batch[index]);
         if (!imu_file_) {
-          std::lock_guard<std::mutex> lock(mutex_);
+          std::lock_guard<RealtimeMutex> lock(mutex_);
           SetFatalLocked("write IMU CSV failed");
           break;
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<RealtimeMutex> lock(mutex_);
         ++stats_.imu_samples_written;
       }
     }
@@ -1310,7 +1356,7 @@ class H264Mp4Recorder::Impl {
       first_timestamp_by_camera_[job.camera_id] = job.timestamp_ns;
     }
     ++written_by_camera_[job.camera_id];
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<RealtimeMutex> lock(mutex_);
     ++stats_.encoded_frames_written;
     ++stats_.encoded_frames_written_by_camera[job.camera_id];
     stats_.encoded_bytes_written += job.payload.size();
@@ -1339,6 +1385,8 @@ class H264Mp4Recorder::Impl {
       imu_file_.close();
       success = static_cast<bool>(imu_file_) && success;
     }
+    if (fsync_file_.is_open()) success = FlushAndClose(&fsync_file_) && success;
+    if (exposure_file_.is_open()) success = FlushAndClose(&exposure_file_) && success;
 #ifdef RELEASE008_TESTING
     success = !fail_output_close_ && success;
 #endif
@@ -1354,7 +1402,7 @@ class H264Mp4Recorder::Impl {
     std::error_code size_error;
     const uint64_t raw_bytes = fs::file_size(raw, size_error);
     if (size_error) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = "read raw H264 size failed: " + size_error.message();
       return false;
     }
@@ -1374,7 +1422,7 @@ class H264Mp4Recorder::Impl {
     std::string process_error;
     if (RunProcess(arguments, log, remux_timeout_ms,
                    remux_terminate_grace_ms_, false, &process_error) != 0) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = process_error;
       return false;
     }
@@ -1385,14 +1433,14 @@ class H264Mp4Recorder::Impl {
         "default=noprint_wrappers=1:nokey=1", temporary_mp4.string()};
     if (RunProcess(probe_arguments, probe_log, remux_timeout_ms,
                    remux_terminate_grace_ms_, true, &process_error) != 0) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = process_error;
       return false;
     }
     uint64_t decoded_frames = 0U;
     const bool frame_count_valid = ParseSingleFrameCount(probe_log, &decoded_frames);
     if (!frame_count_valid || decoded_frames != written_by_camera_[camera_id]) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) {
         error_ = "ffprobe frame count mismatch for " + prefix + ": expected " +
                  std::to_string(written_by_camera_[camera_id]) + ", got " +
@@ -1403,25 +1451,25 @@ class H264Mp4Recorder::Impl {
     std::error_code error;
     (void)RenameNoReplace(temporary_mp4, final_mp4, &error);
     if (error) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = "publish camera MP4 failed: " + error.message();
       return false;
     }
     fs::remove(raw, error);
     if (error) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = "remove remuxed H264 source failed: " + error.message();
       return false;
     }
     fs::remove(log, error);
     if (error) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = "remove ffmpeg log failed: " + error.message();
       return false;
     }
     fs::remove(probe_log, error);
     if (error) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = "remove ffprobe log failed: " + error.message();
       return false;
     }
@@ -1435,7 +1483,7 @@ class H264Mp4Recorder::Impl {
       H264Mp4SourceHealth source_health;
       bool source_health_set = false;
       {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<RealtimeMutex> lock(mutex_);
         source_health = source_health_;
         source_health_set = source_health_set_;
       }
@@ -1748,21 +1796,21 @@ class H264Mp4Recorder::Impl {
       std::string error;
       for (const fs::directory_entry& entry : fs::directory_iterator(staging_path_)) {
         if (entry.is_regular_file() && !FsyncFile(entry.path(), &error)) {
-          std::lock_guard<std::mutex> lock(mutex_);
+          std::lock_guard<RealtimeMutex> lock(mutex_);
           if (error_.empty()) error_ = error;
           return false;
         }
       }
       return FsyncDirectory(staging_path_, &error);
     } catch (const std::exception& exception) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<RealtimeMutex> lock(mutex_);
       if (error_.empty()) error_ = exception.what();
       return false;
     }
   }
 
-  mutable std::mutex mutex_;
-  std::condition_variable condition_;
+  mutable RealtimeMutex mutex_;
+  RealtimeCondition condition_;
   std::thread worker_;
   std::deque<EncodedJob> encoded_queue_;
   std::deque<icm42670_sample_t> imu_queue_;
@@ -1771,11 +1819,21 @@ class H264Mp4Recorder::Impl {
   std::array<std::vector<uint8_t>, kMaxChannels> cached_sps_;
   std::array<std::vector<uint8_t>, kMaxChannels> cached_pps_;
   std::ofstream imu_file_;
+  std::ofstream fsync_file_;
+  struct ExposureRecord {
+    uint32_t camera_id = 0, raw_frame_id = 0, frame_id = 0;
+    uint64_t group_id = 0, group_timestamp_ns = 0, camera_timestamp_ns = 0;
+    sc132_exposure_info_t exposure{};
+  };
+  std::ofstream exposure_file_;
+  std::array<ExposureRecord, 1024> exposure_queue_{};
+  size_t exposure_head_ = 0, exposure_count_ = 0;
+  std::array<FsyncAssociationRecord, 256> fsync_queue_{};
+  size_t fsync_head_ = 0, fsync_count_ = 0;
   std::array<bool, kMaxChannels> resync_required_{};
-  std::array<uint64_t, kMaxChannels> last_seen_timestamp_ns_{};
   std::array<uint64_t, kMaxChannels> first_timestamp_by_camera_{};
   std::array<uint64_t, kMaxChannels> written_by_camera_{};
-  uint64_t last_imu_timestamp_ns_ = 0U;
+  uint64_t last_imu_sequence_ = 0U;
   H264Mp4RecorderStats stats_;
   H264Mp4SourceHealth source_health_;
   bool source_health_set_ = false;
@@ -1836,6 +1894,12 @@ void H264Mp4Recorder::ObserveEncodedFrame(
 
 void H264Mp4Recorder::ObserveImu(const icm42670_sample_t& sample) noexcept {
   if (enabled()) impl_->ObserveImu(sample);
+}
+void H264Mp4Recorder::ObserveFsync(const FsyncAssociationRecord& record) noexcept {
+  if (enabled()) impl_->ObserveFsync(record);
+}
+void H264Mp4Recorder::ObserveFrameSet(const sc132_frame_set_t& set) noexcept {
+  if (enabled()) impl_->ObserveFrameSet(set);
 }
 
 void H264Mp4Recorder::SetSourceHealth(

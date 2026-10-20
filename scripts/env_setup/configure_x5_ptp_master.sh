@@ -26,7 +26,7 @@ usage() {
 
 Purpose:
   Run directly on the X5 board. Configure this X5 as a LinuxPTP
-  IEEE1588v2 UDP/IP master, then verify synchronization with a PTP slave.
+  IEEE1588v2 UDP/IP master, then verify master state and peer packet exchange.
   Defaults use Livox Mid-360 as the example slave.
 
 Options:
@@ -37,7 +37,7 @@ Options:
   -h, --help                     Show this help
 
 Result:
-  RESULT=PASS only when ptp4l is MASTER and PTP packets involving the slave IP are observed.
+  RESULT=PASS verifies master state and PTP peer packets, not slave lock or accuracy.
 USAGE
 }
 
@@ -245,6 +245,9 @@ write_ptp_configs() {
         printf 'network_transport       UDPv4\n'
         printf 'delay_mechanism         E2E\n'
         printf 'time_stamping           hardware\n'
+        # The X5 event-only RX filter omits Delay_Req timestamps; keep hardware RX on all packets.
+        printf 'hwts_filter             full\n'
+        printf 'utc_offset              37\n'
         printf 'step_threshold          1.0\n'
         printf '\n[%s]\n' "$IFACE"
     } >"$tmp" || fail "cannot write temporary PTP config"
@@ -257,7 +260,7 @@ write_ptp_configs() {
 
     ensure_parent_dir "$PHC2SYS_DEFAULT"
     tmp="${PHC2SYS_DEFAULT}.tmp.$$"
-    printf 'PHC2SYS_ARGS="-c %s -s CLOCK_REALTIME -O 0 -S 1.0"\n' "$IFACE" >"$tmp" || fail "cannot write temporary phc2sys defaults"
+    printf 'PHC2SYS_ARGS="-c %s -s CLOCK_REALTIME -w -S 1.0"\n' "$IFACE" >"$tmp" || fail "cannot write temporary phc2sys defaults"
     install_tmp "$tmp" "$PHC2SYS_DEFAULT" 0644
 }
 

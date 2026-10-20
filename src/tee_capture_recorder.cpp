@@ -81,6 +81,8 @@ struct RawJob {
   uint64_t group_timestamp_ns = 0U;
   uint64_t camera_timestamp_ns = 0U;
   uint64_t frame_id = 0U;
+  uint32_t raw_frame_id = 0U;
+  sc132_exposure_info_t exposure{};
   uint64_t group_id = 0U;
   uint32_t width = 0U;
   uint32_t height = 0U;
@@ -101,6 +103,8 @@ struct FrameEntry {
   uint64_t group_timestamp_ns = 0U;
   uint64_t camera_timestamp_ns = 0U;
   uint64_t frame_id = 0U;
+  uint32_t raw_frame_id = 0U;
+  sc132_exposure_info_t exposure{};
   uint64_t group_id = 0U;
   uint32_t width = 0U;
   uint32_t height = 0U;
@@ -217,6 +221,8 @@ class TeeCaptureRecorder::Impl {
     job.group_timestamp_ns = frame.group_timestamp_ns;
     job.camera_timestamp_ns = frame.camera_timestamp_ns;
     job.frame_id = frame.frame_id;
+    job.raw_frame_id = frame.raw_frame_id;
+    job.exposure = frame.exposure;
     job.group_id = frame.group_id;
     job.width = frame.width;
     job.height = frame.height;
@@ -574,6 +580,8 @@ class TeeCaptureRecorder::Impl {
     entry.group_timestamp_ns = job.group_timestamp_ns;
     entry.camera_timestamp_ns = job.camera_timestamp_ns;
     entry.frame_id = job.frame_id;
+    entry.raw_frame_id = job.raw_frame_id;
+    entry.exposure = job.exposure;
     entry.group_id = job.group_id;
     entry.width = job.width;
     entry.height = job.height;
@@ -792,6 +800,12 @@ class TeeCaptureRecorder::Impl {
     out << "{\"index\":" << entry.index << ",\"raw_file\":\"" << entry.raw_file
         << "\",\"au_file\":\"" << entry.au_file
         << "\",\"frame_id\":" << entry.frame_id
+        << ",\"raw_frame_id\":" << entry.raw_frame_id
+        << ",\"exposure\":{\"status\":" << entry.exposure.status
+        << ",\"duration_ns\":" << entry.exposure.duration_ns
+        << ",\"source_frame_id\":" << entry.exposure.source_frame_id
+        << ",\"source_timestamp\":" << entry.exposure.source_timestamp
+        << ",\"observed_raw_ns\":" << entry.exposure.observed_raw_ns << '}'
         << ",\"group_id\":" << entry.group_id
         << ",\"group_timestamp_ns\":" << entry.group_timestamp_ns
         << ",\"camera_timestamp_ns\":" << entry.camera_timestamp_ns

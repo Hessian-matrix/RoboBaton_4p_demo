@@ -24,7 +24,6 @@ extern "C" {
 
 #include "cam_demo_common.h"
 #include "cam_demo_config.h"
-#include "frozen_system_clock.h"
 #include "mosaic_nv12.h"
 
 #ifndef ROBOBATON_RELEASE_VERSION
@@ -486,16 +485,14 @@ class MosaicRtspStream final {
 
 class MosaicPipeline final {
  public:
-  MosaicPipeline(MosaicRtspStream* stream, const robobaton_demo::FrozenSystemClock* clock,
-                 uint32_t frame_set_timeout_ms, uint64_t frame_set_max_skew_ns)
+  MosaicPipeline(MosaicRtspStream* stream, uint32_t frame_set_timeout_ms,
+                 uint64_t frame_set_max_skew_ns)
       : stream_(stream),
-        clock_(clock),
         frame_set_timeout_ms_(frame_set_timeout_ms),
         frame_set_max_skew_ns_(frame_set_max_skew_ns) {
-    if (stream_ == nullptr || clock_ == nullptr || frame_set_timeout_ms_ == 0U ||
-        frame_set_max_skew_ns_ == 0U) {
+    if (stream_ == nullptr || frame_set_timeout_ms_ == 0U || frame_set_max_skew_ns_ == 0U) {
       throw std::invalid_argument(
-          "mosaic pipeline requires valid stream, clock, and frame-set limits");
+          "mosaic pipeline requires valid stream and frame-set limits");
     }
   }
 
@@ -567,10 +564,6 @@ class MosaicPipeline final {
     }
   }
 
-  uint64_t MapTimestamp(uint64_t raw_timestamp_ns) const noexcept {
-    return clock_->MapRawNs(raw_timestamp_ns);
-  }
-
   void HandleFrameSet(const sc132_frame_set_t& frame_set) {
     metrics_.frameset_received.fetch_add(1U, std::memory_order_relaxed);
     if (!accepting_.load(std::memory_order_acquire)) {
@@ -584,7 +577,7 @@ class MosaicPipeline final {
 
     RetainedFrameSetJob job;
     job.group_id = frame_set.group_id;
-    job.timestamp_ns = MapTimestamp(frame_set.group_timestamp_ns);
+    job.timestamp_ns = frame_set.group_timestamp_ns;
     std::array<bool, robobaton_demo::kMosaicCameraCount> seen{};
     for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
       const sc132_frame_set_item_t& item = frame_set.items[index];
@@ -757,7 +750,6 @@ class MosaicPipeline final {
   }
 
   MosaicRtspStream* stream_ = nullptr;
-  const robobaton_demo::FrozenSystemClock* clock_ = nullptr;
   uint32_t frame_set_timeout_ms_ = robobaton_demo::kDefaultFrameSetTimeoutMs;
   uint64_t frame_set_max_skew_ns_ = robobaton_demo::kDefaultFrameSetMaxSkewNs;
   MosaicMetrics metrics_;
@@ -849,7 +841,6 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   bool sc_start_attempted = false;
   bool cleanup_success = true;
-  std::unique_ptr<FrozenSystemClock> system_clock;
   std::unique_ptr<MosaicPipeline> pipeline;
   MosaicRtspStream stream;
 
@@ -867,9 +858,7 @@ int main(int argc, char** argv) {
     options.rotate_degrees = 0;
     options.frame_set_timeout_ms = MosaicFrameSetTimeoutMs(cli_options.fps);
 
-    system_clock = std::make_unique<FrozenSystemClock>();
-    system_clock->PrintTimeBase(std::cout);
-    options.system_clock = system_clock.get();
+    PrintTimeBase(std::cout);
     ConfigureSc132TriggerMode(options);
     ConfigureSc132SensorProfile(options);
 
@@ -895,8 +884,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("sc132_set_output_rotation failed");
     }
 
-    pipeline = std::make_unique<MosaicPipeline>(&stream, system_clock.get(),
-                                                options.frame_set_timeout_ms,
+    pipeline = std::make_unique<MosaicPipeline>(&stream, options.frame_set_timeout_ms,
                                                 options.frame_set_max_skew_ns);
     pipeline->StartWorker();
     sc132_frame_set_config_t config = pipeline->MakeConfig();

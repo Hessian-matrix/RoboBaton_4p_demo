@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "sc132camera.h"
-#include "frozen_system_clock.h"
+#include "monotonic_raw_clock.h"
 
 extern "C" {
 #include "icm42670_driver.h"
@@ -49,9 +49,7 @@ enum class VideoCodec : uint32_t {
 
 enum class TimestampDomain : uint32_t {
   kUnknown = 0U,
-  kMonotonicRaw = 1U,
-  kSystemRealtime = 2U,
-  kSc132Native = 3U,
+  kRealtime = 2U,
 };
 
 enum class ImuStartOrder : uint32_t {
@@ -68,7 +66,6 @@ struct Options;
 const char* VideoCodecName(VideoCodec codec) noexcept;
 const char* ImuSampleDropPolicyName(uint32_t policy) noexcept;
 const char* TimestampDomainName(TimestampDomain domain) noexcept;
-bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept;
 TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept;
 
 struct Options {
@@ -93,7 +90,7 @@ struct Options {
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
-  const FrozenSystemClock* system_clock = nullptr;
+  bool fsync_enabled = false;
   uint32_t record_frame_skip = 0U;
   std::string record_bag_path;
   std::string record_mp4_directory;
@@ -122,6 +119,8 @@ struct QueuedFrame {
   int channel = 0;
   uint64_t sequence = 0;
   uint64_t frame_id = 0;
+  uint32_t raw_frame_id = 0;
+  sc132_exposure_info_t exposure{};
   uint64_t group_id = 0;
   uint64_t group_timestamp_ns = 0;
   uint64_t group_max_skew_ns = 0;
@@ -148,8 +147,9 @@ struct ImuConsumerOptions {
   uint32_t sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
-  const FrozenSystemClock* system_clock = nullptr;
   icm42670_runtime_health_t* final_health = nullptr;
+  void (*fsync_observer)(const icm42670_fsync_event_t&, void*) = nullptr;
+  void* fsync_user = nullptr;
 };
 
 #ifdef RELEASE008_TESTING

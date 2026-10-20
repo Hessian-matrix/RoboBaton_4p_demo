@@ -13,6 +13,7 @@ imu:
   sample_rate_hz: 800
   print_rate_hz: 10
   print_metrics: false
+  fsync_enabled: false
 
 save_data:
   save: false

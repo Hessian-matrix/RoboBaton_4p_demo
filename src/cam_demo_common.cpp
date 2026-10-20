@@ -24,6 +24,8 @@ QueuedFrame& QueuedFrame::operator=(QueuedFrame&& other) noexcept {
   channel = other.channel;
   sequence = other.sequence;
   frame_id = other.frame_id;
+  raw_frame_id = other.raw_frame_id;
+  exposure = other.exposure;
   group_id = other.group_id;
   group_timestamp_ns = other.group_timestamp_ns;
   group_max_skew_ns = other.group_max_skew_ns;
@@ -58,14 +60,7 @@ sc132_frame_t* QueuedFrame::ReleaseOwnership() noexcept {
   return std::exchange(frame, nullptr);
 }
 
-uint64_t SteadyClockNowNs() {
-  uint64_t timestamp_ns = 0U;
-  if (FrozenSystemClock::ReadSystemClock(FrozenClockId::kMonotonicRaw,
-                                         &timestamp_ns, nullptr) != 0) {
-    throw std::runtime_error("CLOCK_MONOTONIC_RAW read failed");
-  }
-  return timestamp_ns;
-}
+uint64_t SteadyClockNowNs() { return MonotonicRawNowNs(); }
 
 int RtspPortForChannel(const Options& options, int channel) {
   return options.rtsp_base_port + channel;
@@ -96,28 +91,16 @@ const char* ImuSampleDropPolicyName(uint32_t policy) noexcept {
 
 const char* TimestampDomainName(TimestampDomain domain) noexcept {
   switch (domain) {
-    case TimestampDomain::kMonotonicRaw:
-      return "monotonic_raw";
-    case TimestampDomain::kSystemRealtime:
-      return "system_realtime";
-    case TimestampDomain::kSc132Native:
-      return "sc132_native";
+    case TimestampDomain::kRealtime:
+      return "realtime";
     case TimestampDomain::kUnknown:
       break;
   }
   return "unknown";
 }
 
-bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept {
-  return options.trigger_mode == "software_gpio" || options.trigger_mode == "gpio";
-}
-
-TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept {
-  if (!Sc132TimestampsAreMonotonicRaw(options)) {
-    return TimestampDomain::kSc132Native;
-  }
-  return options.system_clock != nullptr ? TimestampDomain::kSystemRealtime
-                                        : TimestampDomain::kMonotonicRaw;
+TimestampDomain Sc132OutputTimestampDomain(const Options&) noexcept {
+  return TimestampDomain::kRealtime;
 }
 
 uint32_t CameraMaskFromChannelCount(int channels) {

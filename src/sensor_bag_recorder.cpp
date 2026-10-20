@@ -34,25 +34,25 @@ void ApplyRecorderWorkerPriority(int nice_value) noexcept {
 #endif
 }
 
-void NotifyWriter(std::mutex* mutex, std::condition_variable* condition,
+void NotifyWriter(RealtimeMutex* mutex, RealtimeCondition* condition,
                   uint64_t* generation) noexcept {
   if (mutex == nullptr || condition == nullptr || generation == nullptr) {
     return;
   }
   {
-    std::lock_guard<std::mutex> lock(*mutex);
+    std::lock_guard<RealtimeMutex> lock(*mutex);
     ++(*generation);
   }
   condition->notify_all();
 }
 
-void NotifyWriterOne(std::mutex* mutex, std::condition_variable* condition,
+void NotifyWriterOne(RealtimeMutex* mutex, RealtimeCondition* condition,
                      uint64_t* generation) noexcept {
   if (mutex == nullptr || condition == nullptr || generation == nullptr) {
     return;
   }
   {
-    std::lock_guard<std::mutex> lock(*mutex);
+    std::lock_guard<RealtimeMutex> lock(*mutex);
     ++(*generation);
   }
   condition->notify_one();
@@ -322,8 +322,12 @@ std::string SessionConfigJson(const Options& options) {
          << "\"jpeg_quality\":80,"
          << "\"imu_sample_rate_hz\":" << options.imu_sample_rate_hz << ','
          << "\"trigger_mode\":\"" << JsonEscape(options.trigger_mode) << "\","
-         << "\"timestamp_domain\":\"" << TimestampDomainName(Sc132OutputTimestampDomain(options))
-         << "\","
+         << "\"camera_timestamp_domain\":\""
+         << TimestampDomainName(Sc132OutputTimestampDomain(options)) << "\","
+         << "\"imu_timestamp_domain\":\""
+         << TimestampDomainName(TimestampDomain::kRealtime) << "\","
+         << "\"record_timestamp_domain\":\""
+         << TimestampDomainName(TimestampDomain::kRealtime) << "\","
          << "\"rtsp_path\":\"" << JsonEscape(options.url) << "\"}";
   return stream.str();
 }
@@ -333,6 +337,12 @@ std::string FrameMetadataJson(const SensorBagFrameJob& job, size_t jpeg_size) {
   stream << "{\"camera_id\":" << job.camera_id << ','
          << "\"sequence\":" << job.sequence << ','
          << "\"frame_id\":" << job.frame_id << ','
+         << "\"raw_frame_id\":" << job.raw_frame_id << ','
+         << "\"exposure\":{\"status\":" << job.exposure.status
+         << ",\"duration_ns\":" << job.exposure.duration_ns
+         << ",\"source_frame_id\":" << job.exposure.source_frame_id
+         << ",\"source_timestamp\":" << job.exposure.source_timestamp
+         << ",\"observed_raw_ns\":" << job.exposure.observed_raw_ns << "},"
          << "\"group_id\":" << job.group_id << ','
          << "\"group_timestamp_ns\":" << job.group_timestamp_ns << ','
          << "\"camera_timestamp_ns\":" << job.camera_timestamp_ns << ','
@@ -397,9 +407,8 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   camera_mask_ = options.camera_mask;
   record_target_fps_ = ImagePersistenceFps(options.fps, options.record_frame_skip);
   options_ = options;
-  system_clock_ = options.system_clock;
   {
-    std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+    std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
     stats_ = SensorBagRecorderStats{};
     stats_.frame_queue_capacity = kQueueCapacity;
     stats_.frame_queue_high_watermark = kQueueCapacity;
@@ -412,12 +421,10 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   finished_ = false;
   fatal_error_.store(false, std::memory_order_release);
   {
-    std::lock_guard<std::mutex> error_lock(error_mutex_);
+    std::lock_guard<RealtimeMutex> error_lock(error_mutex_);
     error_message_.clear();
   }
   session_config_written_ = false;
-  has_last_data_record_time_ = false;
-  last_data_record_time_ns_ = 0U;
   next_frame_order_ = 0U;
   writer_wakeup_generation_ = 0U;
   next_write_order_ = 0U;
@@ -471,6 +478,8 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
     imu_connection_ = writer_.AddConnection("/imu/data", "sensor_msgs/Imu",
                                             "6a62c6daae103f4ff57a132d6f95cec2",
                                             kImuDefinition);
+    fsync_connection_ = writer_.AddConnection("/robobaton/fsync", "std_msgs/String",
+        "992ce8a1687cec8c8bd883ec73ca41d1", kStringDefinition);
     session_config_connection_ = writer_.AddConnection(
         "/robobaton/session_config", "std_msgs/String",
         "992ce8a1687cec8c8bd883ec73ca41d1", kStringDefinition);
@@ -532,6 +541,8 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
   job.group_id = frame.group_id;
   job.group_timestamp_ns = frame.group_timestamp_ns;
   job.camera_timestamp_ns = frame.camera_timestamp_ns;
+  job.raw_frame_id = frame.raw_frame_id;
+  job.exposure = frame.exposure;
   job.width = frame.width;
   job.height = frame.height;
   job.stride = frame.stride;
@@ -559,14 +570,14 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
   job.raw_frame.stride = frame.stride;
   job.raw_frame.vstride = frame.vstride;
 
-  std::unique_lock<std::mutex> lock(queue_mutex_);
+  std::unique_lock<RealtimeMutex> lock(queue_mutex_);
   if (stopping_.load(std::memory_order_acquire)) {
     job.raw_frame.Reset();
     return;
   }
   if (queue_.size() >= kQueueCapacity) {
     {
-      std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+      std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
       ++stats_.frame_queue_full_rejects;
     }
     job.raw_frame.Reset();
@@ -644,6 +655,8 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       job.camera_id = static_cast<int>(item.camera_id);
       job.sequence = info.sequence;
       job.frame_id = info.frame_id;
+      job.raw_frame_id = info.raw_frame_id;
+      job.exposure = info.exposure;
       job.group_id = frame_set.group_id;
       job.group_timestamp_ns = frame_set.group_timestamp_ns;
       job.camera_timestamp_ns = item.timestamp_ns;
@@ -681,13 +694,13 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       SetFatalError("frame set mask mismatch for bag recorder");
       return FrameSetAdmissionStatus::kFatal;
     }
-    std::unique_lock<std::mutex> lock(queue_mutex_);
+    std::unique_lock<RealtimeMutex> lock(queue_mutex_);
     if (stopping_.load(std::memory_order_acquire)) {
       return FrameSetAdmissionStatus::kStopped;
     }
     if (queue_.size() + frame_set.camera_count > kQueueCapacity) {
       {
-        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+        std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
         ++stats_.frame_queue_full_rejects;
       }
       return FrameSetAdmissionStatus::kQueueFull;
@@ -775,13 +788,13 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
 
   bool should_notify_writer = false;
   {
-    std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
     if (stopping_.load(std::memory_order_acquire)) {
       throw std::runtime_error("bag recorder is stopping");
     }
     if (imu_queue_count_ >= kImuQueueCapacity) {
       {
-        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+        std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
         ++stats_.imu_queue_full_rejects;
       }
       return;
@@ -791,7 +804,7 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
     imu_queue_[tail] = sample;
     ++imu_queue_count_;
     {
-      std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+      std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
       ++stats_.recorder_imu_admitted;
     }
     UpdateImuQueueAccountingLocked(imu_queue_count_);
@@ -800,6 +813,21 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
   if (should_notify_writer) {
     NotifyWriterOne(&writer_wakeup_mutex_, &writer_condition_, &writer_wakeup_generation_);
   }
+}
+
+void SensorBagRecorder::ObserveFsync(const FsyncAssociationRecord& record) {
+  if (!enabled_) return;
+  bool full = false;
+  {
+    std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
+    full = fsync_count_ == fsync_queue_.size();
+    if (!full) fsync_queue_[(fsync_head_ + fsync_count_++) % fsync_queue_.size()] = record;
+  }
+  if (full) {
+    SetFatalError("FSYNC bag queue full");
+    throw std::runtime_error("FSYNC bag queue full");
+  }
+  NotifyWriterOne(&writer_wakeup_mutex_, &writer_condition_, &writer_wakeup_generation_);
 }
 
 SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
@@ -812,7 +840,7 @@ SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
   imu_queue_condition_.notify_all();
   StopWorkers();
   {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(queue_mutex_);
     for (SensorBagFrameJob& job : queue_) {
       jpeg_encoder_.ReleaseSlot(job.jpeg_slot);
       job.jpeg_slot = nullptr;
@@ -885,7 +913,7 @@ void SensorBagRecorder::Abort() noexcept {
   imu_queue_condition_.notify_all();
   StopWorkers();
   {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(queue_mutex_);
     for (SensorBagFrameJob& job : queue_) {
       jpeg_encoder_.ReleaseSlot(job.jpeg_slot);
       job.jpeg_slot = nullptr;
@@ -913,7 +941,7 @@ bool SensorBagRecorder::HasFatalError() const noexcept {
 }
 
 SensorBagRecorderStats SensorBagRecorder::SnapshotStats() const {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> lock(stats_mutex_);
   SensorBagRecorderStats snapshot = stats_;
   const uint64_t admission_dropped_groups =
       snapshot.recorder_selected_groups >= snapshot.recorder_admitted_groups
@@ -937,12 +965,12 @@ void SensorBagRecorder::ResumeWriterForTest() noexcept {
 }
 
 uint64_t SensorBagRecorder::WriterWakeupGenerationForTest() noexcept {
-  std::lock_guard<std::mutex> lock(writer_wakeup_mutex_);
+  std::lock_guard<RealtimeMutex> lock(writer_wakeup_mutex_);
   return writer_wakeup_generation_;
 }
 
 void SensorBagRecorder::SetEncodedAdmissionHighWatermarkForTest(size_t high_watermark) noexcept {
-  std::lock_guard<std::mutex> lock(encoded_mutex_);
+  std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
   if (high_watermark == 0U || high_watermark > kEncodedQueueCapacity) {
     encoded_admission_high_watermark_ = kEncodedQueueCapacity;
     return;
@@ -957,7 +985,7 @@ void SensorBagRecorder::FailNextPayloadPoolRecycleForTest() noexcept {
 #endif
 
 bool SensorBagRecorder::EncodedBackpressureActive() noexcept {
-  std::lock_guard<std::mutex> lock(encoded_mutex_);
+  std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
   const size_t high_watermark = std::min(encoded_admission_high_watermark_,
                                         kEncodedQueueCapacity);
   return encoded_queue_count_ >= high_watermark;
@@ -974,7 +1002,7 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
   bool admission_room_available = false;
 
   {
-    std::lock_guard<std::mutex> lock(encoded_mutex_);
+    std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     const size_t high_watermark = std::min(encoded_admission_high_watermark_,
                                           kEncodedQueueCapacity);
     if (encoded_queue_count_ < high_watermark) {
@@ -1056,7 +1084,7 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
 
   if (evicted_group_count != 0U) {
     {
-      std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+      std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
       stats_.encoded_queue_oldest_evicted_groups = SaturatingAdd(
           stats_.encoded_queue_oldest_evicted_groups, evicted_group_count);
       stats_.encoded_queue_oldest_evicted_frames = SaturatingAdd(
@@ -1074,22 +1102,22 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
 }
 
 void SensorBagRecorder::RecordEncodedBackpressureReject() noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   ++stats_.encoded_queue_full_rejects;
 }
 
 void SensorBagRecorder::RecordSourceFrameSetSeen() noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   ++stats_.source_frame_sets_seen;
 }
 
 void SensorBagRecorder::RecordSelectedGroup() noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   ++stats_.recorder_selected_groups;
 }
 
 void SensorBagRecorder::RecordAdmittedGroup() noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   ++stats_.recorder_admitted_groups;
 }
 
@@ -1128,7 +1156,7 @@ void SensorBagRecorder::UpdateQueueAtCapacity(bool at_capacity,
 }
 
 void SensorBagRecorder::UpdateFrameQueueAccountingLocked(size_t depth) noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   stats_.frame_queue_peak_depth =
       std::max(stats_.frame_queue_peak_depth, static_cast<uint64_t>(depth));
   UpdateQueueAtCapacity(depth >= kQueueCapacity, &frame_queue_at_capacity_,
@@ -1137,7 +1165,7 @@ void SensorBagRecorder::UpdateFrameQueueAccountingLocked(size_t depth) noexcept 
 }
 
 void SensorBagRecorder::UpdateEncodedQueueAccountingLocked(size_t depth) noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   stats_.encoded_queue_peak_depth =
       std::max(stats_.encoded_queue_peak_depth, static_cast<uint64_t>(depth));
   stats_.encoded_queue_high_watermark = encoded_admission_high_watermark_;
@@ -1148,7 +1176,7 @@ void SensorBagRecorder::UpdateEncodedQueueAccountingLocked(size_t depth) noexcep
 }
 
 void SensorBagRecorder::UpdateImuQueueAccountingLocked(size_t depth) noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   stats_.imu_queue_peak_depth =
       std::max(stats_.imu_queue_peak_depth, static_cast<uint64_t>(depth));
   UpdateQueueAtCapacity(depth >= kImuQueueCapacity, &imu_queue_at_capacity_,
@@ -1157,7 +1185,7 @@ void SensorBagRecorder::UpdateImuQueueAccountingLocked(size_t depth) noexcept {
 }
 
 bool SensorBagRecorder::HasRecordedDrops() const noexcept {
-  std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
   return stats_.frame_queue_full_rejects != 0U ||
          stats_.encoded_queue_full_rejects != 0U ||
          stats_.encoded_queue_oldest_evicted_groups != 0U ||
@@ -1166,7 +1194,7 @@ bool SensorBagRecorder::HasRecordedDrops() const noexcept {
 
 void SensorBagRecorder::ObserveCopyTiming(
     uint64_t copy_ns, const X5JpegNv12CopyResult& copy_result) noexcept {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> lock(stats_mutex_);
   stats_.nv12_copy_bytes = SaturatingAdd(
       stats_.nv12_copy_bytes,
       SaturatingAdd(copy_result.bulk_bytes, copy_result.row_bytes));
@@ -1182,7 +1210,7 @@ void SensorBagRecorder::ObserveCopyTiming(
 }
 
 void SensorBagRecorder::ObserveJpegTiming(uint64_t encode_ns) noexcept {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> lock(stats_mutex_);
   ObserveLatency(&stats_.jpeg_encode_latency, encode_ns);
 }
 
@@ -1190,7 +1218,7 @@ void SensorBagRecorder::ObserveWriterTiming(uint64_t order_wait_ns,
                                             uint64_t writer_wait_ns,
                                             uint64_t writer_hold_ns,
                                             bool image_write) noexcept {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> lock(stats_mutex_);
   stats_.write_order_wait_max_ns = std::max(stats_.write_order_wait_max_ns, order_wait_ns);
   stats_.writer_mutex_wait_max_ns = std::max(stats_.writer_mutex_wait_max_ns, writer_wait_ns);
   stats_.writer_mutex_hold_max_ns = std::max(stats_.writer_mutex_hold_max_ns, writer_hold_ns);
@@ -1293,7 +1321,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
       }
       pending_images.push_back(PendingEncodedWrite{std::move(encoded), order_wait_ns});
       const uint64_t backlog_depth = static_cast<uint64_t>(pending_image_count());
-      std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+      std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
       stats_.writer_image_backlog_peak_depth =
           std::max(stats_.writer_image_backlog_peak_depth, backlog_depth);
     }
@@ -1345,13 +1373,25 @@ void SensorBagRecorder::WriterEntry() noexcept {
     return true;
   };
   const auto imu_queue_depth = [&]() -> size_t {
-    std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
     return imu_queue_count_;
   };
   while (!HasFatalError()) {
+    for (;;) {
+      FsyncAssociationRecord record;
+      {
+        std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
+        if (!fsync_count_) break;
+        record = fsync_queue_[fsync_head_]; fsync_head_ = (fsync_head_ + 1) % fsync_queue_.size(); --fsync_count_;
+      }
+      try {
+        char json[1024]; FormatFsyncAssociation(record, json, sizeof(json));
+        writer_.WriteMessage(fsync_connection_, RecordDataStamp(), MakeStringPayload(json));
+      } catch (const std::exception& error) { SetFatalError(error.what()); break; }
+    }
     if (pending_image_count() == 0U) {
       {
-        std::unique_lock<std::mutex> wake_lock(writer_wakeup_mutex_);
+        std::unique_lock<RealtimeMutex> wake_lock(writer_wakeup_mutex_);
         const uint64_t observed_generation = writer_wakeup_generation_;
         writer_condition_.wait(wake_lock, [&] {
           return writer_wakeup_generation_ != observed_generation || WriterInputReady();
@@ -1364,7 +1404,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
 
 #ifdef RELEASE008_TESTING
     if (writer_paused_for_test_.load(std::memory_order_acquire)) {
-      std::unique_lock<std::mutex> wake_lock(writer_wakeup_mutex_);
+      std::unique_lock<RealtimeMutex> wake_lock(writer_wakeup_mutex_);
       writer_condition_.wait(wake_lock, [&] {
         return HasFatalError() ||
                !writer_paused_for_test_.load(std::memory_order_acquire);
@@ -1411,7 +1451,7 @@ void SensorBagRecorder::RequestStop() noexcept {
   {
     // Publish the wait predicate under its mutex so notify cannot be lost between
     // PopFrame's predicate check and the condition-variable sleep transition.
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(queue_mutex_);
     stopping_.store(true, std::memory_order_release);
   }
   queue_condition_.notify_all();
@@ -1425,7 +1465,7 @@ void SensorBagRecorder::StopWorkers() noexcept {
   }
   workers_.clear();
   {
-    std::lock_guard<std::mutex> lock(encoded_mutex_);
+    std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     encoded_input_closed_ = true;
   }
   encoded_condition_.notify_all();
@@ -1436,7 +1476,7 @@ void SensorBagRecorder::StopWorkers() noexcept {
 }
 
 bool SensorBagRecorder::PopFrame(int camera_id, SensorBagFrameJob* job) noexcept {
-  std::unique_lock<std::mutex> lock(queue_mutex_);
+  std::unique_lock<RealtimeMutex> lock(queue_mutex_);
   queue_condition_.wait(lock, [&] {
     return stopping_.load(std::memory_order_acquire) ||
            std::any_of(queue_.begin(), queue_.end(), [camera_id](const SensorBagFrameJob& item) {
@@ -1460,7 +1500,7 @@ bool SensorBagRecorder::PopNextEncodedFrame(EncodedFrameJob* encoded,
   if (encoded == nullptr || order_wait_ns == nullptr || encoded_slots_.empty()) {
     return false;
   }
-  std::unique_lock<std::mutex> lock(encoded_mutex_);
+  std::unique_lock<RealtimeMutex> lock(encoded_mutex_);
   bool skipped_evicted_order = false;
   while (true) {
     EncodedFrameSlot& slot = encoded_slots_[next_write_order_ % kEncodedQueueCapacity];
@@ -1503,14 +1543,14 @@ void SensorBagRecorder::ReleaseFrameJob(SensorBagFrameJob* job) noexcept {
   job->raw_frame = QueuedFrame{};
   jpeg_encoder_.ReleaseSlot(job->jpeg_slot);
   job->jpeg_slot = nullptr;
-  std::lock_guard<std::mutex> lock(queue_mutex_);
+  std::lock_guard<RealtimeMutex> lock(queue_mutex_);
   if (reusable_jobs_.size() < kReusableJobCapacity) {
     reusable_jobs_.push_back(std::move(*job));
   }
 }
 
 SensorBagRecorder::EncodedFrameJob SensorBagRecorder::AcquireEncodedFrameJob() {
-  std::lock_guard<std::mutex> lock(payload_pool_mutex_);
+  std::lock_guard<RealtimeMutex> lock(payload_pool_mutex_);
   if (reusable_encoded_payloads_.empty()) {
     return EncodedFrameJob{};
   }
@@ -1540,7 +1580,7 @@ void SensorBagRecorder::ReleaseEncodedFrameJob(EncodedFrameJob* encoded) noexcep
       throw std::bad_alloc();
     }
 #endif
-    std::lock_guard<std::mutex> lock(payload_pool_mutex_);
+    std::lock_guard<RealtimeMutex> lock(payload_pool_mutex_);
     if (reusable_encoded_payloads_.size() < kReusablePayloadCapacity) {
       reusable_encoded_payloads_.push_back(std::move(*encoded));
     }
@@ -1556,7 +1596,7 @@ size_t SensorBagRecorder::PopImuBatch(icm42670_sample_t* samples,
   if (samples == nullptr || max_samples == 0U) {
     return 0U;
   }
-  std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+  std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
   const size_t batch_count = std::min(max_samples, imu_queue_count_);
   if (batch_count == 0U) {
     return 0U;
@@ -1577,8 +1617,9 @@ bool SensorBagRecorder::WriterInputReady() noexcept {
   if (HasFatalError()) {
     return true;
   }
+  { std::lock_guard<RealtimeMutex> lock(fsync_mutex_); if (fsync_count_) return true; }
   {
-    std::lock_guard<std::mutex> lock(encoded_mutex_);
+    std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     if (!encoded_slots_.empty()) {
       const EncodedFrameSlot& slot = encoded_slots_[next_write_order_ % kEncodedQueueCapacity];
       if (slot.occupied && slot.record_order == next_write_order_) {
@@ -1590,7 +1631,7 @@ bool SensorBagRecorder::WriterInputReady() noexcept {
     }
   }
   {
-    std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
     if (imu_queue_count_ > 0U) {
       return true;
     }
@@ -1602,21 +1643,28 @@ bool SensorBagRecorder::WriterInputsClosed() noexcept {
   bool encoded_closed = false;
   bool encoded_empty = false;
   {
-    std::lock_guard<std::mutex> lock(encoded_mutex_);
+    std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     encoded_closed = encoded_input_closed_;
     encoded_empty = encoded_queue_count_ == 0U;
   }
   bool imu_empty = false;
   {
-    std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+    std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
     imu_empty = imu_queue_count_ == 0U;
   }
-  return encoded_closed && encoded_empty && imu_empty;
+  std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
+  return encoded_closed && encoded_empty && imu_empty && !fsync_count_;
 }
 
 bool SensorBagRecorder::HasClosedEncodedOrderGap() noexcept {
-  std::lock_guard<std::mutex> lock(encoded_mutex_);
-  return encoded_input_closed_ && encoded_queue_count_ > 0U;
+  std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
+  if (!encoded_input_closed_ || encoded_queue_count_ == 0U) {
+    return false;
+  }
+  // A final payload or eviction marker can arrive after the writer's last prefetch.
+  // Only a missing next order is a gap; matching slots can advance on the next pass.
+  const EncodedFrameSlot& slot = encoded_slots_[next_write_order_ % kEncodedQueueCapacity];
+  return !slot.occupied || slot.record_order != next_write_order_;
 }
 
 SensorBagRecorder::EncodedFrameJob SensorBagRecorder::EncodeFrame(SensorBagFrameJob* job) {
@@ -1679,17 +1727,23 @@ SensorBagRecorder::EncodedFrameJob SensorBagRecorder::EncodeFrame(SensorBagFrame
 
 void SensorBagRecorder::PublishEncodedFrame(EncodedFrameJob encoded) {
   const uint64_t record_order = encoded.job.record_order;
-  std::unique_lock<std::mutex> lock(encoded_mutex_);
+  std::unique_lock<RealtimeMutex> lock(encoded_mutex_);
   encoded_condition_.wait(lock, [&] {
     if (HasFatalError() || record_order < next_write_order_) {
       return true;
     }
     const uint64_t window_distance = record_order - next_write_order_;
-    if (window_distance >= kEncodedQueueCapacity) {
-      return false;
+    bool ready = false;
+    if (window_distance < kEncodedQueueCapacity) {
+      const EncodedFrameSlot& slot = encoded_slots_[record_order % kEncodedQueueCapacity];
+      ready = !slot.occupied;
     }
-    const EncodedFrameSlot& slot = encoded_slots_[record_order % kEncodedQueueCapacity];
-    return !slot.occupied;
+#ifdef RELEASE008_TESTING
+    if (!ready && encoded_wait_hook_for_test_ != nullptr) {
+      encoded_wait_hook_for_test_(encoded_wait_hook_context_for_test_);
+    }
+#endif
+    return ready;
   });
   if (HasFatalError()) {
     throw std::runtime_error(ErrorMessage());
@@ -1722,16 +1776,17 @@ void SensorBagRecorder::PublishEncodedFrame(EncodedFrameJob encoded) {
 void SensorBagRecorder::WriteEncodedFrameToBag(const EncodedFrameJob& encoded,
                                                uint64_t order_wait_ns) {
   const uint64_t writer_hold_start_ns = SteadyClockNowNs();
-  const RosbagTime record_stamp = RecordDataStamp(encoded.job.camera_timestamp_ns);
+  const RosbagTime record_stamp = RecordDataStamp();
   EnsureSessionConfigWritten(record_stamp);
-  EnsureCameraInfoWritten(encoded.job.camera_id, record_stamp);
+  EnsureCameraInfoWritten(encoded.job.camera_id,
+                          RosbagTimeFromNs(encoded.job.camera_timestamp_ns), record_stamp);
   writer_.WriteMessage(ImageConnection(encoded.job.camera_id), record_stamp,
                        encoded.image_payload);
   writer_.WriteMessage(FrameMetadataConnection(encoded.job.camera_id), record_stamp,
                        encoded.metadata_payload);
   const uint64_t writer_hold_ns = SteadyClockNowNs() - writer_hold_start_ns;
   {
-    std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+    std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
     ++stats_.image_frames;
     ++stats_.frame_metadata_messages;
     stats_.jpeg_bytes = SaturatingAdd(stats_.jpeg_bytes, encoded.jpeg_size);
@@ -1777,30 +1832,27 @@ void SensorBagRecorder::WriteImuSample(const icm42670_sample_t& sample,
   }
 
   const uint64_t writer_hold_start_ns = SteadyClockNowNs();
-  const RosbagTime record_stamp = RecordDataStamp(sample.sample_timestamp_ns);
+  const RosbagTime record_stamp = RecordDataStamp();
   EnsureSessionConfigWritten(record_stamp);
   writer_.WriteMessage(imu_connection_, record_stamp, *payload);
   const uint64_t writer_hold_ns = SteadyClockNowNs() - writer_hold_start_ns;
   {
-    std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+    std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
     ++stats_.imu_samples;
     ++stats_.recorder_imu_written;
   }
   ObserveWriterTiming(0U, 0U, writer_hold_ns, false);
 }
 
-RosbagTime SensorBagRecorder::RecordDataStamp(uint64_t preferred_time_ns) noexcept {
-  if (!has_last_data_record_time_ || preferred_time_ns > last_data_record_time_ns_) {
-    last_data_record_time_ns_ = preferred_time_ns;
-    has_last_data_record_time_ = true;
-  }
-  return RosbagTimeFromNs(last_data_record_time_ns_);
+RosbagTime SensorBagRecorder::RecordDataStamp() {
+  return RosbagTimeFromNs(RealtimeNowNs());
 }
 
-void SensorBagRecorder::WriteCameraInfoMessage(int camera_id, RosbagTime stamp) {
+void SensorBagRecorder::WriteCameraInfoMessage(int camera_id, RosbagTime capture_stamp,
+                                               RosbagTime record_stamp) {
   std::vector<uint8_t> payload;
   payload.reserve(256U);
-  AppendHeader(&payload, 0U, stamp, CameraFrameId(camera_id));
+  AppendHeader(&payload, 0U, capture_stamp, CameraFrameId(camera_id));
   AppendU32(&payload, static_cast<uint32_t>(OutputHeight(options_)));
   AppendU32(&payload, static_cast<uint32_t>(OutputWidth(options_)));
   AppendRosString(&payload, "");
@@ -1821,7 +1873,7 @@ void SensorBagRecorder::WriteCameraInfoMessage(int camera_id, RosbagTime stamp) 
   AppendU32(&payload, 0U);
   AppendU32(&payload, 0U);
   AppendBool(&payload, false);
-  writer_.WriteMessage(CameraInfoConnection(camera_id), stamp, payload);
+  writer_.WriteMessage(CameraInfoConnection(camera_id), record_stamp, payload);
 }
 
 void SensorBagRecorder::EnsureSessionConfigWritten(RosbagTime stamp) {
@@ -1833,24 +1885,20 @@ void SensorBagRecorder::EnsureSessionConfigWritten(RosbagTime stamp) {
   session_config_written_ = true;
 }
 
-void SensorBagRecorder::EnsureCameraInfoWritten(int camera_id, RosbagTime stamp) {
+void SensorBagRecorder::EnsureCameraInfoWritten(int camera_id, RosbagTime capture_stamp,
+                                                RosbagTime record_stamp) {
   const size_t index = static_cast<size_t>(camera_id);
   if (index >= camera_info_written_.size() || camera_info_written_[index]) {
     return;
   }
-  WriteCameraInfoMessage(camera_id, stamp);
+  WriteCameraInfoMessage(camera_id, capture_stamp, record_stamp);
   camera_info_written_[index] = true;
 }
 
 void SensorBagRecorder::WriteSessionStatus(SensorBagFinishOutcome outcome, bool data_complete,
                                            const std::string& published_path,
                                            const std::string& session_uuid) {
-  const uint64_t status_time_ns = has_last_data_record_time_
-                                      ? last_data_record_time_ns_
-                                      : (system_clock_ != nullptr
-                                             ? system_clock_->MapRawNs(SteadyClockNowNs())
-                                             : SteadyClockNowNs());
-  const RosbagTime status_stamp = RosbagTimeFromNs(status_time_ns);
+  const RosbagTime status_stamp = RosbagTimeFromNs(RealtimeNowNs());
   EnsureSessionConfigWritten(status_stamp);
   // 批量统计在终态状态JSON生成前发布，保证前序bag记录已计入writer统计。
   writer_.PublishPendingStats();
@@ -1927,14 +1975,20 @@ void SensorBagRecorder::WriteSessionStatus(SensorBagFinishOutcome outcome, bool 
 }
 
 void SensorBagRecorder::SetFatalError(const std::string& message) noexcept {
+  // Publish fatal under the encoded wait mutex: a publisher must either observe
+  // it in its predicate or enter pthread_cond_wait before the matching notify.
+  // PublishEncodedFrame reads ErrorMessage while holding encoded_mutex_, so the
+  // only nested order here is encoded -> error; release both before RequestStop.
+  std::unique_lock<RealtimeMutex> encoded_lock(encoded_mutex_);
   {
-    std::lock_guard<std::mutex> lock(error_mutex_);
+    std::lock_guard<RealtimeMutex> lock(error_mutex_);
     if (!fatal_error_.load(std::memory_order_relaxed)) {
       error_message_ = message;
       fatal_error_.store(true, std::memory_order_release);
       g_stop_requested.store(true, std::memory_order_release);
     }
   }
+  encoded_lock.unlock();
   RequestStop();
   imu_queue_condition_.notify_all();
   encoded_condition_.notify_all();
@@ -1943,7 +1997,7 @@ void SensorBagRecorder::SetFatalError(const std::string& message) noexcept {
 }
 
 std::string SensorBagRecorder::ErrorMessage() const {
-  std::lock_guard<std::mutex> lock(error_mutex_);
+  std::lock_guard<RealtimeMutex> lock(error_mutex_);
   return error_message_;
 }
 
@@ -1968,7 +2022,7 @@ bool SensorBagRecorder::ShouldRecordGroup(uint64_t group_id,
     return true;
   }
 
-  std::lock_guard<std::mutex> lock(record_selection_mutex_);
+  std::lock_guard<RealtimeMutex> lock(record_selection_mutex_);
   for (const RecordSelection& selection : record_selections_) {
     if (selection.group_id == group_id) {
       return selection.selected;

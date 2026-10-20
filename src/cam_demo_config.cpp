@@ -44,7 +44,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --max-skew-ns <ns> Frame-set timestamp skew limit, default "
             << kDefaultFrameSetMaxSkewNs << "\n"
             << "  --frame-timeout-ms <ms> Frame-set pending timeout, default 100\n"
-            << "  --trigger-mode <vin_lpwm|none> SC132 trigger output mode, default "
+            << "  --trigger-mode <vin_lpwm> SC132 hardware trigger, default "
             << kDefaultSc132TriggerMode << "\n";
   if (include_imu_options) {
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
@@ -56,6 +56,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
     std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
+    std::cout << "  --fsync Capture shared LPWM rising edges and publish trigger/sample associations (800/1600 Hz)\n";
     std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
     std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
     std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
@@ -323,6 +324,9 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.video_codec != VideoCodec::kH264) {
     throw std::invalid_argument("MP4 recording requires --codec h264");
   }
+  if (options.fsync_enabled && options.imu_sample_rate_hz < 800U) {
+    throw std::invalid_argument("--fsync requires 800 or 1600 Hz");
+  }
   if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
   }
@@ -330,8 +334,8 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument(
         "--imu-sample-drop-policy must be allow-counted or strict");
   }
-  if (options.trigger_mode != "vin_lpwm" && options.trigger_mode != "none") {
-    throw std::invalid_argument("--trigger-mode must be one of vin_lpwm or none");
+  if (options.trigger_mode != "vin_lpwm") {
+    throw std::invalid_argument("--trigger-mode must be vin_lpwm");
   }
   if (!options.capture_directory.empty() && options.capture_directory.front() != '/') {
     throw std::invalid_argument("--capture-dir/capture.save_path path must be absolute");
@@ -421,6 +425,8 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       sensor_config_state.imu_print_rate_was_set = true;
     } else if (accept_imu_options && arg == "--print-metrics") {
       options.imu_print_metrics = true;
+    } else if (accept_imu_options && arg == "--fsync") {
+      options.fsync_enabled = true;
     } else if (accept_imu_options && arg == "--record-bag") {
       if (cli_parse_state.record_mp4_set) {
         throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
@@ -486,16 +492,9 @@ Options ParseSensorDemoCommandLineWithConfig(int argc, char** argv, Options opti
 }
 
 // 功能：把触发模式写入 libsc132 使用的环境变量。
-// 输入：options.trigger_mode，公开只接受 vin_lpwm、none。
-// 环境变量已预设 SC132_TRIGGER_MODE 时保留预设值，供 software_gpio 调试路径直驱。
+// 输入：options.trigger_mode，只接受 vin_lpwm。
 // 副作用：设置进程内环境变量 SC132_TRIGGER_MODE；触发线路由 libsc132 的板级绑定决定。
 void ConfigureSc132TriggerMode(const Options& options) {
-  const char* preset = std::getenv(kSc132TriggerModeEnv);
-  if (preset != nullptr && preset[0] != '\0') {
-    std::cout << kSc132TriggerModeEnv << "=" << preset
-              << " (preset env retained for software_gpio debug)\n";
-    return;
-  }
   if (setenv(kSc132TriggerModeEnv, options.trigger_mode.c_str(), 1) != 0) {
     throw std::runtime_error("set SC132_TRIGGER_MODE failed");
   }

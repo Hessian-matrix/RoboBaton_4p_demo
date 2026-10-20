@@ -1,4 +1,5 @@
 #pragma once
+#include "realtime_mutex.h"
 
 #include <array>
 #include <cstddef>
@@ -158,7 +159,6 @@ class RosbagV2Writer final {
   void WriteConnectionRecords();
   void WriteConnectionRecord(const RosbagConnection& connection);
   void WriteChunkInfoRecords();
-  RosbagTime NormalizeMessageTime(RosbagTime time) noexcept;
   uint32_t CurrentChunkOffset();
   std::string PartialName() const;
   std::string PartialPath() const;
@@ -199,9 +199,7 @@ class RosbagV2Writer final {
   std::vector<uint8_t> index_scratch_;
   std::vector<size_t> connection_index_reserves_;
   std::vector<RosbagConnection> connections_;
-  bool has_last_message_time_ = false;
-  RosbagTime last_message_time_;
-  mutable std::mutex stats_mutex_;
+  mutable RealtimeMutex stats_mutex_;
   RosbagV2WriterStats stats_;
   RosbagV2WriterStats pending_stats_;
   uint64_t pending_stats_updates_ = 0U;

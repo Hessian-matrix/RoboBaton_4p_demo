@@ -14,6 +14,7 @@
 #include "cam_demo_common.h"
 #include "rosbag_v2_writer.h"
 #include "x5_jpeg_encoder.h"
+#include "fsync_association.h"
 
 namespace robobaton_demo {
 
@@ -115,6 +116,8 @@ struct SensorBagFrameJob {
   int camera_id = 0;
   uint64_t sequence = 0U;
   uint64_t frame_id = 0U;
+  uint32_t raw_frame_id = 0U;
+  sc132_exposure_info_t exposure{};
   uint64_t group_id = 0U;
   uint64_t group_timestamp_ns = 0U;
   uint64_t record_order = 0U;
@@ -148,6 +151,7 @@ class SensorBagRecorder final {
   void ObserveFrame(const QueuedFrame& frame);
   void ObserveFrameSet(const sc132_frame_set_t& frame_set);
   void ObserveImu(const icm42670_sample_t& sample);
+  void ObserveFsync(const FsyncAssociationRecord& record);
   SensorBagFinishResult Finish(bool session_success) noexcept;
   void Abort() noexcept;
 
@@ -241,10 +245,12 @@ class SensorBagRecorder final {
   void UpdateImuQueueAccountingLocked(size_t depth) noexcept;
   static void UpdateQueueAtCapacity(bool at_capacity, QueueAtCapacityTracker* tracker,
                                     uint64_t* dwell_ns, uint64_t* events) noexcept;
-  RosbagTime RecordDataStamp(uint64_t preferred_time_ns) noexcept;
-  void WriteCameraInfoMessage(int camera_id, RosbagTime stamp);
+  RosbagTime RecordDataStamp();
+  void WriteCameraInfoMessage(int camera_id, RosbagTime capture_stamp,
+                              RosbagTime record_stamp);
   void EnsureSessionConfigWritten(RosbagTime stamp);
-  void EnsureCameraInfoWritten(int camera_id, RosbagTime stamp);
+  void EnsureCameraInfoWritten(int camera_id, RosbagTime capture_stamp,
+                               RosbagTime record_stamp);
   void WriteSessionStatus(SensorBagFinishOutcome outcome, bool data_complete,
                           const std::string& published_path,
                           const std::string& session_uuid);
@@ -259,30 +265,37 @@ class SensorBagRecorder final {
   };
 
   RosbagV2Writer writer_;
+  RealtimeMutex fsync_mutex_;
+  std::array<FsyncAssociationRecord, 256> fsync_queue_{};
+  size_t fsync_head_ = 0, fsync_count_ = 0;
+  uint32_t fsync_connection_ = 0;
   X5JpegEncoder jpeg_encoder_;
-  mutable std::mutex stats_mutex_;
+  mutable RealtimeMutex stats_mutex_;
   SensorBagRecorderStats stats_;
 
-  std::mutex queue_mutex_;
-  std::condition_variable queue_condition_;
+  RealtimeMutex queue_mutex_;
+  RealtimeCondition queue_condition_;
   std::deque<SensorBagFrameJob> queue_;
   std::vector<SensorBagFrameJob> reusable_jobs_;
-  std::mutex payload_pool_mutex_;
+  RealtimeMutex payload_pool_mutex_;
   std::vector<EncodedFrameJob> reusable_encoded_payloads_;
   std::vector<std::thread> workers_;
-  std::mutex imu_queue_mutex_;
-  std::condition_variable imu_queue_condition_;
+  RealtimeMutex imu_queue_mutex_;
+  RealtimeCondition imu_queue_condition_;
   std::vector<icm42670_sample_t> imu_queue_;
-  std::mutex encoded_mutex_;
-  std::condition_variable encoded_condition_;
+  RealtimeMutex encoded_mutex_;
+  RealtimeCondition encoded_condition_;
   std::vector<EncodedFrameSlot> encoded_slots_;
   size_t encoded_queue_count_ = 0U;
   size_t encoded_admission_high_watermark_ = kEncodedAdmissionHighWatermark;
   std::thread writer_worker_;
-  std::mutex writer_wakeup_mutex_;
-  std::condition_variable writer_condition_;
+  RealtimeMutex writer_wakeup_mutex_;
+  RealtimeCondition writer_condition_;
   uint64_t writer_wakeup_generation_ = 0U;
 #ifdef RELEASE008_TESTING
+  friend struct SensorBagRecorderTestAccess;
+  void (*encoded_wait_hook_for_test_)(void*) = nullptr;
+  void* encoded_wait_hook_context_for_test_ = nullptr;
   std::atomic<bool> writer_paused_for_test_{false};
   std::atomic<bool> fail_next_payload_pool_recycle_for_test_{false};
 #endif
@@ -298,7 +311,6 @@ class SensorBagRecorder final {
   uint32_t record_target_fps_ = 0U;
   Options options_;
   std::vector<uint32_t> image_connections_;
-  const FrozenSystemClock* system_clock_ = nullptr;
   std::vector<uint32_t> camera_info_connections_;
   std::vector<uint32_t> frame_metadata_connections_;
   std::vector<bool> camera_info_written_;
@@ -306,9 +318,7 @@ class SensorBagRecorder final {
   uint32_t session_config_connection_ = 0U;
   uint32_t session_status_connection_ = 0U;
   bool session_config_written_ = false;
-  bool has_last_data_record_time_ = false;
-  uint64_t last_data_record_time_ns_ = 0U;
-  std::mutex record_selection_mutex_;
+  RealtimeMutex record_selection_mutex_;
   std::deque<RecordSelection> record_selections_;
   bool next_group_should_record_ = true;
   SensorBagFinishResult finish_result_;
@@ -317,7 +327,7 @@ class SensorBagRecorder final {
   QueueAtCapacityTracker imu_queue_at_capacity_;
 
   std::atomic<bool> fatal_error_{false};
-  mutable std::mutex error_mutex_;
+  mutable RealtimeMutex error_mutex_;
   std::string error_message_;
 };
 

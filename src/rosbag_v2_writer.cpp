@@ -387,7 +387,7 @@ uint64_t RosbagV2LatencyPercentileUpperNs(const RosbagV2LatencyStats& stats,
 }
 
 RosbagV2WriterStats RosbagV2Writer::SnapshotStats() const noexcept {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
+  std::lock_guard<RealtimeMutex> lock(stats_mutex_);
   return stats_;
 }
 
@@ -424,7 +424,7 @@ void RosbagV2Writer::PublishPendingStats() noexcept { PublishPendingStats(Steady
 
 void RosbagV2Writer::PublishPendingStats(uint64_t publish_ns) noexcept {
   if (pending_stats_updates_ != 0U) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    std::lock_guard<RealtimeMutex> lock(stats_mutex_);
     MergeRosbagWriterStats(&stats_, pending_stats_);
     pending_stats_ = RosbagV2WriterStats{};
     pending_stats_updates_ = 0U;
@@ -468,10 +468,8 @@ void RosbagV2Writer::Open(const std::string& final_path) {
     write_buffer_.resize(kOutputBufferBytes);
   }
   write_buffer_used_ = 0U;
-  has_last_message_time_ = false;
-  last_message_time_ = RosbagTime{};
   {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    std::lock_guard<RealtimeMutex> lock(stats_mutex_);
     stats_ = RosbagV2WriterStats{};
   }
   pending_stats_ = RosbagV2WriterStats{};
@@ -563,7 +561,7 @@ void RosbagV2Writer::WriteMessage(uint32_t connection_id, RosbagTime time,
     if (payload.size() > std::numeric_limits<uint32_t>::max()) {
       throw std::length_error("rosbag message payload too large");
     }
-    const RosbagTime record_time = NormalizeMessageTime(time);
+    const RosbagTime record_time = time;
     if (!chunk_open_) {
       StartChunk(record_time);
     }
@@ -950,9 +948,18 @@ void RosbagV2Writer::WriteIndexRecords() {
       throw std::length_error("rosbag connection id too large");
     }
     const uint32_t connection_id = static_cast<uint32_t>(connection_index);
-    const std::vector<IndexEntry>& index = current_chunk_indexes_[connection_index];
+    std::vector<IndexEntry>& index = current_chunk_indexes_[connection_index];
     if (index.empty()) {
       continue;
+    }
+    // Keep physical write order while ROS bag indexes remain time-sorted after clock steps.
+    const auto earlier = [](const IndexEntry& left, const IndexEntry& right) {
+      if (left.time.sec != right.time.sec) return left.time.sec < right.time.sec;
+      if (left.time.nsec != right.time.nsec) return left.time.nsec < right.time.nsec;
+      return left.offset < right.offset;
+    };
+    if (!std::is_sorted(index.begin(), index.end(), earlier)) {
+      std::sort(index.begin(), index.end(), earlier);
     }
     if (index.size() > std::numeric_limits<uint32_t>::max() / 12U) {
       throw std::length_error("rosbag index payload too large");
@@ -1028,19 +1035,6 @@ void RosbagV2Writer::WriteChunkInfoRecords() {
   }
 }
 
-RosbagTime RosbagV2Writer::NormalizeMessageTime(RosbagTime time) noexcept {
-  if (!has_last_message_time_) {
-    has_last_message_time_ = true;
-    last_message_time_ = time;
-    return time;
-  }
-  if (time.sec < last_message_time_.sec ||
-      (time.sec == last_message_time_.sec && time.nsec < last_message_time_.nsec)) {
-    return last_message_time_;
-  }
-  last_message_time_ = time;
-  return time;
-}
 
 uint32_t RosbagV2Writer::CurrentChunkOffset() {
   const uint64_t current_pos = Tell();

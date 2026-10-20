@@ -8,7 +8,7 @@ This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the 
 
 > **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
 
-Current source uses `icm42670_*` / `icm42670_driver.h`, SONAME `libicm42670.so.2`, real SO `libicm42670.so.2.0.0`, and symbol node `ICM42670_X5_2.0`. Old V1 downloads do not implement this interface; software `VERSION` does not automatically increase with the hardware cutover, and V2 board acceptance must be established separately. The image above is a V1 product illustration, not V2 pinout or photographic evidence.
+Current source uses `icm42670_*` / `icm42670_driver.h`, SONAME `libicm42670.so.2`, and real SO `libicm42670.so.2.0.0`. IMU ABI 2.1 retains base functions in `ICM42670_X5_2.0` and adds the FSYNC callback in `ICM42670_X5_2.1`. Old V1 downloads do not implement this interface. Software versions, documentation revisions, and board acceptance are independent; an identical version string does not prove an identical manifest. The image above is a V1 illustration, not V2 pinout or photographic evidence.
 
 ## Contents
 
@@ -22,6 +22,8 @@ scripts/    Build, packaging, and runtime verification entry points (includes `b
 ```
 
 Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the configuration file.
+
+Camera ABI 2.2 provides a frozen per-frame ISP exposure observation in `sc132_frame_info_t.exposure`, also saved in bag frame metadata, MP4 `exposure.jsonl`, and tee indexes. `status=1` is an estimate, not certified applied exposure or an actual exposure midpoint; `status=0` is unavailable. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html) for fields, join keys, and limits.
 
 ## Version and package matching
 
@@ -48,6 +50,7 @@ These version queries do not initialize the camera, IMU, or UART. For compatibil
 |---|---|
 | `sensor_demo` | Four cameras, RTSP, and IMU together; optional ROS1 bag or H.264 MP4 persistence |
 | `cam_demo` | Four cameras and RTSP |
+| `mosaic_rtsp_demo` | Four NV12 views combined into one RTSP stream, default port `558` |
 | `imu_reader_demo` | Standalone IMU reading |
 | `serial_port_demo` | UART1/UART7 example; not for DEBUG_UART |
 
@@ -65,6 +68,8 @@ Camera/RTSP only:
 ```bash
 ./cam_demo
 ```
+
+Run `./mosaic_rtsp_demo` for four-view RTSP at `rtsp://<x5-ip>:558/PRR`; `--fps` supports `25/30/40/50/60`. See [Mosaic usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-mosaic) for parameters and limits.
 
 IMU only:
 
@@ -107,6 +112,8 @@ Autostart is implemented through `/userdata/startup.sh`, executed by the system 
 ```
 
 ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
+
+Current MP4 sessions always create `exposure.jsonl` and `fsync.jsonl`; the latter has records only when FSYNC is enabled. Exposure sidecars describe input observations and may outnumber saved encoded frames. Join by camera and microsecond-quantized group-trigger time against CSV, not by row number or source frame ID as an MP4 index. Default `--imu-sample-drop-policy allow-counted` can continue with counted sample losses. Bag complete does not independently prove zero producer drops; MP4 complete additionally checks final producer health and sample counts. A complete dataset requires actual payload readback, not just an exit code or playable MP4s.
 
 ## Build from source
 
@@ -152,8 +159,10 @@ Do not delete `/root/demo` before uploading a new package, and do not test the c
 - Camera output is NV12, `1280x1088` by default, with optional VSE hardware full-frame scaled canvases `640x480`, `720x480`, and `1280x720`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
 - The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
 - The IMU natively supports `25/50/100/200/400/800/1600Hz`, default `800Hz`, using sensor-timestamp FIFO. Old `500/1000/2000Hz` values are explicitly rejected, not silently resampled.
-- The producer resolves camera trigger controller `34130000.gpio` offset `0`; INT1 uses `34120000.gpio` offset `8`. The V2 IMU FSYNC input shares the camera trigger net, but camera/IMU hardware alignment, TF, and calibration are not provided.
-- V2 UART pinout, voltage levels, power limits, and hot-plug boundaries are pending confirmation; the V1 `500mA` limit and historical acceptance cannot be used for V2 wiring.
+- All camera entries use VIN LPWM hardware triggering. Camera and IMU FSYNC share the LPWM IO; INT1 uses `34120000.gpio` offset `8`. Camera hardware trigger edges, IMU samples, and INT1 times map to `CLOCK_REALTIME`, retained unchanged by CLI/saving; bag record time independently reads realtime. Bridges refresh during operation and follow backward clock steps; internal timeouts remain monotonic. Cameras require read-only X5 `/dev/mem` access and stop on missing captures/bounded mappings without arrival-time fallbacks. A common domain does not provide FSYNC sample/exposure associations, TF, or calibration.
+- `sensor_demo --fsync --sample-rate-hz 1600` or YAML `imu.fsync_enabled: true` enables trigger-to-sample association (default off, only `800/1600Hz`). Results reach stdout, bag `/robobaton/fsync`, or MP4 `fsync.jsonl`. Accept only `status=1`; missing/ambiguous cases are explicit. This changes neither sample phase nor exposure-sync or zero-loss guarantees.
+- The IMU consumer uses `SCHED_RR/3`, the acquisition owner uses `SCHED_FIFO/20`, the camera RAW observer uses `SCHED_FIFO/60`, and the independent INT1 clock observer uses `SCHED_FIFO/30`; both observers inherit the allowed CPU mask and sleep `50µs` per iteration. Realtime scheduling permission is required. The INT1 observer stays below the board's default FIFO/50 GPIO IRQ thread and retains edge-time certificates through SPI waits and callback delays. Cross-priority queues use priority-inheritance locks, but applications do not automatically change system IRQ/debug settings. Stress acceptance must inspect final post-stop `IMU_RUNTIME_HEALTH` and read actual saved payloads; counted drops are not zero loss.
+- UART1/UART7 retain `3.3V`, DEBUG_UART retains `1.8V`. The V2 UART7 5-pin connector has an independent PPS input enabled by default, without RX/TX multiplexing. Use official V2 pinout, power limits, and hot-plug boundaries, not the V1 `500mA` limit or historical acceptance.
 - Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
 
 For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html), [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html), and [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html).

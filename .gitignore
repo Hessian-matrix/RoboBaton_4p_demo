@@ -8,3 +8,4 @@ __pycache__/
 build_x5_jpeg_fix/
 build_x5_origin_overlay/
 .package-runtime.*/
+build*

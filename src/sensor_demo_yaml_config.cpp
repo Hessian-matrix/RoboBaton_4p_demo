@@ -194,6 +194,7 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  sample_rate_hz: " << defaults.imu_sample_rate_hz << "\n"
          << "  print_rate_hz: " << kDefaultImuPrintRateHz << "\n"
          << "  print_metrics: false\n"
+         << "  fsync_enabled: false\n"
          << "save_data:\n"
          << "  save: false\n"
          << "  format: mp4\n"
@@ -267,6 +268,8 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     state->imu_print_rate_was_set = true;
   } else if (key == "imu.print_metrics") {
     options->imu_print_metrics = ParseBool(value, name.c_str());
+  } else if (key == "imu.fsync_enabled") {
+    options->fsync_enabled = ParseBool(value, name.c_str());
   } else if (key == "save_data.save") {
     state->save_data_enabled = ParseBool(value, name.c_str());
     ApplySaveDataSelection(options, *state);

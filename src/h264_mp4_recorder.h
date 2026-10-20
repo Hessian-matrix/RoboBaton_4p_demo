@@ -80,6 +80,7 @@ struct H264Mp4FinishResult {
   }
 };
 
+struct FsyncAssociationRecord;
 // Optional sidecar that stores the already encoded RTSP H.264 stream without re-encoding.
 class H264Mp4Recorder final {
  public:
@@ -93,6 +94,8 @@ class H264Mp4Recorder final {
   void ObserveEncodedFrame(int camera_id,
                            const prrtsp_encoded_frame_v2& frame) noexcept;
   void ObserveImu(const icm42670_sample_t& sample) noexcept;
+  void ObserveFsync(const FsyncAssociationRecord& record) noexcept;
+  void ObserveFrameSet(const sc132_frame_set_t& set) noexcept;
   void SetSourceHealth(const H264Mp4SourceHealth& health) noexcept;
   H264Mp4FinishResult Finish(bool session_success) noexcept;
   void Abort() noexcept;

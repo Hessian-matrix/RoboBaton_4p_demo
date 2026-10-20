@@ -48,7 +48,7 @@ Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
   --fps <25|30|40|50|60>  Camera/encoder FPS, default 30
-  --trigger-mode <mode>       SC132_TRIGGER_MODE: vin_lpwm or none; default vin_lpwm (VIN 硬件触发)
+  --trigger-mode <mode>       SC132_TRIGGER_MODE: vin_lpwm only (VIN hardware trigger)
   --output-dir <path>         Local log output directory, default ./regression_logs
 
 Evaluation thresholds:
@@ -100,9 +100,9 @@ if ! [[ "${FPS}" =~ ^[0-9]+$ ]] || (( FPS != 25 && FPS != 30 && FPS != 40 && FPS
 fi
 
 case "${TRIGGER_MODE}" in
-  vin_lpwm|lpwm|none|off) ;;
+  vin_lpwm) ;;
   *)
-    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported values are vin_lpwm and none" >&2
+    echo "Invalid --trigger-mode ${TRIGGER_MODE}; only vin_lpwm is supported" >&2
     exit 2
     ;;
 esac

@@ -23,12 +23,12 @@ RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
     "bin/mosaic_rtsp_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42670_X5_2.0"},
-    "bin/sensor_demo": {"ICM42670_X5_2.0",
+    "bin/imu_reader_demo": {"ICM42670_X5_2.0", "ICM42670_X5_2.1"},
+    "bin/sensor_demo": {"ICM42670_X5_2.0", "ICM42670_X5_2.1",
                         "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42670.so.2.0.0": {"ICM42670_X5_2.0"},
+    "lib/libicm42670.so.2.0.0": {"ICM42670_X5_2.0", "ICM42670_X5_2.1"},
     "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
     "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }

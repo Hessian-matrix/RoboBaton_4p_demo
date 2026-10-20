@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define SC132_ABI_VERSION_MAJOR 2U
-#define SC132_ABI_VERSION_MINOR 0U
+#define SC132_ABI_VERSION_MINOR 2U
 
 #define SC132_STATUS_OK ((int32_t)0)
 #define SC132_STATUS_INVALID_ARGUMENT ((int32_t)-1)
@@ -30,12 +30,30 @@ extern "C" {
 
 typedef struct sc132_frame sc132_frame_t;
 
+#define SC132_EXPOSURE_UNAVAILABLE 0U
+#define SC132_EXPOSURE_ESTIMATED 1U
+
+/* Frozen latest-ISP observation, NOT certified applied exposure. No error bound.
+ * duration_ns is the reported integration duration converted from SDK seconds.
+ * source_frame_id/source_timestamp are the SDK's non-atomic current identity;
+ * source_timestamp is opaque, not RAW or realtime. observed_raw_ns marks query
+ * completion in CLOCK_MONOTONIC_RAW, not integration start/end. Unavailable
+ * observations are all zero and never reuse a preceding frame's value.
+ */
+typedef struct sc132_exposure_info {
+  uint32_t status;
+  uint32_t source_frame_id;
+  uint64_t duration_ns;
+  uint64_t source_timestamp;
+  uint64_t observed_raw_ns;
+} sc132_exposure_info_t;
+
 typedef struct sc132_frame_info {
   uint32_t struct_size;
   uint32_t camera_id;
   uint64_t sequence;
   uint32_t frame_id;
-  uint32_t reserved0;
+  uint32_t raw_frame_id;
   uint64_t timestamp_ns;
   const void *y_data;
   const void *uv_data;
@@ -47,7 +65,7 @@ typedef struct sc132_frame_info {
   uint32_t height;
   uint32_t stride;
   uint32_t vstride;
-  uint32_t reserved[8];
+  sc132_exposure_info_t exposure;
 } sc132_frame_info_t;
 
 typedef struct sc132_frame_set_item {
@@ -70,11 +88,23 @@ typedef struct sc132_frame_set {
   uint32_t reserved[8];
 } sc132_frame_set_t;
 
+/* Frame-set reserved metadata, ABI 2.1: RAW low/high words, uncertainty ns,
+ * acquisition generation, and validity magic. Public timestamps stay realtime.
+ * RAW is the earliest hardware trigger; uncertainty includes group skew.
+ */
+#define SC132_GROUP_RAW_LO 0U
+#define SC132_GROUP_RAW_HI 1U
+#define SC132_GROUP_UNCERTAINTY_NS 2U
+#define SC132_GROUP_GENERATION 3U
+#define SC132_GROUP_TIMING_VALID 4U
+#define SC132_GROUP_TIMING_MAGIC 0x4653594eU
+
 /*
  * DMA 帧只允许只读访问；以下合同明确时间域、借用引用和跨回调保留规则。
- * timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的公共触发线
- * 上升沿时间，组内各路完全相同；其他模式优先使用 sensor/VIO 随帧时间，缺失时退回
- * 系统出帧时间。所有模式均不保证与墙上时钟同域。
+ * timestamp_ns 单位为 ns，属于 CLOCK_REALTIME 系统时间。VIN LPWM 硬件触发捕获
+ * 经有界 VSYNC 寄存器交叉采样映射至 RAW，再按帧组统一桥接 realtime；不是收到帧或 IRQ 时刻。
+ * 运行中跟随系统校时，允许回拨；缺少捕获或有效映射时停止，不使用到帧时间兜底。
+ * SC132_TRIGGER_MODE 仅接受 vin_lpwm；同域不表示已建立 IMU FSYNC 与曝光的硬件关联。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
  * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback
  * 保存 frame，必须在回调内先 sc132_frame_retain，并在最终使用完成后自行 sc132_frame_release。
@@ -108,6 +138,8 @@ int32_t sc132_start_frame_set(const sc132_frame_set_config_t *config,
                               uint32_t camera_mask);
 int32_t sc132_frame_retain(sc132_frame_t *frame);
 void sc132_frame_release(sc132_frame_t *frame);
+/* struct_size accepts the current size or the ABI 2.0 prefix ending before
+ * exposure. The returned size is unchanged; no bytes beyond it are written. */
 int32_t sc132_frame_get_info(const sc132_frame_t *frame,
                              sc132_frame_info_t *out_info);
 /*

@@ -104,7 +104,7 @@ endif()
 
 add_executable(imu_reader_demo
   src/imu_reader_demo.cpp
-  src/frozen_system_clock.cpp
+  src/monotonic_raw_clock.cpp
 )
 
 add_executable(serial_port_demo
@@ -117,7 +117,7 @@ add_executable(cam_demo
   src/cam_demo_config.cpp
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
-  src/frozen_system_clock.cpp
+  src/monotonic_raw_clock.cpp
 )
 
 add_executable(sensor_demo
@@ -128,7 +128,7 @@ add_executable(sensor_demo
   src/sensor_demo_yaml_config.cpp
   src/cam_demo_pipeline.cpp
   src/cam_demo_rtsp.cpp
-  src/frozen_system_clock.cpp
+  src/monotonic_raw_clock.cpp
   src/h264_mp4_recorder.cpp
   src/rosbag_v2_writer.cpp
   src/sensor_bag_recorder.cpp
@@ -140,7 +140,7 @@ add_executable(mosaic_rtsp_demo
   src/mosaic_nv12.cpp
   src/cam_demo_common.cpp
   src/cam_demo_config.cpp
-  src/frozen_system_clock.cpp
+  src/monotonic_raw_clock.cpp
 )
 
 

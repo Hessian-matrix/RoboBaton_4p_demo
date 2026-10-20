@@ -358,7 +358,7 @@ class FramePipeline::Impl {
     sc132_frame_set_t mapped_frame_set = frame_set;
     const TimestampDomain sc132_timestamp_domain = Sc132OutputTimestampDomain(options_);
     const uint64_t output_group_timestamp_ns =
-        MapSc132TimestampNs(frame_set.group_timestamp_ns);
+        frame_set.group_timestamp_ns;
     mapped_frame_set.group_timestamp_ns = output_group_timestamp_ns;
     uint32_t observed_mask = 0U;
     std::array<QueuedFrame, kMaxChannels> jobs{};
@@ -383,7 +383,7 @@ class FramePipeline::Impl {
           info.height != item.height || info.y_data == nullptr || info.uv_data == nullptr) {
         throw std::runtime_error("SC frame info mismatch");
       }
-      const uint64_t output_camera_timestamp_ns = MapSc132TimestampNs(info.timestamp_ns);
+      const uint64_t output_camera_timestamp_ns = info.timestamp_ns;
       mapped_frame_set.items[index].timestamp_ns = output_camera_timestamp_ns;
       if (sc132_frame_retain(item.frame) != SC132_STATUS_OK) {
         throw std::runtime_error("SC frame retain failed");
@@ -395,6 +395,8 @@ class FramePipeline::Impl {
       job.channel = static_cast<int>(item.camera_id);
       job.sequence = info.sequence;
       job.frame_id = info.frame_id;
+      job.raw_frame_id = info.raw_frame_id;
+      job.exposure = info.exposure;
       job.group_id = frame_set.group_id;
       job.group_timestamp_ns = output_group_timestamp_ns;
       job.group_max_skew_ns = frame_set.max_skew_ns;
@@ -582,35 +584,6 @@ class FramePipeline::Impl {
 #endif
 
  private:
-  uint64_t MapRawTimestampNs(uint64_t raw_timestamp_ns) const {
-    return options_.system_clock != nullptr ? options_.system_clock->MapRawNs(raw_timestamp_ns)
-                                            : raw_timestamp_ns;
-  }
-
-  bool Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(uint64_t timestamp_ns) const noexcept {
-    if (!Sc132TimestampsAreMonotonicRaw(options_) || options_.system_clock == nullptr) {
-      return false;
-    }
-    const uint64_t raw_start_ns = options_.system_clock->monotonic_raw_start_ns();
-    const uint64_t realtime_start_ns = options_.system_clock->realtime_start_ns();
-    if (realtime_start_ns <= raw_start_ns) {
-      return false;
-    }
-    const uint64_t realtime_epoch_midpoint_ns =
-        raw_start_ns + (realtime_start_ns - raw_start_ns) / 2ULL;
-    return timestamp_ns >= realtime_epoch_midpoint_ns;
-  }
-
-  uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
-    if (!Sc132TimestampsAreMonotonicRaw(options_)) {
-      return timestamp_ns;
-    }
-    if (Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(timestamp_ns)) {
-      // software_gpio 应输出 MONOTONIC_RAW；接近 REALTIME epoch 说明底层回退到了系统时钟，继续套用 RAW 偏移会把相机时间写到错误 epoch。
-      throw std::runtime_error("SC132 software GPIO timestamp is not MONOTONIC_RAW");
-    }
-    return MapRawTimestampNs(timestamp_ns);
-  }
 
 
   bool ShouldDegradeRtspPreview(int32_t result) const noexcept {
@@ -631,7 +604,7 @@ class FramePipeline::Impl {
       (void)std::fflush(stderr);
     }
   }
-  uint64_t PipelineNowNs() const { return MapRawTimestampNs(SteadyClockNowNs()); }
+  uint64_t PipelineNowNs() const { return SteadyClockNowNs(); }
 
   void RecordSourceProgress() noexcept {
     source_frame_sets_seen_.fetch_add(1U, std::memory_order_acq_rel);
@@ -826,7 +799,8 @@ class FramePipeline::Impl {
               "camera_ts_ns=%llu camera_ts_domain=%s rtsp_ts_ns=%llu "
               "rtsp_ts_domain=%s send_avg_ms=%.2f send_max_ms=%.2f "
               "rtsp_endpoint=ch%d rtsp_port=%d rtsp_degraded=%d "
-              "rtsp_preview_dropped=%llu rtsp_last_error=%d\n",
+              "rtsp_preview_dropped=%llu rtsp_last_error=%d "
+              "monotonic_ns=%llu sent_total=%llu\n",
               camera_id, fps,
               static_cast<unsigned long long>(diagnostic.last_sequence),
               static_cast<unsigned long long>(diagnostic.last_group_id),
@@ -840,7 +814,9 @@ class FramePipeline::Impl {
               TimestampDomainName(diagnostic.last_rtsp_timestamp_domain),
               send_average_ms, send_max_ms, camera_id + 1,
               RtspPortForChannel(options_, camera_id), preview_degraded ? 1 : 0,
-              static_cast<unsigned long long>(preview_dropped), preview_last_error)) {
+              static_cast<unsigned long long>(preview_dropped), preview_last_error,
+              static_cast<unsigned long long>(diagnostic_now_ns),
+              static_cast<unsigned long long>(total_sent))) {
         return false;
       }
     }
