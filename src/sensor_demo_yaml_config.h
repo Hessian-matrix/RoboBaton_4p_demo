@@ -15,6 +15,9 @@ struct SensorDemoYamlConfigState {
   std::string capture_directory = "/root/demo/capture/";
   uint32_t capture_frame_count = kDefaultCaptureFrameCount;
   uint32_t capture_warmup_seconds = kDefaultCaptureWarmupSeconds;
+  bool raw_server_enabled = false;
+  int raw_server_port = kDefaultRawServerPort;
+  uint32_t raw_server_ring_depth = kDefaultRawServerRingDepth;
 };
 
 // sensor_demo 运行包内的用户 YAML 配置相对路径。

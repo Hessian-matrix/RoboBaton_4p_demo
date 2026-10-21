@@ -133,6 +133,7 @@ add_executable(sensor_demo
   src/rosbag_v2_writer.cpp
   src/sensor_bag_recorder.cpp
   src/tee_capture_recorder.cpp
+  src/raw_frame_server.cpp
   src/x5_jpeg_encoder.cpp
 )
 add_executable(mosaic_rtsp_demo

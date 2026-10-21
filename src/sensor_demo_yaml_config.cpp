@@ -85,7 +85,8 @@ std::size_t CountLeadingSpaces(const std::string& text) noexcept {
 
 bool IsSupportedSection(const std::string& section) noexcept {
   return section == "camera" || section == "rtsp" || section == "imu" ||
-         section == "save_data" || section == "capture";
+         section == "save_data" || section == "capture" ||
+         section == "raw_server";
 }
 
 int ParseInt(const std::string& text, const char* name) {
@@ -203,7 +204,11 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  save: false\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.capture_directory << "\n"
          << "  frame_count: " << SensorDemoYamlConfigState{}.capture_frame_count << "\n"
-         << "  warmup_seconds: " << SensorDemoYamlConfigState{}.capture_warmup_seconds << "\n";
+         << "  warmup_seconds: " << SensorDemoYamlConfigState{}.capture_warmup_seconds << "\n"
+         << "raw_server:\n"
+         << "  enable: false\n"
+         << "  port: " << SensorDemoYamlConfigState{}.raw_server_port << "\n"
+         << "  ring_depth: " << SensorDemoYamlConfigState{}.raw_server_ring_depth << "\n";
   return output.str();
 }
 
@@ -239,6 +244,13 @@ void ApplyCaptureSelection(Options* options, const SensorDemoYamlConfigState& st
       state.capture_enabled ? state.capture_directory : std::string();
   options->capture_frame_count = state.capture_frame_count;
   options->capture_warmup_seconds = state.capture_warmup_seconds;
+}
+
+// raw server 开关关闭时清空端口，保证运行期单一判定依据是 raw_server_port 非零。
+void ApplyRawServerSelection(Options* options, const SensorDemoYamlConfigState& state) {
+  options->raw_server_port =
+      state.raw_server_enabled ? state.raw_server_port : 0;
+  options->raw_server_ring_depth = state.raw_server_ring_depth;
 }
 
 bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
@@ -300,6 +312,15 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
   } else if (key == "capture.warmup_seconds") {
     state->capture_warmup_seconds = ParseUint32(value, name.c_str());
     ApplyCaptureSelection(options, *state);
+  } else if (key == "raw_server.enable") {
+    state->raw_server_enabled = ParseBool(value, name.c_str());
+    ApplyRawServerSelection(options, *state);
+  } else if (key == "raw_server.port") {
+    state->raw_server_port = ParseInt(value, name.c_str());
+    ApplyRawServerSelection(options, *state);
+  } else if (key == "raw_server.ring_depth") {
+    state->raw_server_ring_depth = ParseUint32(value, name.c_str());
+    ApplyRawServerSelection(options, *state);
   } else {
     return false;
   }

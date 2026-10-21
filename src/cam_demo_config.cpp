@@ -65,6 +65,10 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --capture-warmup-seconds <1.." << kMaxCaptureWarmupSeconds
               << "> Wait after camera start before capture, default "
               << kDefaultCaptureWarmupSeconds << "\n";
+    std::cout << "  --raw-server-port <1..65535> Serve timestamp-addressed raw NV12 frames over TCP; default off (0)\n";
+    std::cout << "  --raw-server-ring-depth <1.." << kMaxRawServerRingDepth
+              << "> Raw server per-camera ring depth, default "
+              << kDefaultRawServerRingDepth << "\n";
   }
   std::cout << "  -h, --help        Show this help\n";
 }
@@ -346,6 +350,15 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
     throw std::invalid_argument("--capture-warmup-seconds must be in 1.." +
                                 std::to_string(kMaxCaptureWarmupSeconds));
   }
+  if (options.raw_server_port != 0 &&
+      (options.raw_server_port <= 0 || options.raw_server_port > kMaxRtspPort)) {
+    throw std::invalid_argument("--raw-server-port must be 0 (off) or in 1..65535");
+  }
+  if (options.raw_server_ring_depth == 0U ||
+      options.raw_server_ring_depth > kMaxRawServerRingDepth) {
+    throw std::invalid_argument("--raw-server-ring-depth must be in 1.." +
+                                std::to_string(kMaxRawServerRingDepth));
+  }
 }
 
 }  // namespace
@@ -463,6 +476,14 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       options.capture_warmup_seconds =
           ParseUint32(RequireValue(argc, argv, &i, "--capture-warmup-seconds"),
                       "--capture-warmup-seconds");
+    } else if (accept_imu_options && arg == "--raw-server-port") {
+      options.raw_server_port =
+          ParseInt(RequireValue(argc, argv, &i, "--raw-server-port"),
+                   "--raw-server-port");
+    } else if (accept_imu_options && arg == "--raw-server-ring-depth") {
+      options.raw_server_ring_depth =
+          ParseUint32(RequireValue(argc, argv, &i, "--raw-server-ring-depth"),
+                      "--raw-server-ring-depth");
     } else if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0], accept_imu_options);
       std::exit(0);

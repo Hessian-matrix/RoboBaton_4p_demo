@@ -19,3 +19,12 @@ save_data:
   format: mp4
   save_path: /root/demo/save_mp4/
   skip: false
+capture:
+  save: false
+  save_path: /root/demo/capture/
+  frame_count: 100
+  warmup_seconds: 5
+raw_server:
+  enable: false
+  port: 0
+  ring_depth: 16

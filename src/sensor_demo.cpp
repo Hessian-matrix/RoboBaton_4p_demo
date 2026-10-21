@@ -26,6 +26,7 @@ extern "C" {
 #include "cam_demo_pipeline.h"
 #include "cam_demo_rtsp.h"
 #include "h264_mp4_recorder.h"
+#include "raw_frame_server.h"
 #include "sensor_bag_recorder.h"
 #include "tee_capture_recorder.h"
 
@@ -49,6 +50,7 @@ struct SensorDemoImuStatsTestResult {
 struct MainPipelineHooksUser {
   robobaton_demo::SensorBagRecorder* bag_recorder = nullptr;
   robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
+  robobaton_demo::RawFrameServer* raw_server = nullptr;
 };
 
 void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
@@ -59,13 +61,18 @@ void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
   static_cast<void>(context->bag_recorder->TryAcceptFrameSet(frame_set));
 }
 
-void ObserveQueuedFrameForCapture(const robobaton_demo::QueuedFrame& frame,
-                                  void* user) {
+void ObserveQueuedFrameForRawConsumers(const robobaton_demo::QueuedFrame& frame,
+                                       void* user) {
   auto* context = static_cast<MainPipelineHooksUser*>(user);
-  if (context == nullptr || context->capture_recorder == nullptr) {
+  if (context == nullptr) {
     return;
   }
-  context->capture_recorder->ObserveRawFrame(frame.channel, frame);
+  if (context->capture_recorder != nullptr) {
+    context->capture_recorder->ObserveRawFrame(frame.channel, frame);
+  }
+  if (context->raw_server != nullptr) {
+    context->raw_server->ObserveRawFrame(frame.channel, frame);
+  }
 }
 
 #ifdef RELEASE008_TESTING
@@ -79,7 +86,11 @@ robobaton_demo::PipelineHooks MainPipelineHooks(MainPipelineHooksUser* user) {
   }
   if (user != nullptr && user->capture_recorder != nullptr) {
     // 采集挂在 on_queued_frame：worker 线程、RTSP send 之前，group 屏障同步语义不变。
-    hooks.on_queued_frame = ObserveQueuedFrameForCapture;
+    hooks.on_queued_frame = ObserveQueuedFrameForRawConsumers;
+  }
+  if (user != nullptr && user->raw_server != nullptr) {
+    // raw 服务与 tee 采集共享同一 hook：每路 worker 出队后只 retain 一次并复制元数据。
+    hooks.on_queued_frame = ObserveQueuedFrameForRawConsumers;
   }
   hooks.user = user;
 #ifdef RELEASE008_TESTING
@@ -475,6 +486,7 @@ struct SensorDemoShutdownContext {
   robobaton_demo::SensorBagRecorder* recorder = nullptr;
   robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
   robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
+  robobaton_demo::RawFrameServer* raw_server = nullptr;
   std::thread* imu_thread = nullptr;
   std::atomic<int>* imu_result = nullptr;
   ImuStats* imu_stats = nullptr;
@@ -483,15 +495,18 @@ struct SensorDemoShutdownContext {
   bool record_bag_requested = false;
   bool record_mp4_requested = false;
   bool capture_requested = false;
+  bool raw_server_requested = false;
   bool bag_finish_done = false;
   bool mp4_finish_done = false;
   bool capture_finish_done = false;
+  bool raw_server_stop_done = false;
   robobaton_demo::SensorBagFinishResult bag_finish;
   robobaton_demo::SensorBagRecorderStats bag_stats;
   robobaton_demo::H264Mp4FinishResult mp4_finish;
   robobaton_demo::H264Mp4RecorderStats mp4_stats;
   robobaton_demo::TeeCaptureFinishResult capture_finish;
   robobaton_demo::TeeCaptureRecorderStats capture_stats;
+  robobaton_demo::RawFrameServerStats raw_server_stats;
 };
 
 void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132ShutdownResult& shutdown,
@@ -542,6 +557,13 @@ void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132Shutdow
     context->capture_finish = context->capture_recorder->Finish(session_success);
     context->capture_stats = context->capture_recorder->SnapshotStats();
     context->capture_finish_done = true;
+  }
+  // raw 服务 writer 释放全部 retained 帧后才允许 SC132 blocking stop。
+  if (context->raw_server_requested && context->raw_server != nullptr &&
+      !context->raw_server_stop_done) {
+    context->raw_server->Stop();
+    context->raw_server_stats = context->raw_server->SnapshotStats();
+    context->raw_server_stop_done = true;
   }
 }
 
@@ -670,14 +692,17 @@ int main(int argc, char** argv) {
   SensorBagRecorder recorder;
   H264Mp4Recorder mp4_recorder;
   TeeCaptureRecorder capture_recorder;
+  RawFrameServer raw_server;
   MainPipelineHooksUser pipeline_hooks_user;
   bool record_bag_requested = false;
   bool record_mp4_requested = false;
   bool capture_requested = false;
+  bool raw_server_requested = false;
   bool recording_requested = false;
   std::string record_bag_path;
   std::string record_mp4_directory;
   std::string capture_directory;
+  int raw_server_port = 0;
   SensorDemoShutdownContext shutdown_context;
   DiskObservabilitySnapshot disk_observability_start;
 
@@ -695,6 +720,7 @@ int main(int argc, char** argv) {
     record_bag_requested = !options.record_bag_path.empty();
     record_mp4_requested = !options.record_mp4_directory.empty();
     capture_requested = options.capture_enabled && !options.capture_directory.empty();
+    raw_server_requested = options.raw_server_port != 0;
     recording_requested = record_bag_requested || record_mp4_requested;
     if (recording_requested) {
       disk_observability_start = CaptureDiskObservability();
@@ -704,6 +730,7 @@ int main(int argc, char** argv) {
     record_bag_path = options.record_bag_path;
     record_mp4_directory = options.record_mp4_directory;
     capture_directory = options.capture_directory;
+    raw_server_port = options.raw_server_port;
     if (record_mp4_requested && !Mp4CameraMaskAllowed(options.camera_mask)) {
       throw std::invalid_argument("MP4 recording requires full camera mask 0x0f");
     }
@@ -758,6 +785,9 @@ int main(int argc, char** argv) {
               << (record_mp4_requested ? record_mp4_directory : "disabled")
               << " capture="
               << (capture_requested ? capture_directory : "disabled")
+              << " raw_server="
+              << (raw_server_requested ? std::to_string(options.raw_server_port)
+                                       : "disabled")
               << " rtsp_preview_policy="
               << (options.rtsp_preview_failure_policy ==
                           RtspPreviewFailurePolicy::kDegradePreview
@@ -804,6 +834,8 @@ int main(int argc, char** argv) {
     pipeline_hooks_user.bag_recorder = record_bag_requested ? &recorder : nullptr;
     pipeline_hooks_user.capture_recorder =
         capture_requested ? &capture_recorder : nullptr;
+    pipeline_hooks_user.raw_server =
+        raw_server_requested ? &raw_server : nullptr;
     pipeline = std::make_unique<FramePipeline>(
         options, &rtsp, MainPipelineHooks(&pipeline_hooks_user));
     pipeline->StartWorkers();
@@ -832,6 +864,9 @@ int main(int argc, char** argv) {
     if (capture_requested) {
       capture_recorder.Start(options);
     }
+    if (raw_server_requested) {
+      raw_server.Start(options);
+    }
     pipeline->MarkSourceStarted();
 
     // camera-first 只在所选 frame-set 启动成功后建立 IMU final producer epoch。
@@ -842,7 +877,8 @@ int main(int argc, char** argv) {
     while (g_signal_stop == 0 &&
            !g_stop_requested.load(std::memory_order_acquire) &&
            pipeline->FirstError() == 0 && !recorder.HasFatalError() &&
-           !mp4_recorder.HasFatalError() && !capture_recorder.HasFatalError()) {
+           !mp4_recorder.HasFatalError() && !capture_recorder.HasFatalError() &&
+           !raw_server.HasFatalError()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   } catch (const std::exception& error) {
@@ -858,12 +894,14 @@ int main(int argc, char** argv) {
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
       if (pipeline->FirstError() != 0 || recorder.HasFatalError() ||
-          mp4_recorder.HasFatalError() || capture_recorder.HasFatalError()) {
+          mp4_recorder.HasFatalError() || capture_recorder.HasFatalError() ||
+          raw_server.HasFatalError()) {
         exit_code = 1;
       }
       shutdown_context.recorder = &recorder;
       shutdown_context.mp4_recorder = &mp4_recorder;
       shutdown_context.capture_recorder = &capture_recorder;
+      shutdown_context.raw_server = &raw_server;
       shutdown_context.imu_thread = &imu_thread;
       shutdown_context.imu_result = &imu_result;
       shutdown_context.imu_stats = &imu_stats;
@@ -872,13 +910,15 @@ int main(int argc, char** argv) {
       shutdown_context.record_bag_requested = record_bag_requested;
       shutdown_context.record_mp4_requested = record_mp4_requested;
       shutdown_context.capture_requested = capture_requested;
+      shutdown_context.raw_server_requested = raw_server_requested;
       const Sc132ShutdownResult shutdown = FinishSc132ShutdownDetailed(
           pipeline.get(), &rtsp,
-          (recording_requested || capture_requested)
+          (recording_requested || capture_requested || raw_server_requested)
               ? StopImuAndFinishRecordersBeforeSc132Stop
               : nullptr,
-          (recording_requested || capture_requested) ? &shutdown_context
-                                                      : nullptr);
+          (recording_requested || capture_requested || raw_server_requested)
+              ? &shutdown_context
+              : nullptr);
       consumer_quiescent = shutdown.consumer_join_ok && shutdown.ownership_quiescent;
       rtsp_status_ok = shutdown.rtsp_status_ok;
       rtsp_close_ok = shutdown.rtsp_close_ok;
@@ -1015,6 +1055,37 @@ int main(int argc, char** argv) {
               << ",cam1:" << capture_stats.encoded_aus_matched_by_camera[1]
               << ",cam2:" << capture_stats.encoded_aus_matched_by_camera[2]
               << ",cam3:" << capture_stats.encoded_aus_matched_by_camera[3] << "\n";
+  }
+
+  if (raw_server_requested) {
+    if (!shutdown_context.raw_server_stop_done) {
+      raw_server.Stop();
+      shutdown_context.raw_server_stats = raw_server.SnapshotStats();
+      shutdown_context.raw_server_stop_done = true;
+    }
+    const RawFrameServerStats raw_server_stats = shutdown_context.raw_server_stats;
+    if (raw_server.HasFatalError()) {
+      std::cerr << "fatal: raw frame server failed: "
+                << raw_server.ErrorMessage() << "\n";
+      exit_code = 1;
+    }
+    std::cout << "SENSOR_RAW_SERVER_RESULT port=" << raw_server_port
+              << " raw_frames_retained=" << raw_server_stats.raw_frames_retained
+              << " raw_retain_failures=" << raw_server_stats.raw_retain_failures
+              << " raw_frames_copied=" << raw_server_stats.raw_frames_copied
+              << " raw_frames_queue_dropped="
+              << raw_server_stats.raw_frames_queue_dropped
+              << " requests_total=" << raw_server_stats.requests_total
+              << " requests_matched=" << raw_server_stats.requests_matched
+              << " requests_no_match=" << raw_server_stats.requests_no_match
+              << " requests_latest=" << raw_server_stats.requests_latest
+              << " requests_bad=" << raw_server_stats.requests_bad
+              << " raw_frames_copied_by_camera=cam0:"
+              << raw_server_stats.raw_frames_copied_by_camera[0]
+              << ",cam1:" << raw_server_stats.raw_frames_copied_by_camera[1]
+              << ",cam2:" << raw_server_stats.raw_frames_copied_by_camera[2]
+              << ",cam3:" << raw_server_stats.raw_frames_copied_by_camera[3]
+              << "\n";
   }
 
   if (record_bag_requested) {

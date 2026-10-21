@@ -39,6 +39,9 @@ constexpr uint32_t kDefaultCaptureFrameCount = 100U;
 constexpr uint32_t kDefaultCaptureWarmupSeconds = 5U;
 constexpr uint32_t kMaxCaptureWarmupSeconds = 60U;
 constexpr uint32_t kMaxCaptureFrameCount = 100U;
+constexpr int kDefaultRawServerPort = 0;
+constexpr uint32_t kDefaultRawServerRingDepth = 16U;
+constexpr uint32_t kMaxRawServerRingDepth = 64U;
 
 constexpr uint32_t kDefaultImuPrintRateHz = 10U;
 extern std::atomic<bool> g_stop_requested;
@@ -101,6 +104,8 @@ struct Options {
   std::string capture_directory;
   uint32_t capture_frame_count = kDefaultCaptureFrameCount;
   uint32_t capture_warmup_seconds = kDefaultCaptureWarmupSeconds;
+  int raw_server_port = kDefaultRawServerPort;
+  uint32_t raw_server_ring_depth = kDefaultRawServerRingDepth;
   RtspPreviewFailurePolicy rtsp_preview_failure_policy =
       RtspPreviewFailurePolicy::kFailClosed;
 };
