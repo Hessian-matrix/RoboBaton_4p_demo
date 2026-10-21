@@ -143,7 +143,7 @@ fi
 
 
 for library in \
-  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
+  libicm42688.so.2.1.1 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
@@ -245,7 +245,7 @@ cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
-  libicm42688.so.2.1.0 libicm42688.so.2 libicm42688.so \
+  libicm42688.so.2.1.1 libicm42688.so.2 libicm42688.so \
   libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
