@@ -1,10 +1,10 @@
-# X5 SC132 4-Camera, IMU, and UART Demo
+# X5 SC132 4-Camera, IMU, UART, and CAN Demo
 
 中文说明：[README.md](README.md)
 
 ![RoboBaton 4P](image/4P_Cam.png)
 
-This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42670-P IMU examples, UART1/UART7 examples, public headers, and matching prebuilt runtime libraries.
+This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42670-P IMU examples, UART1/UART7 examples, a SocketCAN CAN example, public headers, and matching prebuilt runtime libraries.
 
 > **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
 
@@ -38,6 +38,7 @@ cd /root/demo
 ./sensor_demo --version
 ./imu_reader_demo --version
 ./serial_port_demo --version
+./can_demo --version
 ```
 
 Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42670`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42670`. This detects mixed packages.
@@ -53,6 +54,7 @@ These version queries do not initialize the camera, IMU, or UART. For compatibil
 | `mosaic_rtsp_demo` | Four NV12 views combined into one RTSP stream, default port `558` |
 | `imu_reader_demo` | Standalone IMU reading |
 | `serial_port_demo` | UART1/UART7 example; not for DEBUG_UART |
+| `can_demo` | TCAN4550 SocketCAN classical CAN transmit/receive example; preconfigured interface required; no CAN FD |
 
 ## Default run
 
@@ -77,11 +79,30 @@ IMU only:
 ./imu_reader_demo
 ```
 
+After stop, `imu_reader_demo` emits one `IMU_RUNTIME_HEALTH final=yes` record with session validity, producer/consumer sample counts, output drops, and final GPIO/FIFO/mapper/invalid-packet counters. Samples and the final record use best-effort nonblocking output; a missing final record is not proof of healthy completion. `--print-rate-hz 0` disables samples, not the final record.
+
 UART1/UART7 example:
 
 ```bash
 ./serial_port_demo
 ```
+
+### CAN Demo
+
+The BSP must register and configure a CAN network interface first. `can_demo` does not access SPI registers or change device tree, GPIO, bitrate, or interface state. It transmits classical CAN standard/extended data frames and receives data/remote frames with `0..8` payload bytes; CAN FD is not supported.
+
+```bash
+cd /root/demo
+./can_demo --help
+# Receive on can0; Ctrl-C stops. Alternatively set a finite count and idle timeout.
+./can_demo --interface can0 --mode rx --count 10 --timeout-ms 5000
+# Send 10 standard frames; hexadecimal ID, payload without separators.
+./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
+# 29-bit extended frame; sends once by default.
+./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
+```
+
+Without options, receive indefinitely. TX defaults to one `123#0102030405060708` frame; `--count 0` runs continuously. Exit codes: `0` completed or interrupted normally, `1` interface/I/O/receive-timeout failure, `2` invalid arguments. `tx_queued` means kernel acceptance only; local SocketCAN loopback is not external-bus proof. See [CAN usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-can) for interface setup, wiring, and two-node checks. Build alone with `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`; use `scripts/package_runtime.sh` to regenerate the full `demo/` package.
 
 For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html).
 
@@ -98,6 +119,8 @@ cd /root/demo
 ```
 
 Autostart is implemented through `/userdata/startup.sh`, executed by the system `S99auto_startup` after `/userdata` is mounted. The script only appends/removes its own marked block and never overwrites content written by other scripts such as `wifi_setup.sh`. Autostart uses the packaged default configuration; edit `config/sensor_config.yaml` to adjust it, no need to re-run `enable`.
+
+For the exposure-midpoint test, set `test_exposure_midpoint: true` in the `camera` section of `config/sensor_config.yaml`; default `false`. Restart `sensor_demo` to apply it. Explicit YAML overrides `SC132_TEST_EXPOSURE_MIDPOINT`; only an omitted key preserves environment control. Image timestamps, including ROS1 bag image `header.stamp`, use trigger time plus half exposure duration; IMU stamps and bag record time are unchanged. Unavailable exposure stops acquisition. Rebuild both the application and a supporting `libsc132.so`; old prebuilt packages do not gain support automatically. This is not a calibrated actual midpoint. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html#test-exposure-midpoint).
 
 ## Persistence
 

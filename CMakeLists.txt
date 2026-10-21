@@ -111,6 +111,10 @@ add_executable(serial_port_demo
   src/serial_port_demo.cpp
 )
 
+add_executable(can_demo src/can_demo.cpp)
+target_compile_options(can_demo PRIVATE -Wall -Wextra -Wpedantic)
+target_link_options(can_demo PRIVATE -static-libstdc++ -static-libgcc)
+
 add_executable(cam_demo
   src/cam_demo.cpp
   src/cam_demo_common.cpp
@@ -144,7 +148,7 @@ add_executable(mosaic_rtsp_demo
 )
 
 
-foreach(versioned_target IN ITEMS imu_reader_demo serial_port_demo cam_demo sensor_demo mosaic_rtsp_demo)
+foreach(versioned_target IN ITEMS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo mosaic_rtsp_demo)
   target_compile_definitions(${versioned_target} PRIVATE
     ROBOBATON_RELEASE_VERSION="${ROBOBATON_RELEASE_VERSION}")
 endforeach()
@@ -250,7 +254,7 @@ set_target_properties(mosaic_rtsp_demo PROPERTIES
 )
 
 
-install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo mosaic_rtsp_demo
+install(TARGETS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo mosaic_rtsp_demo
   RUNTIME DESTINATION .
   LIBRARY DESTINATION lib
 )

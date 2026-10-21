@@ -684,6 +684,12 @@ int main(int argc, char** argv) {
     g_stop_requested.store(false, std::memory_order_release);
 
     Options options = ParseSensorDemoCommandLine(argc, argv);
+    // Apply before any worker starts; libsc132 reads the switch at capture startup.
+    if (options.test_exposure_midpoint.has_value() &&
+        setenv("SC132_TEST_EXPOSURE_MIDPOINT",
+               *options.test_exposure_midpoint ? "1" : "0", 1) != 0) {
+      throw std::runtime_error("set SC132_TEST_EXPOSURE_MIDPOINT failed");
+    }
     imu_sample_drop_policy = options.imu_sample_drop_policy;
     PrintTimeBase(std::cout);
     record_bag_requested = !options.record_bag_path.empty();

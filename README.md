@@ -1,10 +1,10 @@
-# X5 SC132 四目相机、IMU 与 UART Demo
+# X5 SC132 四目相机、IMU、UART 与 CAN Demo
 
 英文说明：[README_EN.md](README_EN.md)
 
 ![RoboBaton 4P](image/4P_Cam.png)
 
-这是 RoboBaton 4P 的 V2 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42670-P IMU 示例、UART1/UART7 示例、公开头文件和匹配的预编译运行库。
+这是 RoboBaton 4P 的 V2 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42670-P IMU 示例、UART1/UART7 示例、SocketCAN CAN 示例、公开头文件和匹配的预编译运行库。
 
 > **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
 
@@ -38,6 +38,7 @@ cd /root/demo
 ./sensor_demo --version
 ./imu_reader_demo --version
 ./serial_port_demo --version
+./can_demo --version
 ```
 
 各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42670`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42670`，用于发现程序与 SO 混装。
@@ -53,6 +54,7 @@ cd /root/demo
 | `mosaic_rtsp_demo` | 四路 NV12 拼接为一路 RTSP，默认端口 `558` |
 | `imu_reader_demo` | 独立 IMU 读取 |
 | `serial_port_demo` | UART1/UART7 串口示例；不适用于 DEBUG_UART |
+| `can_demo` | TCAN4550 的 SocketCAN 经典 CAN 收发示例；接口须预先配置，不支持 CAN FD |
 
 ## 默认运行
 
@@ -70,7 +72,7 @@ cd /root/demo
 - `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
 - `libprrtsp.so`：把四路 NV12 帧送入 X5 编码器并输出 RTSP
 
-五个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
+六个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
 
 ```bash
 ./cam_demo
@@ -94,11 +96,30 @@ cd /root/demo
 ./imu_reader_demo
 ```
 
+`imu_reader_demo` 在 stop 后输出一条 `IMU_RUNTIME_HEALTH final=yes`，包含会话有效性、producer/consumer 样本数、日志丢弃及最终 GPIO/FIFO/mapper/无效包计数。样本与最终摘要均为非阻塞尽力输出；缺失摘要不能作为健康通过证据。`--print-rate-hz 0` 仅关闭样本，不关闭最终摘要。
+
 运行 UART1/UART7 示例：
 
 ```bash
 ./serial_port_demo
 ```
+
+### CAN Demo
+
+先由 BSP 正确注册并配置 CAN 网络接口；`can_demo` 不访问 SPI 寄存器、不修改设备树、GPIO、bitrate 或接口状态。支持经典 CAN 标准/扩展数据帧发送，以及数据帧/远程帧接收，载荷为 `0..8` 字节，不支持 CAN FD。
+
+```bash
+cd /root/demo
+./can_demo --help
+# 接收：默认 can0，Ctrl-C 退出；也可指定有限计数与空闲超时
+./can_demo --interface can0 --mode rx --count 10 --timeout-ms 5000
+# 发送 10 个标准帧，ID 按十六进制，数据不带分隔符
+./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
+# 29-bit 扩展帧；默认只发送一次
+./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
+```
+
+无参数默认持续接收；TX 默认发送一个 `123#0102030405060708`，`--count 0` 持续运行。退出码 `0` 为完成或正常中断，`1` 为接口/I/O/接收超时失败，`2` 为参数错误。`tx_queued` 仅表示内核接受；本机 SocketCAN 回环不证明外部收发。接口配置、接线与双节点验证见 [CAN 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-can)。单独构建用 `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`，完整生成 `demo/` 用 `scripts/package_runtime.sh`。
 
 首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)。
 
@@ -115,6 +136,8 @@ cd /root/demo
 ```
 
 开机自启动通过板端 `/userdata/startup.sh` 实现（系统 `S99auto_startup` 在 `/userdata` 挂载后执行）；脚本只追加/删除自己带标记的块，不影响其它脚本（如 `wifi_setup.sh`）写入的内容。自启动使用包内默认配置，直接修改 `config/sensor_config.yaml` 即可调整，无需重新执行 `enable`。
+
+曝光中点测试可在 `config/sensor_config.yaml` 的 `camera` 段设置 `test_exposure_midpoint: true`，默认 `false`；重启 `sensor_demo` 后生效。显式 YAML 覆盖 `SC132_TEST_EXPOSURE_MIDPOINT`，省略该键时才沿用环境变量。图像时间戳（包括 ROS1 bag 图像 `header.stamp`）使用触发时间加半曝光时长的估算值，不改变 IMU 或 bag record time；曝光不可用则停止采集。需重建应用及支持此开关的 `libsc132.so`，旧预编译包不自动支持；这不是已校准的真实曝光中点。详见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html#test-exposure-midpoint)。
 
 ## 保存数据
 

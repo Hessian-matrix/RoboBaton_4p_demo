@@ -489,7 +489,7 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
                 << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
                 << robobaton_demo::kDefaultImuSampleRateHz << "\n"
                 << "  --count N Number of IMU samples to consume before exit, default 0 (run until signal)\n"
-                << "  --print-rate-hz HZ Terminal output rate, default min(sample-rate-hz, 10); 0 disables output\n"
+                << "  --print-rate-hz HZ Terminal sample output rate, default min(sample-rate-hz, 10); 0 disables samples, not final health\n"
                 << "  --print-metrics Include metrics diagnostics section in each output record, default off\n";
       std::exit(0);
     } else {
@@ -526,6 +526,8 @@ int main(int argc, char** argv) {
     uint32_t print_rate_hz = 0U;
     bool print_metrics = false;
     ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz, &print_metrics);
+    icm42670_runtime_health_t final_health = ICM42670_RUNTIME_HEALTH_INIT;
+    options.final_health = &final_health;
     robobaton_demo::PrintTimeBase(std::cout);
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
@@ -533,10 +535,35 @@ int main(int argc, char** argv) {
     state.print_metrics = print_metrics;
     // 非阻塞标志属于共享 OFD；RAII 将修改严格限制在采集窗口，
     // 设置失败时禁用 CLI 输出，析构覆盖正常返回和异常路径并恢复调用方状态。
-    ScopedNonblockingFd output_mode(state.output_fd);
-    state.output_available = output_mode.active();
-    const int result = robobaton_demo::RunIcmConsumer(options, robobaton_demo::PrintImuSample,
-                                                      &state);
+    int result = 1;
+    {
+      ScopedNonblockingFd output_mode(state.output_fd);
+      state.output_available = output_mode.active();
+      result = robobaton_demo::RunIcmConsumer(options, robobaton_demo::PrintImuSample,
+                                             &state);
+      std::array<char, 1024> summary{};
+      const int size = std::snprintf(summary.data(), summary.size(),
+          "IMU_RUNTIME_HEALTH final=yes health_valid=%s session_generation=%llu "
+          "published_samples=%llu observed_samples=%llu output_dropped=%llu "
+          "invalid_packet_drop_count=%u gpio_event_gap_count=%u fifo_overflow_count=%u "
+          "mapper_failure_count=%u uncertainty_over_200_drop_count=%u "
+          "max_consecutive_timing_drop_count=%u\n",
+          final_health.session_generation != 0U ? "yes" : "no",
+          static_cast<unsigned long long>(final_health.session_generation),
+          static_cast<unsigned long long>(final_health.published_samples),
+          static_cast<unsigned long long>(state.observed_samples),
+          static_cast<unsigned long long>(state.dropped_output_lines),
+          final_health.invalid_packet_drop_count, final_health.gpio_event_gap_count,
+          final_health.fifo_overflow_count, final_health.mapper_failure_count,
+          final_health.uncertainty_over_200_drop_count,
+          final_health.max_consecutive_timing_drop_count);
+      // Final evidence follows the same best-effort, nonblocking sink contract as samples.
+      if (output_mode.active() && size > 0 && static_cast<std::size_t>(size) < summary.size()) {
+        if (::write(state.output_fd, summary.data(), static_cast<std::size_t>(size)) != size) {
+          state.output_available = false;
+        }
+      }
+    }
     if (result != 0) {
       std::cerr << "fatal: ICM consumer lifecycle failed\n";
     }

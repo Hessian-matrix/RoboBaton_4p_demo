@@ -186,6 +186,8 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  height: " << defaults.height << "\n"
          << "  fps: " << defaults.fps << "\n"
          << "  rotate: " << defaults.rotate_degrees << "\n"
+         << "  # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.\n"
+         << "  test_exposure_midpoint: false\n"
          << "rtsp:\n"
          << "  bps: " << defaults.bps << "\n"
          << "  codec: " << VideoCodecName(defaults.video_codec) << "\n"
@@ -255,6 +257,8 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     options->fps = ParseInt(value, name.c_str());
   } else if (key == "camera.rotate") {
     options->rotate_degrees = ParseInt(value, name.c_str());
+  } else if (key == "camera.test_exposure_midpoint") {
+    options->test_exposure_midpoint = ParseBool(value, name.c_str());
   } else if (key == "rtsp.bps") {
     options->bps = ParseLongLong(value, name.c_str());
   } else if (key == "rtsp.codec") {

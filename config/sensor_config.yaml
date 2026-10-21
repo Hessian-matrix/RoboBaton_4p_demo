@@ -5,6 +5,8 @@ camera:
   height: 1088
   fps: 30
   rotate: 0
+  # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.
+  test_exposure_midpoint: false
 rtsp:
   bps: 4000
   codec: h264

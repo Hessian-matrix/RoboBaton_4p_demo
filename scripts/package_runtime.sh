@@ -17,7 +17,7 @@ Usage:
   scripts/package_runtime.sh [options]
 
 Behavior:
-  Build the five non-ROS consumer demos from this release repository, using the
+  Build the six non-ROS consumer demos from this release repository, using the
   prebuilt runtime libraries already present in ./lib, then publish a verified
   runtime package to ./demo.
 
@@ -213,6 +213,7 @@ for path in \
   "${BUILD_DIR}/imu_reader_demo" \
   "${BUILD_DIR}/sensor_demo" \
   "${BUILD_DIR}/mosaic_rtsp_demo" \
+  "${BUILD_DIR}/can_demo" \
   "${BUILD_DIR}/serial_port_demo"; do
   if [[ ! -f "${path}" ]]; then
     echo "Missing required consumer executable: ${path}" >&2
@@ -241,6 +242,7 @@ cp "${BUILD_DIR}/imu_reader_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
+cp "${BUILD_DIR}/can_demo" "${STAGE_DIR}/bin/"
 cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
@@ -254,7 +256,7 @@ mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
 cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
 
-for executable in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo; do
+for executable in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo can_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
 done
 
@@ -276,7 +278,7 @@ fi
 unset DEMO_LD_LIBRARY_PATH DEMO_PATH_PREFIX
 EOF
 
-for name in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo; do
+for name in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo can_demo; do
   cat > "${STAGE_DIR}/${name}" <<EOF
 #!/bin/sh
 set -eu
@@ -288,8 +290,8 @@ EOF
 done
 
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
-chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/start_sensor_demo.sh"
-chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
+chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/can_demo" "${STAGE_DIR}/start_sensor_demo.sh"
+chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/can_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -85,6 +86,8 @@ struct Options {
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
+  // Unset preserves the library's environment setting; explicit YAML overrides it.
+  std::optional<bool> test_exposure_midpoint;
   uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t imu_sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
