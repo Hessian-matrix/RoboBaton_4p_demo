@@ -54,7 +54,7 @@ cd /root/demo
 | `mosaic_rtsp_demo` | 四路 NV12 拼接为一路 RTSP，默认端口 `558` |
 | `imu_reader_demo` | 独立 IMU 读取 |
 | `serial_port_demo` | UART1/UART7 串口示例；不适用于 DEBUG_UART |
-| `can_demo` | TCAN4550 的 SocketCAN 经典 CAN 收发示例；接口须预先配置，不支持 CAN FD |
+| `can_demo` | TCAN4550 的 SocketCAN 经典 CAN / CAN FD 收发示例，FD/BRS 显式开启；接口须预先配置 |
 
 ## 默认运行
 
@@ -106,7 +106,7 @@ cd /root/demo
 
 ### CAN Demo
 
-先由 BSP 正确注册并配置 CAN 网络接口；`can_demo` 不访问 SPI 寄存器、不修改设备树、GPIO、bitrate 或接口状态。支持经典 CAN 标准/扩展数据帧发送，以及数据帧/远程帧接收，载荷为 `0..8` 字节，不支持 CAN FD。
+先由 BSP 正确注册并配置 CAN 网络接口；`can_demo` 不访问 SPI 寄存器、不修改设备树、GPIO、bitrate 或接口状态。默认收发经典 CAN（`0..8` 字节），支持标准/扩展数据帧发送及数据帧/远程帧接收。`--fd` 开启 FD 发送或经典/FD 混合接收，要求接口已启用 FD（MTU `72`）；`--brs` 仅在 `--mode tx --fd` 下开启数据段速率切换。FD 发送长度为 `0..8、12、16、20、24、32、48、64` 字节，其他长度拒绝，不隐式补零；FD 不支持远程帧。
 
 ```bash
 cd /root/demo
@@ -117,9 +117,15 @@ cd /root/demo
 ./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
 # 29-bit 扩展帧；默认只发送一次
 ./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
+# 接口已按对端仲裁段/数据段速率配置为 FD 后，混合接收经典和 FD 帧
+./can_demo --interface can0 --mode rx --fd --count 10 --timeout-ms 5000
+# 16 字节 FD；省略 --brs 则不切换数据段速率
+./can_demo --interface can0 --mode tx --fd --brs --id 123 --data 000102030405060708090A0B0C0D0E0F
 ```
 
 无参数默认持续接收；TX 默认发送一个 `123#0102030405060708`，`--count 0` 持续运行。退出码 `0` 为完成或正常中断，`1` 为接口/I/O/接收超时失败，`2` 为参数错误。`tx_queued` 仅表示内核接受；本机 SocketCAN 回环不证明外部收发。接口配置、接线与双节点验证见 [CAN 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-can)。单独构建用 `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`，完整生成 `demo/` 用 `scripts/package_runtime.sh`。
+
+FD 输出为 `ID##<flags><data>`，flags 的 bit 0 为 BRS、bit 1 为 ESI，例如 `tx 123##1000102030405060708090A0B0C0D0E0F`。经典帧输出不变，`--extended` 只选择 29-bit ID，不代表 FD。应用支持 FD 不等于当前 BSP 已通过实板完整性验收；受影响 BSP 的长 FD 载荷可能损坏，必须先修复底层问题并在第二个物理节点逐字节核对载荷。
 
 首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)。
 

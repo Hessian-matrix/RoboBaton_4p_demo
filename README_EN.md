@@ -54,7 +54,7 @@ These version queries do not initialize the camera, IMU, or UART. For compatibil
 | `mosaic_rtsp_demo` | Four NV12 views combined into one RTSP stream, default port `558` |
 | `imu_reader_demo` | Standalone IMU reading |
 | `serial_port_demo` | UART1/UART7 example; not for DEBUG_UART |
-| `can_demo` | TCAN4550 SocketCAN classical CAN transmit/receive example; preconfigured interface required; no CAN FD |
+| `can_demo` | TCAN4550 SocketCAN classical CAN / CAN FD transmit/receive example, explicit FD/BRS opt-in; preconfigured interface required |
 
 ## Default run
 
@@ -89,7 +89,7 @@ UART1/UART7 example:
 
 ### CAN Demo
 
-The BSP must register and configure a CAN network interface first. `can_demo` does not access SPI registers or change device tree, GPIO, bitrate, or interface state. It transmits classical CAN standard/extended data frames and receives data/remote frames with `0..8` payload bytes; CAN FD is not supported.
+The BSP must register and configure a CAN network interface first. `can_demo` does not access SPI registers or change device tree, GPIO, bitrate, or interface state. By default it transmits classical CAN standard/extended data frames and receives data/remote frames (`0..8` bytes). `--fd` enables FD transmission or mixed classical/FD reception and requires an FD-enabled interface (MTU `72`); `--brs` enables the data-phase bit-rate switch only with `--mode tx --fd`. FD transmit lengths are `0..8,12,16,20,24,32,48,64` bytes; other lengths are rejected without implicit padding. FD has no remote frames.
 
 ```bash
 cd /root/demo
@@ -100,9 +100,15 @@ cd /root/demo
 ./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
 # 29-bit extended frame; sends once by default.
 ./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
+# After configuring FD with the peer's arbitration/data bitrates, receive mixed classical/FD frames.
+./can_demo --interface can0 --mode rx --fd --count 10 --timeout-ms 5000
+# 16-byte FD frame; omit --brs to keep the arbitration bitrate during the data phase.
+./can_demo --interface can0 --mode tx --fd --brs --id 123 --data 000102030405060708090A0B0C0D0E0F
 ```
 
 Without options, receive indefinitely. TX defaults to one `123#0102030405060708` frame; `--count 0` runs continuously. Exit codes: `0` completed or interrupted normally, `1` interface/I/O/receive-timeout failure, `2` invalid arguments. `tx_queued` means kernel acceptance only; local SocketCAN loopback is not external-bus proof. See [CAN usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-can) for interface setup, wiring, and two-node checks. Build alone with `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`; use `scripts/package_runtime.sh` to regenerate the full `demo/` package.
+
+FD output is `ID##<flags><data>`, where flags bit 0 is BRS and bit 1 is ESI, e.g. `tx 123##1000102030405060708090A0B0C0D0E0F`. Classical output is unchanged; `--extended` selects only a 29-bit ID, not FD. Application FD support is not board-level BSP integrity acceptance. Long FD payloads may be corrupted on affected BSPs; fix the underlying issue and verify the full payload byte-for-byte at a second physical node.
 
 For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html).
 

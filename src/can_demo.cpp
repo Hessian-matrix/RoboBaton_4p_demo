@@ -31,10 +31,12 @@ using Clock = std::chrono::steady_clock;
 struct Options {
   std::string interface = "can0";
   bool transmit = false;
+  bool fd = false;
   uint32_t count = 0;
   uint32_t interval_ms = 1000;
   uint32_t timeout_ms = 0;
-  can_frame frame{};
+  // SocketCAN shares the ID, length and data offsets for classic and FD frames.
+  canfd_frame frame{};
 };
 
 int HexDigit(char c) {
@@ -76,6 +78,8 @@ Options ParseOptions(int argc, char** argv) {
       options.transmit = mode == "tx";
     } else if (arg == "--id") { id = Number(value(), 16); tx_fields = true; }
     else if (arg == "--extended") { extended = true; tx_fields = true; }
+    else if (arg == "--fd") options.fd = true;
+    else if (arg == "--brs") { options.frame.flags |= CANFD_BRS; tx_fields = true; }
     else if (arg == "--data") { data = value(); tx_fields = true; }
     else if (arg == "--count") { options.count = Number(value(), 10); count_set = true; }
     else if (arg == "--interval-ms") { options.interval_ms = Number(value(), 10); tx_fields = true; }
@@ -86,11 +90,17 @@ Options ParseOptions(int argc, char** argv) {
       options.interface.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") != std::string::npos)
     throw std::invalid_argument("invalid CAN interface name");
   if (!options.transmit && tx_fields)
-    throw std::invalid_argument("--id/--extended/--data/--interval-ms require --mode tx");
+    throw std::invalid_argument("--id/--extended/--data/--interval-ms/--brs require --mode tx");
+  if ((options.frame.flags & CANFD_BRS) && !options.fd)
+    throw std::invalid_argument("--brs requires --fd");
   if (id > (extended ? CAN_EFF_MASK : CAN_SFF_MASK))
     throw std::invalid_argument("CAN ID exceeds selected 11-bit or 29-bit range; use --extended for 29-bit IDs");
-  if (data.size() > CAN_MAX_DLEN * 2 || data.size() % 2 != 0)
-    throw std::invalid_argument("--data must contain 0..8 bytes as an even number of hex digits");
+  if (data.size() % 2 != 0 || data.size() > (options.fd ? CANFD_MAX_DLEN : CAN_MAX_DLEN) * 2)
+    throw std::invalid_argument("--data requires even hex digits: classic 0..8 bytes, --fd up to 64 bytes");
+  const size_t length = data.size() / 2;
+  if (options.fd && length > 8 && length != 12 && length != 16 && length != 20 &&
+      length != 24 && length != 32 && length != 48 && length != 64)
+    throw std::invalid_argument("CAN FD data length must be 0..8,12,16,20,24,32,48,64 bytes; no implicit padding");
   if (options.interval_ms == 0 || options.interval_ms > 3600000 || options.timeout_ms > 3600000)
     throw std::invalid_argument("interval must be 1..3600000ms; timeout must be 0..3600000ms");
   options.frame.can_id = id | (extended ? CAN_EFF_FLAG : 0);
@@ -108,7 +118,7 @@ Options ParseOptions(int argc, char** argv) {
 
 class CanSocket {
  public:
-  explicit CanSocket(const std::string& interface) {
+  CanSocket(const std::string& interface, bool enable_fd) {
     fd_ = socket(PF_CAN, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, CAN_RAW);
     if (fd_ < 0) SystemError("socket(CAN_RAW); kernel CAN/RAW support is required");
     try {
@@ -123,6 +133,14 @@ class CanSocket {
       if (ioctl(fd_, SIOCGIFFLAGS, &request) < 0) SystemError("SIOCGIFFLAGS");
       if (!(request.ifr_flags & IFF_UP))
         throw std::runtime_error("CAN interface is down; configure bitrate and bring it up with ip link first");
+      if (enable_fd) {
+        if (ioctl(fd_, SIOCGIFMTU, &request) < 0) SystemError("SIOCGIFMTU");
+        if (request.ifr_mtu != CANFD_MTU)
+          throw std::runtime_error("--fd requires CAN FD interface MTU 72; configure bitrate/dbitrate and fd on with ip link first");
+        const int enabled = 1;
+        if (setsockopt(fd_, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &enabled, sizeof(enabled)) < 0)
+          SystemError("CAN_RAW_FD_FRAMES; kernel CAN FD support is required");
+      }
       sockaddr_can address{};
       address.can_family = AF_CAN;
       address.can_ifindex = index;
@@ -140,12 +158,13 @@ class CanSocket {
   int fd_ = -1;
 };
 
-void PrintFrame(const char* direction, const can_frame& frame) {
+void PrintFrame(const char* direction, const canfd_frame& frame, bool fd) {
   const bool extended = (frame.can_id & CAN_EFF_FLAG) != 0;
   std::cout << direction << ' ' << std::uppercase << std::hex << std::setfill('0')
             << std::setw(extended ? 8 : 3)
             << (frame.can_id & (extended ? CAN_EFF_MASK : CAN_SFF_MASK)) << '#';
-  if (frame.can_id & CAN_RTR_FLAG) std::cout << 'R' << std::dec << unsigned(frame.len);
+  if (fd) std::cout << '#' << unsigned(frame.flags & (CANFD_BRS | CANFD_ESI));
+  if (!fd && (frame.can_id & CAN_RTR_FLAG)) std::cout << 'R' << std::dec << unsigned(frame.len);
   else for (unsigned i = 0; i < frame.len; ++i) std::cout << std::setw(2) << unsigned(frame.data[i]);
   std::cout << std::dec << std::nouppercase << std::setfill(' ') << '\n' << std::flush;
 }
@@ -174,15 +193,16 @@ bool Wait(int fd, uint32_t timeout_ms) {
 
 void RunTransmit(int fd, const Options& options) {
   uint64_t sent = 0;
+  const size_t mtu = options.fd ? CANFD_MTU : CAN_MTU;
   while (!stopped && (options.count == 0 || sent < options.count)) {
-    const ssize_t bytes = write(fd, &options.frame, sizeof(options.frame));
+    const ssize_t bytes = write(fd, &options.frame, mtu);
     if (bytes < 0) {
       if (errno == EINTR) continue;
       SystemError("CAN write");
     }
-    if (bytes != CAN_MTU) throw std::runtime_error("incomplete CAN write");
+    if (bytes != static_cast<ssize_t>(mtu)) throw std::runtime_error("incomplete CAN write");
     ++sent;
-    PrintFrame("tx", options.frame);
+    PrintFrame("tx", options.frame, options.fd);
     if (options.count == 0 || sent < options.count) (void)Wait(-1, options.interval_ms);
   }
   // Socket acceptance is not an acknowledgement from an external CAN node.
@@ -196,33 +216,40 @@ void RunReceive(int fd, const Options& options) {
       if (stopped) break;
       throw std::runtime_error("CAN receive timeout; use --timeout-ms 0 to wait indefinitely");
     }
-    can_frame frame{};
-    const ssize_t bytes = read(fd, &frame, sizeof(frame));
+    canfd_frame frame{};
+    const ssize_t bytes = recv(fd, &frame, sizeof(frame), MSG_TRUNC);
     if (bytes < 0) {
       if (errno == EINTR || errno == EAGAIN) continue;
       SystemError("CAN read");
     }
-    if (bytes != CAN_MTU || frame.len > CAN_MAX_DLEN || (frame.can_id & CAN_ERR_FLAG))
-      throw std::runtime_error("invalid classical CAN data/remote frame");
+    const bool fd_frame = bytes == CANFD_MTU;
+    if ((bytes != CAN_MTU && !fd_frame) || (frame.can_id & CAN_ERR_FLAG) ||
+        (fd_frame ? (!options.fd || frame.len > CANFD_MAX_DLEN || (frame.can_id & CAN_RTR_FLAG))
+                  : frame.len > CAN_MAX_DLEN))
+      throw std::runtime_error("invalid or unexpected CAN/CAN FD frame");
     ++received;
-    PrintFrame("rx", frame);
+    PrintFrame("rx", frame, fd_frame);
   }
   std::cout << "rx_received=" << received << " interrupted=" << (stopped ? "yes" : "no") << '\n';
 }
 
 void Help() {
   std::cout << "Usage: can_demo [options]\n"
-      "Classical CAN via SocketCAN (TCAN4550 kernel driver required). No interface configuration.\n"
+      "Classical CAN / CAN FD via SocketCAN (TCAN4550 kernel driver required). No interface configuration.\n"
       "  --interface <name>   CAN device, default can0\n"
       "  --mode <rx|tx>       Default rx; tx sends one frame unless --count is set\n"
       "  --id <hex>           TX ID, default 123 (11-bit); optional 0x prefix\n"
       "  --extended           TX 29-bit extended ID (otherwise 11-bit)\n"
-      "  --data <hexbytes>    TX 0..8 bytes, default 0102030405060708; no separators\n"
+      "  --fd                 TX CAN FD / RX mixed classic+FD; requires FD interface MTU 72\n"
+      "  --brs                TX bit-rate switch; requires --mode tx --fd\n"
+      "  --data <hexbytes>    TX even hex digits, default 0102030405060708; no separators\n"
+      "                      Classic: 0..8 bytes; FD: 0..8,12,16,20,24,32,48,64 (no padding)\n"
       "  --count <n>          Frame count; 0 runs until Ctrl-C; RX default 0, TX default 1\n"
       "  --interval-ms <n>    TX interval 1..3600000ms, default 1000\n"
       "  --timeout-ms <n>     RX idle timeout 0..3600000ms, default 0 (wait forever)\n"
       "  --help | --version   No CAN hardware access\n"
-      "RX accepts all classical data/remote IDs, not CAN FD or error frames.\n"
+      "Default RX accepts classical data/remote frames; --fd also accepts FD data frames.\n"
+      "FD output: ID##<flags><data>, flags bit 0=BRS, bit 1=ESI; no FD remote/error frames.\n"
       "TX success means queued to the kernel, not peer receipt. Local SocketCAN loopback\n"
       "may be seen by other local receivers; it is not an external-bus test.\n";
 }
@@ -244,7 +271,7 @@ int main(int argc, char** argv) {
     sigemptyset(&action.sa_mask);
     if (sigaction(SIGINT, &action, nullptr) < 0 || sigaction(SIGTERM, &action, nullptr) < 0)
       SystemError("sigaction");
-    CanSocket socket(options.interface);
+    CanSocket socket(options.interface, options.fd);
     std::cout << "interface=" << options.interface << " mode=" << (options.transmit ? "tx" : "rx") << '\n';
     if (options.transmit) RunTransmit(socket.get(), options);
     else RunReceive(socket.get(), options);
