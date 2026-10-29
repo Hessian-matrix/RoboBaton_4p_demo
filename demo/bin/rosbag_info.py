@@ -80,6 +80,7 @@ class TopicInfo:
     message_count: int
     connections: int
     frequency: float | None = None
+    header_frequency: float | None = None
 
 
 @dataclass
@@ -91,6 +92,7 @@ class BagInfo:
     chunks: list[ChunkInfo]
     chunk_headers: dict[int, ChunkHeaderInfo]
     indexes: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+    header_indexes: dict[int, list[int]] | None = None
 
     @property
     def message_count(self) -> int:
@@ -530,6 +532,35 @@ def scan_index_region(reader: BagReader, index_pos: int) -> tuple[dict[int, Conn
     return connections, chunks
 
 
+def read_header_indexes(path: str) -> dict[int, list[int]]:
+    """Read acquisition stamps only for known ROS1 messages beginning with Header."""
+    supported = {"sensor_msgs/Imu", "sensor_msgs/CompressedImage", "sensor_msgs/CameraInfo"}
+    indexes: dict[int, list[int]] = {}
+    for message in iter_bag_messages(path):
+        if message.connection.datatype not in supported:
+            continue
+        payload = message.payload
+        if len(payload) < 16:
+            raise BagInfoError(f"malformed Header on {message.connection.topic}: truncated")
+        _, sec, nsec, frame_id_size = struct.unpack_from("<IIII", payload)
+        if nsec >= 1_000_000_000:
+            raise BagInfoError(f"malformed Header on {message.connection.topic}: invalid nanoseconds")
+        if frame_id_size > len(payload) - 16:
+            raise BagInfoError(f"malformed Header on {message.connection.topic}: truncated frame_id")
+        indexes.setdefault(message.connection.conn_id, []).append(sec * 1_000_000_000 + nsec)
+    return indexes
+
+
+def header_topic_frequency(connections: list[ConnectionInfo], indexes: dict[int, list[int]]) -> float | None:
+    if len({(connection.datatype, connection.md5sum) for connection in connections}) != 1:
+        return None
+    stamps = sorted(stamp for connection in connections for stamp in indexes.get(connection.conn_id, []))
+    if len(stamps) <= 1:
+        return None
+    period_ns = median([newer - older for newer, older in zip(stamps[1:], stamps[:-1])])
+    return 1_000_000_000 / period_ns if period_ns > 0 else None
+
+
 def topic_infos(info: BagInfo, *, include_frequency: bool) -> dict[str, TopicInfo]:
     by_topic: dict[str, list[ConnectionInfo]] = {}
     for connection in info.connections.values():
@@ -548,6 +579,8 @@ def topic_infos(info: BagInfo, *, include_frequency: bool) -> dict[str, TopicInf
             message_count=message_count,
             connections=len(connections),
             frequency=frequency,
+            header_frequency=(header_topic_frequency(connections, info.header_indexes)
+                              if info.header_indexes is not None else None),
         )
     return topics
 
@@ -587,6 +620,11 @@ def format_plain(info: BagInfo, *, include_frequency: bool) -> str:
     if info.chunks:
         rows.append(("messages", str(info.message_count)))
         rows.append(("compression", plain_compression(info)))
+    if include_frequency:
+        rows.append(("frequency_basis", "bag record time (inverse median interval), not sensor sampling rate"))
+    if info.header_indexes is not None:
+        rows.append(("header_frequency_basis", "message Header.stamp (inverse median interval)"))
+    if info.chunks:
         add_type_rows(rows, info)
         add_topic_rows(rows, info, include_frequency=include_frequency)
 
@@ -626,6 +664,10 @@ def add_topic_rows(rows: list[tuple[str, str]], info: BagInfo, *, include_freque
         value += f" : {topic_info.msg_type:<{max_datatype_len}}"
         if topic_info.connections > 1:
             value += f" ({topic_info.connections} connections)"
+        if info.header_indexes is not None:
+            header_rate = topic_info.header_frequency
+            value += (f" [Header: {human_readable_frequency(header_rate)}]" if header_rate is not None
+                      else " [Header: unavailable]")
         rows.append(("topics" if index == 0 else "", value))
 
 
@@ -654,6 +696,10 @@ def yaml_data(info: BagInfo, *, include_frequency: bool) -> dict[str, Any]:
             }
         )
     data["size"] = info.size
+    if include_frequency:
+        data["frequency_basis"] = "bag_record_time_inverse_median_interval"
+    if info.header_indexes is not None:
+        data["header_frequency_basis"] = "message_header_stamp_inverse_median_interval"
     if info.chunks:
         data.update(
             {
@@ -677,6 +723,8 @@ def yaml_data(info: BagInfo, *, include_frequency: bool) -> dict[str, Any]:
                 topic_data["connections"] = topic_info.connections
             if topic_info.frequency is not None:
                 topic_data["frequency"] = topic_info.frequency
+            if topic_info.header_frequency is not None:
+                topic_data["header_frequency"] = topic_info.header_frequency
             data["topics"].append(topic_data)
     else:
         data["indexed"] = False
@@ -691,7 +739,7 @@ def render_full_yaml(data: dict[str, Any]) -> str:
             for item in value:
                 first = True
                 for item_key, item_value in item.items():
-                    if item_key == "frequency" and isinstance(item_value, float):
+                    if item_key in {"frequency", "header_frequency"} and isinstance(item_value, float):
                         rendered = f"{item_value:.4f}"
                     else:
                         rendered = render_scalar(item_value)
@@ -819,7 +867,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-y", "--yaml", action="store_true", help="print information in YAML format")
     parser.add_argument("-k", "--key", default=None, help="print information on the given key")
-    parser.add_argument("--freq", action="store_true", help="display topic message frequency statistics")
+    parser.add_argument("--freq", action="store_true",
+                        help="display inverse median bag record-time intervals, not sensor sampling rates")
+    parser.add_argument("--header-freq", action="store_true",
+                        help="also scan Imu/CompressedImage/CameraInfo payload Header.stamp rates; implies --freq")
     parser.add_argument("bagfiles", nargs="+")
     return parser
 
@@ -830,16 +881,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.key and not args.yaml:
         parser.error("You can only specify key when printing in YAML format.")
 
+    include_frequency = args.freq or args.header_freq
     for index, bagfile in enumerate(args.bagfiles):
         try:
-            info = read_bag_info(bagfile, read_indexes=args.freq)
+            info = read_bag_info(bagfile, read_indexes=include_frequency)
+            if args.header_freq:
+                info.header_indexes = read_header_indexes(bagfile)
             if args.yaml:
-                output = format_yaml(info, include_frequency=args.freq, key=args.key)
+                output = format_yaml(info, include_frequency=include_frequency, key=args.key)
                 print(output)
                 if args.key is None:
                     print()
             else:
-                print(format_plain(info, include_frequency=args.freq))
+                print(format_plain(info, include_frequency=include_frequency))
             if index < len(args.bagfiles) - 1:
                 print("---")
         except MissingYamlKeyError as exc:

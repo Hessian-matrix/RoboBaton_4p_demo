@@ -5,12 +5,14 @@ camera:
   height: 1088
   fps: 30
   rotate: 0
+  # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.
+  test_exposure_midpoint: false
 rtsp:
   bps: 4000
   codec: h264
   url: /PRR
 imu:
-  sample_rate_hz: 800
+  sample_rate_hz: 1600
   print_rate_hz: 10
   print_metrics: false
   fsync_enabled: false
@@ -20,3 +22,6 @@ save_data:
   format: mp4
   save_path: /root/demo/save_mp4/
   skip: false
+  # ROS1 bag only: minimum arrival-order distance between dropped frame-sets.
+  # Exhaustion drains accepted data to a partial bag and exits nonzero.
+  drop_min_interval: 10

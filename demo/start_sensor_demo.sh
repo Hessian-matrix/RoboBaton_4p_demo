@@ -7,7 +7,7 @@ set -eu
 #
 # 开机自启动通过 /userdata/startup.sh 实现：板端 /etc/init.d/S99auto_startup
 # 在 /userdata 挂载后执行该文件。本脚本只追加/删除自己带标记的块，
-# 不会覆盖其它脚本（如 wifi_setup.sh）写入的内容。
+# 不会覆盖其它应用写入的内容；系统 wifi_setup 使用独立启动入口。
 #
 # 开机自启动使用运行包内 config/sensor_config.yaml 的默认配置。
 
