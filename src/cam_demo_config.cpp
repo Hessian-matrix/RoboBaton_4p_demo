@@ -60,6 +60,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
     std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
     std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
     std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
+    std::cout << "  --record-drop-min-interval <2..4294967295> Minimum source-group distance between bag drops; default 10; exhaustion stops recording\n";
     std::cout << "  --capture-dir <absolute-directory> Tee raw NV12 planes plus encoded access units after warmup; default off\n";
     std::cout << "  --capture-frame-count <1.." << kMaxCaptureFrameCount
               << "> Frames per camera to capture, default " << kDefaultCaptureFrameCount << "\n";
@@ -304,6 +305,13 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   if (options.record_frame_skip > 1U) {
     throw std::invalid_argument("--record-frame-skip must be 0 or 1");
   }
+  if (options.record_drop_min_interval < 2U) {
+    throw std::invalid_argument("--record-drop-min-interval must be at least 2");
+  }
+  if (!options.record_bag_path.empty() && options.record_frame_skip != 0U &&
+      options.record_drop_min_interval != 2U) {
+    throw std::invalid_argument("alternate frame skip requires --record-drop-min-interval 2");
+  }
   if (!options.record_bag_path.empty() && options.record_bag_path.front() != '/') {
     throw std::invalid_argument("--record-bag/save_data.save_path path must be absolute");
   }
@@ -454,6 +462,10 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
           ParseUint32(RequireValue(argc, argv, &i, "--record-frame-skip"),
                       "--record-frame-skip");
       cli_parse_state.record_frame_skip_set = true;
+    } else if (accept_imu_options && arg == "--record-drop-min-interval") {
+      options.record_drop_min_interval = ParseUint32(
+          RequireValue(argc, argv, &i, "--record-drop-min-interval"),
+          "--record-drop-min-interval");
     } else if (accept_imu_options && arg == "--capture-dir") {
       options.capture_directory = RequireValue(argc, argv, &i, "--capture-dir");
       if (options.capture_directory.empty() ||

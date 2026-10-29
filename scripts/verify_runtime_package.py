@@ -16,31 +16,34 @@ import tempfile
 
 MANIFEST_NAME = "manifest.sha256"
 PROVENANCE_NAME = "runtime-provenance.json"
-PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v2"
+PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v3"
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 EXPECTED_VERSION_NEEDS = {
-    "bin/cam_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
-    "bin/mosaic_rtsp_demo": {"LIBSC132_2.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42670_X5_2.0", "ICM42670_X5_2.1"},
-    "bin/sensor_demo": {"ICM42670_X5_2.0", "ICM42670_X5_2.1",
-                        "LIBSC132_2.0", "LIBPRRTSP_2.0"},
+    "bin/cam_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
+    "bin/mosaic_rtsp_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
+    "bin/imu_reader_demo": {"ICM42670_X5_3.0"},
+    "bin/sensor_demo": {"ICM42670_X5_3.0",
+                        "LIBSC132_3.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42670.so.2.0.0": {"ICM42670_X5_2.0", "ICM42670_X5_2.1"},
-    "lib/libsc132.so.2.0.0": {"LIBSC132_2.0"},
-    "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
+    "lib/libicm42670.so.3.0.0": {"ICM42670_X5_3.0"},
+    "lib/libsc132.so.3.0.0": {"LIBSC132_3.0"},
+    "lib/libprrtsp.so.2.0.1": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42670.so.2.0.0": "libicm42670.so.2",
-    "lib/libsc132.so.2.0.0": "libsc132.so.2",
-    "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
+    "lib/libicm42670.so.3.0.0": "libicm42670.so.3",
+    "lib/libsc132.so.3.0.0": "libsc132.so.3",
+    "lib/libprrtsp.so.2.0.1": "libprrtsp.so.2",
 }
-EXPECTED_LIBRARY_COPIES = {
-    "lib/libicm42670.so.2.0.0": {"lib/libicm42670.so.2", "lib/libicm42670.so"},
-    "lib/libsc132.so.2.0.0": {"lib/libsc132.so.2", "lib/libsc132.so"},
-    "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
+EXPECTED_LIBRARY_LINKS = {
+    "lib/libicm42670.so.3": "libicm42670.so.3.0.0",
+    "lib/libicm42670.so": "libicm42670.so.3",
+    "lib/libsc132.so.3": "libsc132.so.3.0.0",
+    "lib/libsc132.so": "libsc132.so.3",
+    "lib/libprrtsp.so.2": "libprrtsp.so.2.0.1",
+    "lib/libprrtsp.so": "libprrtsp.so.2",
 }
 EXPECTED_SCRIPT_COPIES = {
     "scripts/runtime_ffprobe_frame_count.sh": "bin/ffprobe",
@@ -48,17 +51,17 @@ EXPECTED_SCRIPT_COPIES = {
     "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
-    "bin/imu_reader_demo": {"libicm42670.so.2", "libm.so.6", "libc.so.6"},
-    "bin/sensor_demo": {"libicm42670.so.2", "libsc132.so.2", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
-    "bin/cam_demo": {"libsc132.so.2", "libprrtsp.so.2", "libc.so.6"},
-    "bin/mosaic_rtsp_demo": {"libsc132.so.2", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
+    "bin/imu_reader_demo": {"libicm42670.so.3", "libm.so.6", "libc.so.6"},
+    "bin/sensor_demo": {"libicm42670.so.3", "libsc132.so.3", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
+    "bin/cam_demo": {"libsc132.so.3", "libprrtsp.so.2", "libc.so.6"},
+    "bin/mosaic_rtsp_demo": {"libsc132.so.3", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
     "bin/serial_port_demo": {"libc.so.6"},
     "bin/can_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42670.so.2.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libsc132.so.2.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42670.so.3.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libsc132.so.3.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libprrtsp.so.2.0.1": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
 REQUIRED_FILES = {
     "VERSION",
@@ -81,7 +84,7 @@ REQUIRED_FILES = {
     "bin/ffprobe",
     "bin/rosbag_info.py",
     *EXPECTED_VERSION_DEFINITIONS,
-    *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
+    *EXPECTED_LIBRARY_LINKS,
 }
 
 
@@ -219,6 +222,26 @@ def artifact_payload_hashes(package_dir: Path) -> dict[str, str]:
         and path.relative_to(package_dir).as_posix() not in excluded
     }
 
+def artifact_symlinks(package_dir: Path) -> dict[str, str]:
+    return {
+        path.relative_to(package_dir).as_posix(): os.readlink(path)
+        for path in sorted(package_dir.rglob("*")) if path.is_symlink()
+    }
+
+
+def verify_library_links(root: Path) -> None:
+    for relative in EXPECTED_VERSION_DEFINITIONS:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            raise AssertionError(f"missing regular producer library: {relative}")
+    for relative, target in EXPECTED_LIBRARY_LINKS.items():
+        path = root / relative
+        if not path.is_symlink() or os.readlink(path) != target:
+            raise AssertionError(f"producer link mismatch: {relative} must point to {target}")
+        if not path.is_file():
+            raise AssertionError(f"broken producer link: {relative}")
+
+
 
 def repo_input_paths(repo_root: Path) -> list[Path]:
     paths = [
@@ -234,12 +257,15 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
     ]
     paths.extend(sorted((repo_root / "src").glob("*")))
     paths.extend(sorted((repo_root / "lib").glob("lib*.so*")))
-    return [path for path in paths if path.is_file()]
+    return [path for path in paths if path.is_file() or path.is_symlink()]
 
 
 def repo_input_hashes(repo_root: Path) -> dict[str, str]:
     return {
-        path.relative_to(repo_root).as_posix(): sha256(path)
+        path.relative_to(repo_root).as_posix(): (
+            hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
+            if path.is_symlink() else sha256(path)
+        )
         for path in repo_input_paths(repo_root)
     }
 
@@ -252,7 +278,7 @@ def expected_inventory_nodes() -> dict[str, str]:
         MANIFEST_NAME: "regular",
     }
     for relative in REQUIRED_FILES:
-        nodes[relative] = "regular"
+        nodes[relative] = "symlink" if relative in EXPECTED_LIBRARY_LINKS else "regular"
     return nodes
 
 
@@ -262,7 +288,11 @@ def verify_exact_inventory(root: Path, expected_nodes: dict[str, str]) -> dict[s
         relative = path.relative_to(root).as_posix()
         st = os.lstat(path)
         if stat.S_ISLNK(st.st_mode):
-            raise AssertionError(f"symlink is not allowed in runtime package: {relative}")
+            target = EXPECTED_LIBRARY_LINKS.get(relative)
+            if target is None or os.readlink(path) != target or not path.is_file():
+                raise AssertionError(f"unexpected or invalid runtime symlink: {relative}")
+            actual_inventory[relative] = "symlink"
+            continue
         if stat.S_ISDIR(st.st_mode):
             actual_inventory[relative] = "dir"
             continue
@@ -277,11 +307,11 @@ def verify_exact_inventory(root: Path, expected_nodes: dict[str, str]) -> dict[s
     return actual_inventory
 
 
-def manifest_regular_files(root: Path, actual_inventory: dict[str, str]) -> list[str]:
+def manifest_payload_files(actual_inventory: dict[str, str]) -> list[str]:
     return sorted(
         relative
         for relative, kind in actual_inventory.items()
-        if kind == "regular" and relative != MANIFEST_NAME
+        if kind in {"regular", "symlink"} and relative != MANIFEST_NAME
     )
 
 
@@ -301,7 +331,7 @@ def write_manifest(package_dir: Path) -> None:
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     lines = [
         f"{sha256(package_dir / relative)}  {relative}"
-        for relative in manifest_regular_files(package_dir, actual_inventory)
+        for relative in manifest_payload_files(actual_inventory)
     ]
     write_atomic_text(package_dir / MANIFEST_NAME, "\n".join(lines) + "\n")
 
@@ -323,7 +353,7 @@ def verify_manifest(package_dir: Path) -> dict[str, str]:
 
 def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
     entries = verify_manifest(root)
-    regular_files = manifest_regular_files(root, actual_inventory)
+    regular_files = manifest_payload_files(actual_inventory)
     if sorted(entries) != regular_files:
         missing = sorted(set(regular_files) - set(entries))
         extra = sorted(set(entries) - set(regular_files))
@@ -398,7 +428,10 @@ def build_provenance(
         "release_version": RELEASE_VERSION,
         "source": source,
         "repository_states": repository_states,
-        "artifact": {"files": artifact_payload_hashes(package_dir)},
+        "artifact": {
+            "files": artifact_payload_hashes(package_dir),
+            "symlinks": artifact_symlinks(package_dir),
+        },
         "toolchain": {
             "compiler": str(compiler_path),
             "compiler_sha256": sha256(compiler_path),
@@ -480,7 +513,9 @@ def verify_provenance(
             raise AssertionError("runtime provenance inputs do not match the recorded source commit")
 
     artifact = provenance.get("artifact")
-    if not isinstance(artifact, dict) or artifact.get("files") != artifact_payload_hashes(package_dir):
+    if (not isinstance(artifact, dict)
+            or artifact.get("files") != artifact_payload_hashes(package_dir)
+            or artifact.get("symlinks") != artifact_symlinks(package_dir)):
         raise AssertionError("runtime provenance artifact payload hashes do not match package files")
     toolchain = provenance.get("toolchain")
     if not isinstance(toolchain, dict):
@@ -535,6 +570,8 @@ def verify_package(
     source_output_dir: Path | None = None,
 ) -> None:
     expected_nodes = expected_inventory_nodes()
+    verify_library_links(package_dir)
+    verify_library_links(repo_root)
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     verify_checksums(package_dir, actual_inventory)
     verify_provenance(package_dir, repo_root, source_output_dir)
@@ -592,19 +629,14 @@ def verify_package(
             )
 
     version_getters = {
-        "lib/libicm42670.so.2.0.0": "icm42670_get_version",
-        "lib/libsc132.so.2.0.0": "sc132_get_version",
-        "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
+        "lib/libicm42670.so.3.0.0": "icm42670_get_version",
+        "lib/libsc132.so.3.0.0": "sc132_get_version",
+        "lib/libprrtsp.so.2.0.1": "prrtsp_get_version",
     }
     for relative, symbol in version_getters.items():
         if symbol not in dynamic_symbols(package_dir / relative):
             raise AssertionError(f"missing release version getter {symbol} in {relative}")
 
-    for real_relative, copies in EXPECTED_LIBRARY_COPIES.items():
-        expected_hash = sha256(package_dir / real_relative)
-        for copy_relative in copies:
-            if sha256(package_dir / copy_relative) != expected_hash:
-                raise AssertionError(f"producer copy drift: {copy_relative} != {real_relative}")
 
     for source_relative, package_relative in EXPECTED_SCRIPT_COPIES.items():
         if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):

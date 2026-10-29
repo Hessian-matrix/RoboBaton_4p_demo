@@ -280,10 +280,10 @@ record_pass "remote files exist"
 
 ldd_output="$(ssh_remote "cd '${REMOTE_DIR}' && cam_bin=./cam_demo; [ -x ./bin/cam_demo ] && cam_bin=./bin/cam_demo; LD_LIBRARY_PATH=\$PWD/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/usr/lib:/lib64:/lib ldd \${cam_bin} | egrep 'libsc132|libprrtsp|libstdc' || true")"
 echo "${ldd_output}"
-if grep -Fq "libsc132.so.2 => ${REMOTE_DIR}/lib/libsc132.so.2" <<<"${ldd_output}"; then
-  record_pass "cam_demo loads local ABI-v2 libsc132.so.2"
+if grep -Fq "libsc132.so.3 => ${REMOTE_DIR}/lib/libsc132.so.3" <<<"${ldd_output}"; then
+  record_pass "cam_demo loads local ABI-3 libsc132.so.3"
 else
-  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libsc132.so.2"
+  record_fail "cam_demo does not load ${REMOTE_DIR}/lib/libsc132.so.3"
 fi
 if grep -Fq "libprrtsp.so.2 => ${REMOTE_DIR}/lib/libprrtsp.so.2" <<<"${ldd_output}"; then
   record_pass "cam_demo loads local ABI-v2 libprrtsp.so.2"

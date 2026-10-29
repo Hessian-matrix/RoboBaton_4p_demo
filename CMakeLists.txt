@@ -21,19 +21,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2.0.0")
+set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0")
 if(NOT EXISTS "${ICM42670_SO}")
-  message(FATAL_ERROR "Missing ${ICM42670_SO}. Run the canonical producer build so libicm42670.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${ICM42670_SO}. Build and synchronize the ABI 3 producer and its relative library links into this demo's lib/ directory.")
 endif()
 
-set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0")
+set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.3.0.0 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
-set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0")
+set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.1")
 if(NOT EXISTS "${PRRTSP_SO}")
-  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Run the canonical producer build so libprrtsp.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Run the canonical producer build so libprrtsp.so.2.0.1 and compatibility copies exist in this demo's lib/ directory.")
 endif()
 
 set(X5_USR_X5_INCLUDE_DIR "" CACHE PATH "X5 usr_x5 include directory that provides hbn_api.h")
@@ -80,9 +80,9 @@ set_target_properties(icm42670_x5 PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
-# 直接绑定 canonical major-2 ELF，由 SONAME 决定消费者的 DT_NEEDED。
-add_library(sc132_v2 SHARED IMPORTED GLOBAL)
-set_target_properties(sc132_v2 PROPERTIES
+# 直接绑定 canonical ELF，由 SONAME 决定消费者的 DT_NEEDED。
+add_library(sc132 SHARED IMPORTED GLOBAL)
+set_target_properties(sc132 PROPERTIES
   IMPORTED_LOCATION "${SC132_SO}"
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
@@ -209,9 +209,9 @@ if(X5_HOBOT_LIB_DIR)
   target_link_options(sensor_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
   target_link_options(mosaic_rtsp_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
-target_link_libraries(cam_demo PRIVATE sc132_v2 prrtsp_v2 Threads::Threads)
-target_link_libraries(sensor_demo PRIVATE icm42670_x5 sc132_v2 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
-target_link_libraries(mosaic_rtsp_demo PRIVATE sc132_v2 prrtsp_v2 ${X5_HBMEM_SO} Threads::Threads)
+target_link_libraries(cam_demo PRIVATE sc132 prrtsp_v2 Threads::Threads)
+target_link_libraries(sensor_demo PRIVATE icm42670_x5 sc132 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
+target_link_libraries(mosaic_rtsp_demo PRIVATE sc132 prrtsp_v2 ${X5_HBMEM_SO} Threads::Threads)
 target_link_options(cam_demo PRIVATE
   -static-libstdc++
   -static-libgcc
@@ -260,13 +260,13 @@ install(TARGETS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo m
 )
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.1"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so"
   DESTINATION lib

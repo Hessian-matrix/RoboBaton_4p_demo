@@ -2,13 +2,11 @@
 
 中文说明：[README.md](README.md)
 
-![RoboBaton 4P](image/4P_Cam.png)
-
 This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42670-P IMU examples, UART1/UART7 examples, a SocketCAN CAN example, public headers, and matching prebuilt runtime libraries.
 
 > **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
 
-Current source uses `icm42670_*` / `icm42670_driver.h`, SONAME `libicm42670.so.2`, and real SO `libicm42670.so.2.0.0`. IMU ABI 2.1 retains base functions in `ICM42670_X5_2.0` and adds the FSYNC callback in `ICM42670_X5_2.1`. Old V1 downloads do not implement this interface. Software versions, documentation revisions, and board acceptance are independent; an identical version string does not prove an identical manifest. The image above is a V1 illustration, not V2 pinout or photographic evidence.
+Current source uses `icm42670_*` / `icm42670_driver.h`, IMU ABI 3.0, SONAME `libicm42670.so.3`, and real SO `libicm42670.so.3.0.0`; all exports use only `ICM42670_X5_3.0`. Field names and layouts are unchanged, but `host_timestamp_ns` is now the RAW observation at the packet's successful SPI FIFO burst completion, converted to realtime using the bridge measured for that observation. Packets in one burst may share it; FSYNC-deferred publication retains the converted value, without remapping old RAW at publication. It is not IRQ-edge, sample, or exposure time. FIFO order and measured TMST define sample identity and timing; INT1 only wakes acquisition. GPIO notification sequence gaps are diagnostic, not proof of sample loss or independently fatal. Software versions, documentation revisions, and board acceptance are independent; identical version strings do not prove identical manifests.
 
 ## Contents
 
@@ -23,7 +21,18 @@ scripts/    Build, packaging, and runtime verification entry points (includes `b
 
 Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the configuration file.
 
-Camera ABI 2.2 provides a frozen per-frame ISP exposure observation in `sc132_frame_info_t.exposure`, also saved in bag frame metadata, MP4 `exposure.jsonl`, and tee indexes. `status=1` is an estimate, not certified applied exposure or an actual exposure midpoint; `status=0` is unavailable. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html) for fields, join keys, and limits.
+Each library family in `lib/` and `demo/lib/` has one real `libNAME.so.M.m.p` file and exact same-directory relative links: `libNAME.so.M -> libNAME.so.M.m.p`, `libNAME.so -> libNAME.so.M` (NAME is `icm42670`, `sc132`, or `prrtsp`). Copy complete packages with link-preserving `tar`, `cp -a`, or `rsync -a`, not dereferencing copies. Packaging and verification reject flattened aliases and absolute, wrong, or broken links. `manifest.sha256` checks resolved bytes; v3 `runtime-provenance.json` also binds link text. Regenerate packages with older provenance.
+
+| Library | Real file | SONAME | Symbol nodes |
+|---|---|---|---|
+| ICM42670 | `libicm42670.so.3.0.0` | `libicm42670.so.3` | `ICM42670_X5_3.0` |
+| SC132 | `libsc132.so.3.0.0` | `libsc132.so.3` | `LIBSC132_3.0` |
+| PRRTSP | `libprrtsp.so.2.0.1` | `libprrtsp.so.2` | `LIBPRRTSP_2.0` |
+
+`M.m.p` identifies the real-library revision; `M` is the ABI major, independent of software and PCB versions. Both ICM42670 and SC132 ABI 3.0 require rebuilt consumers and removal of old-major libraries; never add `.so.2 -> .so.3` links or old symbol aliases. IMU sample time remains measured TMST-to-RAW-to-realtime and follows backward wall-clock steps; order by `sample_sequence`, not unique host observations or increasing realtime. This design does not fix the underlying GPIO/kernel cause, change LPWM/the kernel, or guarantee zero loss under arbitrary load. FIFO overflow, bad packets, ambiguous clocks, and invalid epochs still fail; `200µs` admission is unchanged.
+
+
+Camera ABI 3.0 provides a frozen per-frame ISP exposure observation in `sc132_frame_info_t.exposure`, also saved in bag frame metadata, MP4 `exposure.jsonl`, and tee indexes. `status=1` is an estimate, not certified applied exposure or an actual exposure midpoint; `status=0` is unavailable. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html) for fields, join keys, and limits.
 
 ## Version and package matching
 
@@ -44,6 +53,8 @@ cd /root/demo
 Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42670`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42670`. This detects mixed packages.
 
 These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html), [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html), and [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html).
+
+Accepted parameter values are not sustained-throughput promises for every persistence, streaming, DDS, and load combination. The approximately 300-second non-ROS 60fps + 1600Hz FSYNC pressure-console evidence covers association and rates, not clean decoding of saved images or ROS2 60fps. CPU/eMMC-stressed bags may legally stop early when strict drop spacing is exhausted; correct policy does not mean sustained recording passed. LPWM long tails, 60fps RTSP decoder warnings, end-to-end IMU boundary counts, and long-duration validation of the new composition remain incomplete. Built software, a board update, and a formal release are separate states. See [Release and support](https://4p-doc-en.readthedocs.io/en/latest/release-and-support.html) for shared limits.
 
 ## Choose a demo
 
@@ -87,6 +98,8 @@ UART1/UART7 example:
 ./serial_port_demo
 ```
 
+While waiting for RX, `SIGINT`/`SIGTERM` exits with status `0` and restores the original serial-port settings. Unrelated signal interruptions preserve the RX deadline; genuine device/I/O errors remain failures. External wire transfers and hardware TX backpressure require separate validation.
+
 ### CAN Demo
 
 The BSP must register and configure a CAN network interface first. `can_demo` does not access SPI registers or change device tree, GPIO, bitrate, or interface state. By default it transmits classical CAN standard/extended data frames and receives data/remote frames (`0..8` bytes). `--fd` enables FD transmission or mixed classical/FD reception and requires an FD-enabled interface (MTU `72`); `--brs` enables the data-phase bit-rate switch only with `--mode tx --fd`. FD transmit lengths are `0..8,12,16,20,24,32,48,64` bytes; other lengths are rejected without implicit padding. FD has no remote frames.
@@ -124,7 +137,7 @@ cd /root/demo
 ./start_sensor_demo.sh status     # show autostart and process state
 ```
 
-Autostart is implemented through `/userdata/startup.sh`, executed by the system `S99auto_startup` after `/userdata` is mounted. The script only appends/removes its own marked block and never overwrites content written by other scripts such as `wifi_setup.sh`. Autostart uses the packaged default configuration; edit `config/sensor_config.yaml` to adjust it, no need to re-run `enable`.
+Autostart is implemented through `/userdata/startup.sh`, executed by the system `S99auto_startup` after `/userdata` is mounted. The script only appends/removes its own marked block and never overwrites other applications' content. The image-provided Wi-Fi command `wifi_setup` uses separate `/etc/init.d/S99wifi_setup` and `/userdata/wifi/autostart.enabled`, not this shared file. Autostart uses the packaged default configuration; edit `config/sensor_config.yaml` to adjust it, no need to re-run `enable`.
 
 For the exposure-midpoint test, set `test_exposure_midpoint: true` in the `camera` section of `config/sensor_config.yaml`; default `false`. Restart `sensor_demo` to apply it. Explicit YAML overrides `SC132_TEST_EXPOSURE_MIDPOINT`; only an omitted key preserves environment control. Image timestamps, including ROS1 bag image `header.stamp`, use trigger time plus half exposure duration; IMU stamps and bag record time are unchanged. Unavailable exposure stops acquisition. Rebuild both the application and a supporting `libsc132.so`; old prebuilt packages do not gain support automatically. This is not a calibrated actual midpoint. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html#test-exposure-midpoint).
 
@@ -142,7 +155,15 @@ For the exposure-midpoint test, set `test_exposure_midpoint: true` in the `camer
 
 ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
 
+ROS1 bags default to strict drop spacing: `--record-drop-min-interval 10` (YAML: `save_data.drop_min_interval`). Under overload, only fully encoded camera groups not yet claimed by the writer are eviction candidates. Candidates must be at least 10 arrival ordinals from every previous drop; the recorder uses consecutive frame-set arrival order, not possibly sparse producer `group_id`. If no old candidate qualifies, the incoming group may be dropped only under the same rule. Otherwise recording explicitly stops, drains accepted data, publishes `*.partial.bag`, and exits nonzero instead of relaxing the spacing. This does not cover acquisition-source, hardware, or IMU losses and does not guarantee sustained 30 fps throughput. Intentional alternate saving requires `--record-frame-skip 1 --record-drop-min-interval 2` (YAML: `skip: true`, `drop_min_interval: 2`).
+
+Read back `source_group_order` in `/cameraN/frame_metadata` (`N=0..3`) to compare retained groups across cameras; `group_id` preserves producer identity. `/robobaton/session_config` records `drop_policy_min_group_interval`; `/robobaton/session_status` records `drop_policy_stopped`, `drop_policy_stop_group_order`, `drop_policy_dropped_groups`, `drop_policy_min_observed_interval`, and the stop reason. On a policy stop, the terminal ordinal is the exclusive upper bound of recorded coverage, not another legal drop.
+
 Current MP4 sessions always create `exposure.jsonl` and `fsync.jsonl`; the latter has records only when FSYNC is enabled. Exposure sidecars describe input observations and may outnumber saved encoded frames. Join by camera and microsecond-quantized group-trigger time against CSV, not by row number or source frame ID as an MP4 index. Default `--imu-sample-drop-policy allow-counted` can continue with counted sample losses. Bag complete does not independently prove zero producer drops; MP4 complete additionally checks final producer health and sample counts. A complete dataset requires actual payload readback, not just an exit code or playable MP4s.
+
+## Debug-console autologin switch
+
+On an image with this feature integrated, root uses `uart-autologin status|enable|disable` to manage DEBUG_UART (ttyS0) login. Fresh userdata defaults to passwordless root; disabling restores normal username/password authentication at the next login. The choice persists in `/userdata/uart-autologin/state`, without changing a read-only rootfs, terminating existing sessions, or affecting SSH or UART1/UART7. Anyone with physical debug-console access gains root while enabled; use only in trusted physical environments. Sources are `scripts/env_setup/uart-autologin.sh` and `uart-autologin-login.sh`. Merely copying them into the Demo does not change getty; the image maintainer must integrate the unique console entry.
 
 ## Build from source
 
@@ -188,10 +209,10 @@ Do not delete `/root/demo` before uploading a new package, and do not test the c
 - Camera output is NV12, `1280x1088` by default, with optional VSE hardware full-frame scaled canvases `640x480`, `720x480`, and `1280x720`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
 - The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
 - The IMU natively supports `25/50/100/200/400/800/1600Hz`, default `800Hz`, using sensor-timestamp FIFO. Old `500/1000/2000Hz` values are explicitly rejected, not silently resampled.
-- All camera entries use VIN LPWM hardware triggering. Camera and IMU FSYNC share the LPWM IO; INT1 uses `34120000.gpio` offset `8`. Camera hardware trigger edges, IMU samples, and INT1 times map to `CLOCK_REALTIME`, retained unchanged by CLI/saving; bag record time independently reads realtime. Bridges refresh during operation and follow backward clock steps; internal timeouts remain monotonic. Cameras require read-only X5 `/dev/mem` access and stop on missing captures/bounded mappings without arrival-time fallbacks. A common domain does not provide FSYNC sample/exposure associations, TF, or calibration.
+- All camera entries use VIN LPWM hardware triggering. Camera and IMU FSYNC share the LPWM IO; INT1 uses `34120000.gpio` offset `8` solely to wake FIFO draining. Camera hardware trigger edges, measured-TMST IMU samples, and burst-completion host observations use `CLOCK_REALTIME`, preserved by CLI/saving; host values may repeat and FSYNC deferral retains them. Bag record time independently reads realtime. Clock steps may move stamps backward; internal timeouts remain monotonic. Cameras require read-only X5 `/dev/mem` access and stop on missing captures/bounded mappings without arrival-time fallbacks. A common domain does not establish exposure synchronization, TF, or calibration.
 - `sensor_demo --fsync --sample-rate-hz 1600` or YAML `imu.fsync_enabled: true` enables trigger-to-sample association (default off, only `800/1600Hz`). Results reach stdout, bag `/robobaton/fsync`, or MP4 `fsync.jsonl`. Accept only `status=1`; missing/ambiguous cases are explicit. This changes neither sample phase nor exposure-sync or zero-loss guarantees.
-- The IMU consumer uses `SCHED_RR/3`, the acquisition owner uses `SCHED_FIFO/20`, the camera RAW observer uses `SCHED_FIFO/60`, and the independent INT1 clock observer uses `SCHED_FIFO/30`; both observers inherit the allowed CPU mask and sleep `50µs` per iteration. Realtime scheduling permission is required. The INT1 observer stays below the board's default FIFO/50 GPIO IRQ thread and retains edge-time certificates through SPI waits and callback delays. Cross-priority queues use priority-inheritance locks, but applications do not automatically change system IRQ/debug settings. Stress acceptance must inspect final post-stop `IMU_RUNTIME_HEALTH` and read actual saved payloads; counted drops are not zero loss.
-- UART1/UART7 retain `3.3V`, DEBUG_UART retains `1.8V`. The V2 UART7 5-pin connector has an independent PPS input enabled by default, without RX/TX multiplexing. Use official V2 pinout, power limits, and hot-plug boundaries, not the V1 `500mA` limit or historical acceptance.
+- The IMU consumer uses `SCHED_RR/3`, the acquisition owner uses `SCHED_FIFO/20`, and the camera RAW observer uses `SCHED_FIFO/60`, inherits the allowed CPU mask, and sleeps `50µs` per iteration. Realtime scheduling permission is required. IMU no longer uses an independent INT1 clock observer or packet/edge identity matching; notification sequence gaps are diagnostic, not independently fatal. Cross-priority queues use priority-inheritance locks. Applications do not automatically change IRQ/debug or realtime quotas, and this redesign does not fix the underlying GPIO/kernel root cause. Inspect final post-stop `IMU_RUNTIME_HEALTH` and actual payloads; counted drops are not zero loss.
+- UART1/UART7 use `3.3V`, DEBUG_UART uses `1.8V`. The V2 UART7 5-pin connector has an independent PPS input enabled by default, without RX/TX multiplexing. Use official V2 pinout, power limits, and hot-plug boundaries; confirm pin order and voltage, then wire with power off. Hot-plug support is not promised.
 - Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
 
 For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html), [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html), and [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html).

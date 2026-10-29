@@ -142,14 +142,20 @@ if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUT
 fi
 
 
-for library in \
-  libicm42670.so.2.0.0 libicm42670.so.2 libicm42670.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
-  libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
-  if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
-    echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
+for real in libicm42670.so.3.0.0 libsc132.so.3.0.0 libprrtsp.so.2.0.1; do
+  soname="${real%.*.*}"
+  linker="${soname%.*}"
+  if [[ ! -f "${PACKAGE_LIB_DIR}/${real}" || -L "${PACKAGE_LIB_DIR}/${real}" ]]; then
+    echo "Missing regular release library: ${PACKAGE_LIB_DIR}/${real}" >&2
     exit 1
   fi
+  for entry in "${soname}:${real}" "${linker}:${soname}"; do
+    path="${PACKAGE_LIB_DIR}/${entry%%:*}"
+    if [[ ! -L "${path}" || "$(readlink "${path}")" != "${entry#*:}" ]]; then
+      echo "Invalid release library link: ${path} -> ${entry#*:}" >&2
+      exit 1
+    fi
+  done
 done
 if [[ ! -f "${PROJECT_DIR}/include/icm42670_driver.h" ]]; then
   echo "Missing release public header: ${PROJECT_DIR}/include/icm42670_driver.h" >&2
@@ -247,10 +253,10 @@ cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
-  libicm42670.so.2.0.0 libicm42670.so.2 libicm42670.so \
-  libsc132.so.2.0.0 libsc132.so.2 libsc132.so \
-  libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
-  cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
+  libicm42670.so.3.0.0 libicm42670.so.3 libicm42670.so \
+  libsc132.so.3.0.0 libsc132.so.3 libsc132.so \
+  libprrtsp.so.2.0.1 libprrtsp.so.2 libprrtsp.so; do
+  cp -P "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
 mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
@@ -292,7 +298,7 @@ done
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/can_demo" "${STAGE_DIR}/start_sensor_demo.sh"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/can_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
-chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
+chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so.[0-9]*.[0-9]*.[0-9]*
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --write-provenance \

@@ -47,6 +47,7 @@ struct IcmCallbackContext {
 
   std::atomic<bool> accepting{true};
   std::atomic<bool> callback_failed{false};
+  std::atomic<const char*> failure_reason{nullptr};
   std::atomic<uint32_t> emitted{0U};
   RealtimeMutex pending_mutex;
   // 固定容量 FIFO 保持 burst 顺序并避免 callback 路径动态分配。
@@ -59,6 +60,13 @@ struct IcmCallbackContext {
   void* fsync_user = nullptr;
   std::array<icm42670_fsync_event_t, kPendingCapacity> pending_events{};
   size_t event_head = 0, event_count = 0;
+
+  void Fail(const char* reason) noexcept {
+    const char* expected = nullptr;
+    failure_reason.compare_exchange_strong(expected, reason, std::memory_order_acq_rel);
+    callback_failed.store(true, std::memory_order_release);
+    accepting.store(false, std::memory_order_release);
+  }
 };
 
 // callback 只发布数据或首错；stop/destroy 由 lifecycle owner 执行。
@@ -70,8 +78,7 @@ void IcmCallback(const icm42670_sample_t* sample, void* user) noexcept {
   try {
     if (sample == nullptr || sample->struct_size != sizeof(*sample)) {
       // 无效输入直接关闭 admission，避免在 producer 线程分配异常对象。
-      context->callback_failed.store(true, std::memory_order_release);
-      context->accepting.store(false, std::memory_order_release);
+      context->Fail("invalid_sample");
       return;
     }
     {
@@ -82,8 +89,7 @@ void IcmCallback(const icm42670_sample_t* sample, void* user) noexcept {
       }
       if (context->pending_size == IcmCallbackContext::kPendingCapacity) {
         // 容量耗尽不能覆盖或丢弃旧样本：关闭 admission，让 owner 返回非零。
-        context->callback_failed.store(true, std::memory_order_release);
-        context->accepting.store(false, std::memory_order_release);
+        context->Fail("sample_queue_full");
         return;
       }
       const std::size_t tail =
@@ -93,8 +99,7 @@ void IcmCallback(const icm42670_sample_t* sample, void* user) noexcept {
       ++context->pending_size;
     }
   } catch (...) {
-    context->callback_failed.store(true, std::memory_order_release);
-    context->accepting.store(false, std::memory_order_release);
+    context->Fail("sample_callback_exception");
   }
 }
 
@@ -104,11 +109,14 @@ void IcmFsyncCallback(const icm42670_fsync_event_t* event, void* user) noexcept 
   try {
     std::lock_guard<RealtimeMutex> lock(context->pending_mutex);
     if (!context->accepting.load(std::memory_order_acquire)) return;
-    if (!event || event->struct_size != sizeof(*event) || context->event_count == context->pending_events.size()) {
-      context->callback_failed.store(true); context->accepting.store(false); return;
+    if (!event || event->struct_size != sizeof(*event)) {
+      context->Fail("invalid_fsync_event"); return;
+    }
+    if (context->event_count == context->pending_events.size()) {
+      context->Fail("fsync_queue_full"); return;
     }
     context->pending_events[(context->event_head + context->event_count++) % context->pending_events.size()] = *event;
-  } catch (...) { context->callback_failed.store(true); context->accepting.store(false); }
+  } catch (...) { context->Fail("fsync_callback_exception"); }
 }
 
 }  // namespace
@@ -194,9 +202,12 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
       }
       context.emitted.fetch_add(1U, std::memory_order_acq_rel);
       return true;
+    } catch (const std::exception& error) {
+      std::cerr << "IMU sample observer failed: " << error.what() << '\n';
+      context.Fail("sample_observer_exception");
+      return false;
     } catch (...) {
-      context.callback_failed.store(true, std::memory_order_release);
-      context.accepting.store(false, std::memory_order_release);
+      context.Fail("sample_observer_exception");
       return false;
     }
   };
@@ -232,7 +243,11 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
     }
     // 队列有积压时立即继续 drain，仅空队列进入短等待。
     if (has_sample) {
-      try { drain_events(); } catch (...) { context.callback_failed.store(true); break; }
+      try { drain_events(); }
+      catch (const std::exception& error) {
+        std::cerr << "IMU FSYNC observer failed: " << error.what() << '\n';
+        context.Fail("fsync_observer_exception"); break;
+      } catch (...) { context.Fail("fsync_observer_exception"); break; }
       if (!emit_sample(sample)) {
         break;
       }
@@ -249,8 +264,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
          options.stop_requested->load(std::memory_order_acquire));
     if (!owner_stop_requested && icm42670_is_running(handle) == 0) {
       // producer 在未达 count 且未收到 owner 停止请求前退出，只能在空队列边界确认已 drain 后 fail-closed。
-      context.callback_failed.store(true, std::memory_order_release);
-      context.accepting.store(false, std::memory_order_release);
+      context.Fail("producer_stopped");
       break;
     }
 #ifdef RELEASE008_TESTING
@@ -301,7 +315,11 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
       }
     }
   }
-  try { drain_events(); } catch (...) { context.callback_failed.store(true); }
+  try { drain_events(); }
+  catch (const std::exception& error) {
+    std::cerr << "IMU FSYNC observer failed: " << error.what() << '\n';
+    context.Fail("fsync_observer_exception");
+  } catch (...) { context.Fail("fsync_observer_exception"); }
   int health_result = ICM42670_STATUS_OK;
   if (options.final_health != nullptr) {
     health_result = stop_result == ICM42670_STATUS_OK
@@ -311,6 +329,14 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   const bool failed = context.callback_failed.load(std::memory_order_acquire) ||
                       stop_result != ICM42670_STATUS_OK ||
                       health_result != ICM42670_STATUS_OK;
+  if (failed) {
+    const char* reason = context.failure_reason.load(std::memory_order_acquire);
+    std::cerr << "IMU_CONSUMER_FAILURE reason=" << (reason ? reason : "producer_lifecycle")
+              << " emitted=" << context.emitted.load(std::memory_order_acquire)
+              << " pending_samples=" << context.pending_size
+              << " pending_events=" << context.event_count
+              << " stop_status=" << stop_result << " health_status=" << health_result << '\n';
+  }
   icm42670_destroy(handle);
   return failed ? 1 : 0;
 }

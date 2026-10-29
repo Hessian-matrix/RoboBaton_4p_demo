@@ -676,6 +676,7 @@ int main(int argc, char** argv) {
   std::string capture_directory;
   SensorDemoShutdownContext shutdown_context;
   DiskObservabilitySnapshot disk_observability_start;
+  Options options;
 
   try {
     signal(SIGINT, SignalHandler);
@@ -683,7 +684,7 @@ int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     g_stop_requested.store(false, std::memory_order_release);
 
-    Options options = ParseSensorDemoCommandLine(argc, argv);
+    options = ParseSensorDemoCommandLine(argc, argv);
     // Apply before any worker starts; libsc132 reads the switch at capture startup.
     if (options.test_exposure_midpoint.has_value() &&
         setenv("SC132_TEST_EXPOSURE_MIDPOINT",
@@ -963,7 +964,7 @@ int main(int argc, char** argv) {
   // IMU 高速终端输出已结束，最终摘要恢复普通 stdout flags，便于脚本稳定读取。
   output_mode.reset();
   if (imu_result.load(std::memory_order_acquire) != 0) {
-    std::cerr << "fatal: IMU INT1 producer failed\n";
+    std::cerr << "fatal: IMU FIFO/TMST producer failed\n";
     exit_code = 1;
   }
   if (!imu_stats.max_consecutive_drops_valid) {
@@ -1051,7 +1052,7 @@ int main(int argc, char** argv) {
                                                 : recorder.SnapshotStats();
     const DiskObservabilitySnapshot disk_observability_finish =
         CaptureDiskObservability();
-    if (!bag_finish || recorder.HasFatalError()) {
+    if (!bag_finish || recorder.HasFatalError() || recorder.DropPolicyStopped()) {
       const std::string error = !bag_finish.error.empty() ? bag_finish.error
                                                           : recorder.ErrorMessage();
       std::cerr << "fatal: bag recorder failed: " << error << "\n";
@@ -1073,6 +1074,11 @@ int main(int argc, char** argv) {
               << " cleanup_complete=" << (bag_finish.cleanup_complete ? "yes" : "no")
               << " session_uuid=" << TerminalToken(bag_finish.session_uuid)
               << " quarantine_path=" << TerminalToken(bag_finish.quarantine_path)
+              << " drop_policy_min_group_interval=" << options.record_drop_min_interval
+              << " drop_policy_stopped=" << (bag_stats.drop_policy_stopped ? "yes" : "no")
+              << " drop_policy_stop_group_order=" << bag_stats.drop_policy_stop_group_order
+              << " drop_policy_dropped_groups=" << bag_stats.drop_policy_dropped_groups
+              << " drop_policy_min_observed_interval=" << bag_stats.drop_policy_min_observed_interval
               << " image_frames=" << bag_stats.image_frames
               << " image_frames_by_camera=cam0:" << bag_stats.image_frames_by_camera[0]
               << ",cam1:" << bag_stats.image_frames_by_camera[1]

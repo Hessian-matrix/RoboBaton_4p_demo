@@ -2,10 +2,11 @@
 
 # 提供地瓜 X5 Buildroot 板载 WiFi 的交互式 AP/STA 配置入口。
 set -u
+umask 077
 
 IFACE="${WIFI_IFACE:-wlan0}"
 BASE_DIR="${WIFI_MANAGER_DIR:-/userdata/wifi}"
-SCRIPT_PATH="${WIFI_SCRIPT_PATH:-/userdata/wifi_setup.sh}"
+SCRIPT_PATH="${WIFI_SCRIPT_PATH:-/usr/bin/wifi_setup}"
 STATE_FILE="$BASE_DIR/current.conf"
 HOSTAPD_CONF="$BASE_DIR/hostapd.conf"
 WPA_CONF="$BASE_DIR/wpa_supplicant.conf"
@@ -14,9 +15,9 @@ LOG_DIR="$BASE_DIR/logs"
 HOSTAPD_LOG="$LOG_DIR/hostapd.log"
 DNSMASQ_LOG="$LOG_DIR/dnsmasq.log"
 WPA_LOG="$LOG_DIR/wpa_supplicant.log"
-AUTOSTART_FILE="${WIFI_AUTOSTART_FILE:-/userdata/startup.sh}"
-LEGACY_BOOT_FILE="${WIFI_LEGACY_BOOT_FILE:-/etc/init.d/S41wifi_manager}"
-AUTOSTART_MARKER="WIFI_AUTOSTART_MANAGED"
+AUTOSTART_FILE="$BASE_DIR/autostart.enabled"
+RUN_DIR="${WIFI_RUN_DIR:-/run}"
+BOOT_APPLIED="$RUN_DIR/wifi_setup.boot-applied"
 DNSMASQ_PID="$BASE_DIR/dnsmasq.pid"
 DEFAULT_AP_SSID="RoboBaton-X5"
 DEFAULT_AP_IP="192.168.5.1"
@@ -47,11 +48,14 @@ check_deps() {
     need_cmd killall
     need_cmd awk
     need_cmd sed
+    need_cmd flock
+    need_cmd mountpoint
+    need_cmd seq
 }
 
 ensure_dirs() {
     mkdir -p "$BASE_DIR" "$LOG_DIR" || die "无法创建目录：$BASE_DIR"
-    chmod 700 "$BASE_DIR" >/dev/null 2>&1 || true
+    chmod 700 "$BASE_DIR" "$LOG_DIR" || die "无法保护配置目录：$BASE_DIR"
 }
 
 escape_wpa_string() {
@@ -157,11 +161,6 @@ confirm() {
     esac
 }
 
-autostart_is_managed() {
-    [ -f "$AUTOSTART_FILE" ] || return 1
-    [ -n "$(sed -n "/$AUTOSTART_MARKER/p" "$AUTOSTART_FILE" 2>/dev/null)" ]
-}
-
 stop_wifi_processes() {
     # 切换 AP/STA 前释放 wlan0，避免 hostapd/wpa_supplicant/dnsmasq 抢占接口。
     killall hostapd >/dev/null 2>&1 || true
@@ -183,6 +182,7 @@ stop_wifi_processes() {
 
 disable_wifi_runtime() {
     # 显式停用 WiFi 功能时，不只杀进程，还要清空地址并关闭 wlan0 射频接口。
+    rm -f "$BOOT_APPLIED"
     # 不卸载 aic8800 内核模块，避免影响蓝牙/驱动生命周期；需要彻底断电时再手工处理。
     stop_wifi_processes
     ip addr flush dev "$IFACE" >/dev/null 2>&1 || true
@@ -288,7 +288,8 @@ start_ap_runtime() {
     ip addr add "$ap_ip/24" dev "$IFACE" || die "无法设置 AP 地址：$ap_ip/24"
 
     # AP 进程输出写入 /userdata，避免 SSH 远程执行时后台进程继承终端导致命令挂住。
-    hostapd -B "$HOSTAPD_CONF" > "$HOSTAPD_LOG" 2>&1 || die "hostapd 启动失败，查看：$HOSTAPD_LOG"
+    # 后台服务不得继承操作锁，否则交互退出后仍会阻止后续配置。
+    hostapd -B "$HOSTAPD_CONF" 9>&- > "$HOSTAPD_LOG" 2>&1 || die "hostapd 启动失败，查看：$HOSTAPD_LOG"
     sleep 1
     dnsmasq --interface="$IFACE" \
         --bind-interfaces \
@@ -298,7 +299,7 @@ start_ap_runtime() {
         --dhcp-option="3,$ap_ip" \
         --dhcp-option="6,$ap_ip" \
         --pid-file="$DNSMASQ_PID" \
-        > "$DNSMASQ_LOG" 2>&1 &
+        9>&- > "$DNSMASQ_LOG" 2>&1 &
     sleep 1
 
     local state
@@ -328,13 +329,13 @@ start_sta_runtime() {
     reset_interface
 
     # STA 连接日志持久化，便于现场排查密码错误、认证失败和 DHCP 失败。
-    wpa_supplicant -D nl80211 -i "$IFACE" -c "$WPA_CONF" -B > "$WPA_LOG" 2>&1 || die "wpa_supplicant 启动失败，查看：$WPA_LOG"
+    wpa_supplicant -D nl80211 -i "$IFACE" -c "$WPA_CONF" -B 9>&- > "$WPA_LOG" 2>&1 || die "wpa_supplicant 启动失败，查看：$WPA_LOG"
     if ! wait_sta_connected; then
         iw dev "$IFACE" link 2>/dev/null || true
         die "未连接到 SSID=$ssid，请检查密码或信号，查看：$WPA_LOG"
     fi
 
-    if udhcpc -i "$IFACE" -q -n -t 5 >/dev/null 2>&1; then
+    if udhcpc -i "$IFACE" -q -n -t 5 9>&- >/dev/null 2>&1; then
         info "STA 已连接并获取 DHCP 地址。"
     else
         warn "STA 已关联，但 DHCP 获取失败；可手动检查路由器或配置静态地址。"
@@ -443,48 +444,17 @@ prompt_sta_mode() {
     ask_autostart
 }
 
-write_autostart_file() {
-    # Buildroot 的 S99auto_startup 会在 /userdata 挂载后执行，这里只写入 late-boot 启动入口。
-    # 保留 WiFi 配置在 /userdata/wifi/current.conf，开机后由 userdata 启动钩子恢复。
-    cat > "$AUTOSTART_FILE" <<EOF_BOOT
-#!/bin/sh
-# WIFI_AUTOSTART_MANAGED
-# 由 wifi_setup.sh 自动生成，供 S99auto_startup 在 /userdata 挂载后启动 WiFi。
-/userdata/wifi_setup.sh --apply-saved >/userdata/wifi/boot.log 2>&1
-EOF_BOOT
-}
-
 install_autostart() {
-    ensure_dirs
-    chmod +x "$SCRIPT_PATH" >/dev/null 2>&1 || true
-
-    if [ -f "$AUTOSTART_FILE" ] && ! autostart_is_managed; then
-        die "检测到已有 $AUTOSTART_FILE，且不是本脚本生成；请手工合并后再启用。"
-    fi
-
-    write_autostart_file || die "无法写入开机启动脚本：$AUTOSTART_FILE"
-    chmod 755 "$AUTOSTART_FILE" || die "无法设置开机启动脚本可执行：$AUTOSTART_FILE"
-
-    # 清理旧的 S41 早期启动文件，避免其在 /userdata 挂载前抢跑并造成“开机不生效”。
-    rm -f "$LEGACY_BOOT_FILE" >/dev/null 2>&1 || true
-
+    # rootfs 可只读；开机恢复仅由持久化分区上的标记控制。
+    : > "$AUTOSTART_FILE" || die "无法启用开机恢复：$AUTOSTART_FILE"
     sync
-    info "已保存开机启动：$AUTOSTART_FILE"
+    info "已启用开机恢复：$AUTOSTART_FILE"
 }
 
 remove_autostart() {
-    if [ -f "$AUTOSTART_FILE" ] && autostart_is_managed; then
-        rm -f "$AUTOSTART_FILE" >/dev/null 2>&1 || {
-            mount -o remount,rw / >/dev/null 2>&1 || true
-            rm -f "$AUTOSTART_FILE" || die "无法删除开机启动脚本：$AUTOSTART_FILE"
-        }
-    fi
-
-    # 旧的 S41 早期启动文件属于过时实现，关闭开机启动时一并清理。
-    rm -f "$LEGACY_BOOT_FILE" >/dev/null 2>&1 || true
-
+    rm -f "$AUTOSTART_FILE" || die "无法关闭开机恢复：$AUTOSTART_FILE"
     sync
-    info "已关闭本脚本管理的开机启动。"
+    info "已关闭开机恢复。"
 }
 
 ask_autostart() {
@@ -513,6 +483,14 @@ apply_saved() {
     esac
 }
 
+boot_wifi() {
+    [ -f "$AUTOSTART_FILE" ] || return 0
+    [ ! -e "$BOOT_APPLIED" ] || return 0
+    exec >> "$BASE_DIR/boot.log" 2>&1
+    apply_saved || return 1
+    : > "$BOOT_APPLIED" || die "无法记录本次开机恢复状态。"
+}
+
 status_wifi() {
     info "=== $IFACE address ==="
     ip addr show dev "$IFACE" 2>/dev/null || true
@@ -529,7 +507,6 @@ status_wifi() {
         info "none"
     fi
     [ -e "$AUTOSTART_FILE" ] && info "autostart=enabled ($AUTOSTART_FILE)" || info "autostart=disabled"
-    [ -e "$LEGACY_BOOT_FILE" ] && info "legacy_autostart=present ($LEGACY_BOOT_FILE)" || info "legacy_autostart=absent"
 }
 
 usage() {
@@ -537,6 +514,7 @@ usage() {
 用法：
   $SCRIPT_PATH                 交互式配置 AP/客户端模式
   $SCRIPT_PATH --apply-saved   按 /userdata/wifi/current.conf 启动已保存配置
+  $SCRIPT_PATH --boot          系统启动入口：仅在启用开机恢复时应用一次
   $SCRIPT_PATH --stop          停止 WiFi 进程、清空地址并关闭 wlan0
   $SCRIPT_PATH --disable       同 --stop，不卸载内核驱动
   $SCRIPT_PATH --status        查看 wlan0/保存配置/开机启动状态
@@ -568,17 +546,29 @@ EOF_MENU
 }
 
 main() {
+    case "${1:-}" in
+        --help|-h) usage; return 0 ;;
+        ''|--boot|--apply-saved|--stop|--disable|--status) ;;
+        *) usage; return 1 ;;
+    esac
     need_root
+    need_cmd mountpoint
+    mountpoint -q /userdata || die "/userdata 尚未挂载，拒绝在 rootfs 写入配置。"
+    # 未配置的镜像开机不检查无线依赖，也不触碰接口或创建配置。
+    if [ "${1:-}" = --boot ] && [ ! -f "$AUTOSTART_FILE" ]; then
+        return 0
+    fi
     check_deps
     ensure_dirs
+    exec 9> "$RUN_DIR/wifi_setup.lock" || die "无法打开 WiFi 操作锁。"
+    flock -n 9 || die "另一个 wifi_setup 正在操作，请稍后重试。"
 
     case "${1:-}" in
-        --apply-saved) apply_saved ;;
+        --boot) boot_wifi ;;
+        --apply-saved) rm -f "$BOOT_APPLIED"; apply_saved ;;
         --stop|--disable) disable_wifi_runtime ;;
         --status) status_wifi ;;
-        --help|-h) usage ;;
         '') interactive_menu ;;
-        *) usage; exit 1 ;;
     esac
 }
 

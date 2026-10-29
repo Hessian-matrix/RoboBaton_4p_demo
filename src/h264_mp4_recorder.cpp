@@ -949,7 +949,6 @@ class H264Mp4Recorder::Impl {
         source_health.sequence_gaps == 0U &&
         source_health.sequence_duplicates == 0U &&
         source_health.sequence_regressions == 0U &&
-        source_health.gpio_event_gap_count == 0U &&
         source_health.fifo_overflow_count == 0U &&
         source_health.timing_sample_drops == 0U &&
         source_health.uncertainty_over_200_drops == 0U &&

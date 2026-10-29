@@ -38,8 +38,12 @@ bool TryResolveJpegPayloadLength(const uint8_t* data, size_t driver_size,
   if (driver_size > capacity) {
     throw std::runtime_error("hardware JPEG malformed output: payload size exceeds bounds");
   }
-  if (data == nullptr || driver_size < 4U || data[0] != 0xFFU || data[1] != 0xD8U) {
+  if (data == nullptr || data[0] != 0xFFU ||
+      (driver_size >= 2U && data[1] != 0xD8U)) {
     throw std::runtime_error("hardware JPEG malformed output: missing SOI");
+  }
+  if (driver_size < 4U) {
+    return false;
   }
   // 部分 X5 Media Codec 固件把 vstream_buf.size 填成输出缓冲容量；真实 JPEG
   // 负载以最后一个 EOI 标记结束，避免把尾部填充写入 bag。
@@ -50,6 +54,29 @@ bool TryResolveJpegPayloadLength(const uint8_t* data, size_t driver_size,
     }
   }
   return false;
+}
+
+
+void AppendJpegSlice(const uint8_t* data, size_t size, size_t jpeg_start,
+                     bool* prefix_checked, std::vector<uint8_t>* payload) {
+  const size_t buffered = payload->size() - jpeg_start;
+  if (!*prefix_checked && buffered + size >= 8U) {
+    std::array<uint8_t, 8> prefix{};
+    std::copy_n(payload->data() + jpeg_start, buffered, prefix.data());
+    std::copy_n(data, prefix.size() - buffered, prefix.data() + buffered);
+    *prefix_checked = true;
+    // X5 JPU 在 SOI 后写入长度 4 的 APP9，内容仅为私有 16-bit frameIdx。
+    // 该字段不参与解码或公开时间合同；省略它，不更改编码表、扫描数据或其他 APP。
+    if (prefix[0] == 0xFFU && prefix[1] == 0xD8U &&
+        prefix[2] == 0xFFU && prefix[3] == 0xE9U &&
+        prefix[4] == 0U && prefix[5] == 4U) {
+      payload->resize(jpeg_start);
+      payload->insert(payload->end(), prefix.begin(), prefix.begin() + 2);
+      data += prefix.size() - buffered;
+      size -= prefix.size() - buffered;
+    }
+  }
+  payload->insert(payload->end(), data, data + size);
 }
 
 
@@ -501,6 +528,7 @@ void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
   }
 
   const size_t jpeg_start = payload->size();
+  bool prefix_checked = false;
   for (size_t output_count = 0U; output_count < kMaxJpegOutputBuffers; ++output_count) {
     media_codec_buffer_t output{};
     media_codec_output_buffer_info_t info{};
@@ -522,8 +550,8 @@ void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
       if (output.vstream_buf.vir_ptr == nullptr) {
         throw std::runtime_error("hardware JPEG malformed output: missing SOI");
       }
-      payload->insert(payload->end(), output.vstream_buf.vir_ptr,
-                      output.vstream_buf.vir_ptr + output_size);
+      AppendJpegSlice(output.vstream_buf.vir_ptr, output_size, jpeg_start,
+                      &prefix_checked, payload);
       size_t payload_size = 0U;
       const bool complete = TryResolveJpegPayloadLength(
           payload->data() + jpeg_start, payload->size() - jpeg_start,

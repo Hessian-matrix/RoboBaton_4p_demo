@@ -6,7 +6,6 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -26,7 +25,7 @@
 
 namespace {
 
-std::atomic<bool> g_should_stop{false};
+volatile sig_atomic_t g_should_stop = 0;
 
 enum class RunMode {
   Tx,
@@ -52,7 +51,18 @@ struct Options {
   throw std::runtime_error(oss.str());
 }
 
-void SignalHandler(int /*signum*/) { g_should_stop.store(true); }
+void SignalHandler(int /*signum*/) { g_should_stop = 1; }
+
+void InstallSignalHandlers() {
+  struct sigaction action {};
+  action.sa_handler = SignalHandler;
+  sigemptyset(&action.sa_mask);
+  // Blocking I/O must return EINTR so its owner can observe the stop request.
+  if (sigaction(SIGINT, &action, nullptr) != 0 ||
+      sigaction(SIGTERM, &action, nullptr) != 0) {
+    ThrowErrno("failed to install UART signal handlers");
+  }
+}
 
 std::string RequireValue(int argc, char** argv, int* index, const char* name) {
   if (*index + 1 >= argc) {
@@ -177,65 +187,151 @@ uint64_t SteadyClockNowNs() {
 class SerialPort {
  public:
   SerialPort(const std::string& port, int baud_rate) : port_(port) {
-    fd_ = open(port.c_str(), O_RDWR | O_NOCTTY);
+    fd_ = open(port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd_ < 0) {
       ThrowErrno("failed to open " + port_);
     }
-    Configure(baud_rate);
+    try {
+      Configure(baud_rate);
+    } catch (...) {
+      CloseNoThrow();
+      throw;
+    }
   }
 
-  ~SerialPort() {
-    if (fd_ >= 0) {
-      close(fd_);
+  ~SerialPort() { CloseNoThrow(); }
+
+  void Close() {
+    const int error = CloseOwned();
+    if (error != 0) {
+      errno = error;
+      ThrowErrno("failed to restore/close " + port_);
     }
   }
 
   SerialPort(const SerialPort&) = delete;
   SerialPort& operator=(const SerialPort&) = delete;
 
-  void WriteAll(const std::vector<uint8_t>& data) const {
+  bool WriteAll(const std::vector<uint8_t>& data) const {
     size_t offset = 0;
-    while (offset < data.size()) {
+    while (offset < data.size() && !g_should_stop) {
       const ssize_t written = write(fd_, data.data() + offset, data.size() - offset);
       if (written < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          pollfd descriptor{fd_, POLLOUT, 0};
+          const int ready = poll(&descriptor, 1, 100);
+          if (ready < 0 && errno != EINTR) {
+            ThrowErrno("failed to poll for writing " + port_);
+          }
+          if (ready > 0 && (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            throw std::runtime_error("serial port write poll reported a device error: " + port_);
+          }
+          continue;
+        }
         ThrowErrno("failed to write " + port_);
+      }
+      if (written == 0) {
+        throw std::runtime_error("serial port write made no progress: " + port_);
       }
       offset += static_cast<size_t>(written);
     }
-    if (tcdrain(fd_) != 0) {
-      ThrowErrno("failed to drain " + port_);
+    while (!g_should_stop) {
+      if (tcdrain(fd_) == 0) {
+        return true;
+      }
+      if (errno != EINTR) {
+        ThrowErrno("failed to drain " + port_);
+      }
     }
+    return false;
   }
 
-  std::vector<uint8_t> ReadSome(size_t max_bytes, int timeout_ms) const {
-    pollfd descriptor{};
-    descriptor.fd = fd_;
-    descriptor.events = POLLIN;
-
-    const int poll_result = poll(&descriptor, 1, timeout_ms);
-    if (poll_result < 0) {
-      ThrowErrno("failed to poll " + port_);
+  std::vector<uint8_t> ReadSome(size_t max_bytes, uint32_t timeout_ms) const {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    std::vector<uint8_t> data;
+    bool attempted_poll = false;
+    while (!g_should_stop) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline && (timeout_ms != 0 || attempted_poll)) {
+        return {};
+      }
+      const auto remaining_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count();
+      // Slices bound the signal-before-poll race without restarting the RX deadline.
+      const int wait_ms = remaining_ns <= 0 ? 0 : remaining_ns >= 100000000 ? 100 :
+                          static_cast<int>((remaining_ns + 999999) / 1000000);
+      pollfd descriptor{fd_, POLLIN, 0};
+      attempted_poll = true;
+      const int ready = poll(&descriptor, 1, wait_ms);
+      if (ready < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        ThrowErrno("failed to poll " + port_);
+      }
+      if (ready == 0) {
+        continue;
+      }
+      if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        throw std::runtime_error("serial port read poll reported a device error: " + port_);
+      }
+      if (!(descriptor.revents & POLLIN) || g_should_stop) {
+        continue;
+      }
+      data.resize(max_bytes);
+      const ssize_t bytes = read(fd_, data.data(), data.size());
+      if (bytes < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+          continue;
+        }
+        ThrowErrno("failed to read " + port_);
+      }
+      data.resize(static_cast<size_t>(bytes));
+      return data;
     }
-    if (poll_result == 0 || (descriptor.revents & POLLIN) == 0) {
-      return {};
-    }
-
-    std::vector<uint8_t> data(max_bytes, 0);
-    const ssize_t bytes = read(fd_, data.data(), data.size());
-    if (bytes < 0) {
-      ThrowErrno("failed to read " + port_);
-    }
-    data.resize(static_cast<size_t>(bytes));
-    return data;
+    return {};
   }
 
  private:
+  int CloseOwned() noexcept {
+    if (fd_ < 0) {
+      return 0;
+    }
+    int error = 0;
+    if (has_original_termios_) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+      while (tcsetattr(fd_, TCSANOW, &original_termios_) != 0) {
+        if (errno != EINTR || std::chrono::steady_clock::now() >= deadline) {
+          error = errno;
+          break;
+        }
+      }
+    }
+    if (close(fd_) != 0 && error == 0) {
+      error = errno;
+    }
+    fd_ = -1;
+    return error;
+  }
+
+  void CloseNoThrow() noexcept {
+    const int error = CloseOwned();
+    if (error != 0) {
+      fprintf(stderr, "failed to restore/close serial port %s: %s\n",
+              port_.c_str(), strerror(error));
+    }
+  }
+
   void Configure(int baud_rate) {
-    termios tty{};
-    if (tcgetattr(fd_, &tty) != 0) {
+    if (tcgetattr(fd_, &original_termios_) != 0) {
       ThrowErrno("failed to get termios for " + port_);
     }
-
+    has_original_termios_ = true;
+    termios tty = original_termios_;
     // 串口使用 8N1 raw 模式并关闭硬件流控，便于直接验证原始字节链路。
     cfmakeraw(&tty);
     tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);
@@ -258,6 +354,8 @@ class SerialPort {
 
   std::string port_;
   int fd_ = -1;
+  termios original_termios_{};
+  bool has_original_termios_ = false;
 };
 
 std::vector<uint8_t> BuildPayload(const Options& options, uint32_t sequence) {
@@ -302,25 +400,39 @@ void PrintFrame(const char* tag, uint32_t sequence, const std::vector<uint8_t>& 
 
 bool ReachedCount(uint32_t count, uint32_t limit) { return limit != 0 && count >= limit; }
 
+void SleepInterval(uint32_t interval_ms) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(interval_ms);
+  while (!g_should_stop && std::chrono::steady_clock::now() < deadline) {
+    const auto remaining = deadline - std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(remaining < std::chrono::milliseconds(100) ?
+                              remaining : std::chrono::milliseconds(100));
+  }
+}
+
 void RunTx(const Options& options, const SerialPort& port) {
-  for (uint32_t seq = 0; !g_should_stop.load() && !ReachedCount(seq, options.count); ++seq) {
+  for (uint32_t seq = 0; !g_should_stop && !ReachedCount(seq, options.count); ++seq) {
     const std::vector<uint8_t> payload = BuildPayload(options, seq);
-    port.WriteAll(payload);
+    if (!port.WriteAll(payload)) {
+      break;
+    }
     PrintFrame("tx", seq, payload);
-    std::this_thread::sleep_for(std::chrono::milliseconds(options.interval_ms));
+    SleepInterval(options.interval_ms);
   }
 }
 
 void RunRx(const Options& options, const SerialPort& port, bool echo) {
   uint32_t rx_seq = 0;
-  while (!g_should_stop.load() && !ReachedCount(rx_seq, options.count)) {
-    const std::vector<uint8_t> data = port.ReadSome(256, static_cast<int>(options.timeout_ms));
+  while (!g_should_stop && !ReachedCount(rx_seq, options.count)) {
+    const std::vector<uint8_t> data = port.ReadSome(256, options.timeout_ms);
     if (data.empty()) {
       continue;
     }
     PrintFrame(echo ? "echo_rx" : "rx", rx_seq, data);
     if (echo) {
-      port.WriteAll(data);
+      if (!port.WriteAll(data)) {
+        break;
+      }
       PrintFrame("echo_tx", rx_seq, data);
     }
     ++rx_seq;
@@ -329,17 +441,19 @@ void RunRx(const Options& options, const SerialPort& port, bool echo) {
 
 void RunTxRx(const Options& options, const SerialPort& port) {
   uint32_t rx_seq = 0;
-  for (uint32_t tx_seq = 0; !g_should_stop.load() && !ReachedCount(tx_seq, options.count);
+  for (uint32_t tx_seq = 0; !g_should_stop && !ReachedCount(tx_seq, options.count);
        ++tx_seq) {
     const std::vector<uint8_t> payload = BuildPayload(options, tx_seq);
-    port.WriteAll(payload);
+    if (!port.WriteAll(payload)) {
+      break;
+    }
     PrintFrame("tx", tx_seq, payload);
 
-    const std::vector<uint8_t> data = port.ReadSome(256, static_cast<int>(options.timeout_ms));
+    const std::vector<uint8_t> data = port.ReadSome(256, options.timeout_ms);
     if (!data.empty()) {
       PrintFrame("rx", rx_seq++, data);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(options.interval_ms));
+    SleepInterval(options.interval_ms);
   }
 }
 
@@ -351,8 +465,7 @@ int main(int argc, char** argv) {
       std::cout << "serial_port_demo " << ROBOBATON_RELEASE_VERSION << "\n";
       return 0;
     }
-    signal(SIGINT, SignalHandler);
-    signal(SIGTERM, SignalHandler);
+    InstallSignalHandlers();
 
     const Options options = ParseCommandLine(argc, argv);
     std::cout << "UART demo: port=" << options.port << " baud=" << options.baud_rate
@@ -373,6 +486,7 @@ int main(int argc, char** argv) {
         RunRx(options, port, true);
         break;
     }
+    port.Close();
 
     return 0;
   } catch (const std::exception& e) {

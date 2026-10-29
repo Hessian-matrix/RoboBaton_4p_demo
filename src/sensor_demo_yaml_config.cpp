@@ -202,6 +202,7 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  format: mp4\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.save_data_path << "\n"
          << "  skip: false\n"
+         << "  drop_min_interval: " << defaults.record_drop_min_interval << "\n"
          << "capture:\n"
          << "  save: false\n"
          << "  save_path: " << SensorDemoYamlConfigState{}.capture_directory << "\n"
@@ -292,6 +293,8 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     ApplySaveDataSelection(options, *state);
   } else if (key == "save_data.skip") {
     options->record_frame_skip = ParseBool(value, name.c_str()) ? 1U : 0U;
+  } else if (key == "save_data.drop_min_interval") {
+    options->record_drop_min_interval = ParseUint32(value, name.c_str());
   } else if (key == "capture.save") {
     state->capture_enabled = ParseBool(value, name.c_str());
     ApplyCaptureSelection(options, *state);

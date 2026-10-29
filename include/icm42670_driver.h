@@ -17,8 +17,8 @@
 extern "C" {
 #endif
 
-#define ICM42670_ABI_VERSION_MAJOR 2U
-#define ICM42670_ABI_VERSION_MINOR 1U
+#define ICM42670_ABI_VERSION_MAJOR 3U
+#define ICM42670_ABI_VERSION_MINOR 0U
 
 typedef struct icm42670_handle icm42670_handle_t;
 
@@ -68,6 +68,7 @@ typedef struct icm42670_runtime_health {
   uint32_t struct_size;
   uint32_t session_generation;
   uint64_t published_samples;
+  /* Detectable missing GPIO notification sequence values; diagnostic, not sample loss. */
   uint32_t gpio_event_gap_count;
   uint32_t fifo_overflow_count;
   uint32_t mapper_failure_count;
@@ -84,7 +85,10 @@ typedef struct icm42670_sample {
   uint32_t struct_size;
   /* reserved0 reports observed FIFO timestamp low16 rollovers in this session. */
   uint32_t reserved0;
-  /* Paired INT1 edge in CLOCK_REALTIME system ns; not the sample timestamp. */
+  /* RAW observation at this packet's successful SPI FIFO burst completion,
+   * converted to CLOCK_REALTIME using the bridge measured for that observation.
+   * Retained unchanged through FSYNC deferral; packets in one burst may share it.
+   * Follows wall-clock steps; not an IRQ edge, sample time, or exposure time. */
   uint64_t host_timestamp_ns;
   double temperature_c;
   double accel_mps2[3];
@@ -92,8 +96,10 @@ typedef struct icm42670_sample {
   icm42670_raw_sample_t raw;
   /* FIFO TMST→RAW→CLOCK_REALTIME sample time; follows wall-clock steps, including backward. */
   uint64_t sample_timestamp_ns;
+  /* FIFO order defines identity; realtime clock steps do not change this sequence. */
   uint64_t sample_sequence;
   uint32_t timestamp_uncertainty_us;
+  /* Detectable missing GPIO notification sequence values; not fatal by itself. */
   uint32_t gpio_event_gap_count;
   uint32_t fifo_overflow_count;
   uint32_t mapper_failure_count;

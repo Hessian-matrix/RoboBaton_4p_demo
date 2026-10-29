@@ -95,6 +95,7 @@ struct Options {
   bool imu_print_metrics = false;
   bool fsync_enabled = false;
   uint32_t record_frame_skip = 0U;
+  uint32_t record_drop_min_interval = 10U;
   std::string record_bag_path;
   std::string record_mp4_directory;
   bool capture_enabled = false;

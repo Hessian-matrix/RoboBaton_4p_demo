@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-#define SC132_ABI_VERSION_MAJOR 2U
-#define SC132_ABI_VERSION_MINOR 2U
+#define SC132_ABI_VERSION_MAJOR 3U
+#define SC132_ABI_VERSION_MINOR 0U
 
 #define SC132_STATUS_OK ((int32_t)0)
 #define SC132_STATUS_INVALID_ARGUMENT ((int32_t)-1)
