@@ -20,7 +20,6 @@ namespace robobaton_demo {
 namespace {
 
 constexpr uint32_t kMaxRosSeq = std::numeric_limits<uint32_t>::max();
-constexpr size_t kRecordSelectionCacheCapacity = 256U;
 constexpr int kRecorderEncodeWorkerNice = 10;
 constexpr int kRecorderWriterNice = 0;
 
@@ -317,6 +316,7 @@ std::string SessionConfigJson(const Options& options) {
          << "\"height\":" << OutputHeight(options) << ','
          << "\"camera_fps\":" << options.fps << ','
          << "\"record_frame_skip\":" << options.record_frame_skip << ','
+         << "\"drop_policy_min_group_interval\":" << options.record_drop_min_interval << ','
          << "\"image_persistence_fps\":"
          << ImagePersistenceFps(options.fps, options.record_frame_skip) << ','
          << "\"jpeg_quality\":80,"
@@ -344,6 +344,7 @@ std::string FrameMetadataJson(const SensorBagFrameJob& job, size_t jpeg_size) {
          << ",\"source_timestamp\":" << job.exposure.source_timestamp
          << ",\"observed_raw_ns\":" << job.exposure.observed_raw_ns << "},"
          << "\"group_id\":" << job.group_id << ','
+         << "\"source_group_order\":" << job.source_group_order << ','
          << "\"group_timestamp_ns\":" << job.group_timestamp_ns << ','
          << "\"camera_timestamp_ns\":" << job.camera_timestamp_ns << ','
          << "\"width\":" << job.width << ','
@@ -403,6 +404,10 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   if (options.record_frame_skip > 1U) {
     throw std::invalid_argument("record_frame_skip must be 0 or 1");
   }
+  if (options.record_drop_min_interval < 2U ||
+      (options.record_frame_skip != 0U && options.record_drop_min_interval != 2U)) {
+    throw std::invalid_argument("bag drop interval must be >=2; alternate skip requires 2");
+  }
   finish_result_ = SensorBagFinishResult{};
   camera_mask_ = options.camera_mask;
   record_target_fps_ = ImagePersistenceFps(options.fps, options.record_frame_skip);
@@ -418,6 +423,7 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
     stats_.imu_queue_high_watermark = kWriterImuHighWatermark;
   }
   stopping_.store(false, std::memory_order_release);
+  imu_input_closed_ = false;
   finished_ = false;
   fatal_error_.store(false, std::memory_order_release);
   {
@@ -428,8 +434,10 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   next_frame_order_ = 0U;
   writer_wakeup_generation_ = 0U;
   next_write_order_ = 0U;
-  record_selections_.clear();
-  next_group_should_record_ = true;
+  drop_policy_stopped_.store(false, std::memory_order_release);
+  dropped_source_orders_.clear();
+  dropped_source_orders_.reserve(kEncodedQueueCapacity + 1U);
+  current_source_order_ = 0U;
   reusable_jobs_.clear();
   reusable_jobs_.reserve(kReusableJobCapacity);
   reusable_encoded_payloads_.clear();
@@ -505,6 +513,8 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   }
 }
 
+
+#ifdef RELEASE008_TESTING
 void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
   if (!enabled_) {
     return;
@@ -513,7 +523,7 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
     throw std::runtime_error(ErrorMessage());
   }
   RecordSourceFrameSetSeen();
-  if (!ShouldRecordGroup(frame.group_id, frame.group_timestamp_ns)) {
+  if (options_.record_frame_skip != 0U && frame.group_id % 2U != 0U) {
     return;
   }
   RecordSelectedGroup();
@@ -521,10 +531,12 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
       frame.height == 0U || frame.stride < frame.width || frame.vstride < frame.height) {
     throw std::runtime_error("invalid frame for bag recorder");
   }
-  if (EncodedBackpressureActive()) {
-    // encoded backlog 高水位只丢当前保存帧，不反压采集/RTSP 回调线程。
-    RecordEncodedBackpressureReject();
-    return;
+  {
+    std::lock_guard<RealtimeMutex> encoded_lock(encoded_mutex_);
+    if (encoded_queue_count_ >= encoded_admission_high_watermark_) {
+      RecordEncodedBackpressureReject();
+      return;
+    }
   }
 
   SensorBagFrameJob job;
@@ -598,7 +610,7 @@ void SensorBagRecorder::ObserveFrame(const QueuedFrame& frame) {
   lock.unlock();
   queue_condition_.notify_all();
 }
-
+#endif
 SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
     const sc132_frame_set_t& frame_set) noexcept {
   try {
@@ -616,11 +628,6 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       SetFatalError("invalid frame set for bag recorder");
       return FrameSetAdmissionStatus::kFatal;
     }
-    RecordSourceFrameSetSeen();
-    if (!ShouldRecordGroup(frame_set.group_id, frame_set.group_timestamp_ns)) {
-      return FrameSetAdmissionStatus::kSkipped;
-    }
-    RecordSelectedGroup();
 
     std::array<SensorBagFrameJob, kMaxChannels> jobs{};
     std::array<sc132_frame_t*, kMaxChannels> frame_handles{};
@@ -695,6 +702,19 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
       return FrameSetAdmissionStatus::kFatal;
     }
     std::unique_lock<RealtimeMutex> lock(queue_mutex_);
+    if (stopping_.load(std::memory_order_acquire) || DropPolicyStopped()) {
+      return FrameSetAdmissionStatus::kStopped;
+    }
+    current_source_order_ = RecordSourceFrameSetSeen();
+    if (record_target_fps_ == 0U ||
+        (options_.record_frame_skip != 0U && current_source_order_ % 2U != 0U)) {
+      return DropIncomingGroupLocked(current_source_order_, "configured_skip")
+                 ? FrameSetAdmissionStatus::kSkipped : FrameSetAdmissionStatus::kStopped;
+    }
+    RecordSelectedGroup();
+    for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
+      jobs[index].source_group_order = current_source_order_;
+    }
     if (stopping_.load(std::memory_order_acquire)) {
       return FrameSetAdmissionStatus::kStopped;
     }
@@ -703,7 +723,8 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
         std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
         ++stats_.frame_queue_full_rejects;
       }
-      return FrameSetAdmissionStatus::kQueueFull;
+      return DropIncomingGroupLocked(current_source_order_, "raw_queue_full")
+                 ? FrameSetAdmissionStatus::kQueueFull : FrameSetAdmissionStatus::kStopped;
     }
     size_t retained_count = 0U;
     for (; retained_count < frame_set.camera_count; ++retained_count) {
@@ -748,9 +769,14 @@ SensorBagRecorder::FrameSetAdmissionStatus SensorBagRecorder::TryAcceptFrameSet(
     if (!MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()) {
       rollback_staged_jobs();
       RecordEncodedBackpressureReject();
-      return FrameSetAdmissionStatus::kQueueFull;
+      return DropIncomingGroupLocked(current_source_order_, "encoded_window_full")
+                 ? FrameSetAdmissionStatus::kQueueFull : FrameSetAdmissionStatus::kStopped;
     }
 
+    for (uint32_t index = 0U; index < frame_set.camera_count; ++index) {
+      source_orders_[(next_frame_order_ + index) % kEncodedQueueCapacity] =
+          current_source_order_;
+    }
     next_frame_order_ += frame_set.camera_count;
     UpdateFrameQueueAccountingLocked(queue_.size());
     RecordAdmittedGroup();
@@ -789,8 +815,8 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
   bool should_notify_writer = false;
   {
     std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
-    if (stopping_.load(std::memory_order_acquire)) {
-      throw std::runtime_error("bag recorder is stopping");
+    if (imu_input_closed_) {
+      throw std::runtime_error("bag recorder IMU input is closed");
     }
     if (imu_queue_count_ >= kImuQueueCapacity) {
       {
@@ -848,7 +874,8 @@ SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
     queue_.clear();
   }
 
-  const bool data_complete = session_success && !HasFatalError() && !HasRecordedDrops();
+  const bool data_complete = session_success && !HasFatalError() &&
+                             !DropPolicyStopped() && !HasRecordedDrops();
   finish_result_.data_complete = data_complete;
   finish_result_.session_uuid = writer_.session_uuid();
   std::string cleanup_error;
@@ -871,6 +898,9 @@ SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
     return finish_result_;
   }
 
+  if (DropPolicyStopped()) {
+    AppendFinishError(&finish_result_, ErrorMessage());
+  }
   try {
     const SensorBagFinishOutcome planned_outcome =
         data_complete ? SensorBagFinishOutcome::kPublishedComplete
@@ -945,10 +975,12 @@ SensorBagRecorderStats SensorBagRecorder::SnapshotStats() const {
   SensorBagRecorderStats snapshot = stats_;
   const uint64_t admission_dropped_groups =
       snapshot.recorder_selected_groups >= snapshot.recorder_admitted_groups
-          ? snapshot.recorder_selected_groups - snapshot.recorder_admitted_groups
+          ? snapshot.recorder_selected_groups - snapshot.recorder_admitted_groups -
+                (snapshot.drop_policy_stopped ? 1U : 0U)
           : 0U;
-  snapshot.recorder_dropped_groups =
-      SaturatingAdd(admission_dropped_groups, snapshot.encoded_queue_oldest_evicted_groups);
+  snapshot.recorder_dropped_groups = std::max(
+      snapshot.drop_policy_dropped_groups,
+      SaturatingAdd(admission_dropped_groups, snapshot.encoded_queue_oldest_evicted_groups));
   snapshot.writer_stats = writer_.SnapshotStats();
   return snapshot;
 }
@@ -984,35 +1016,26 @@ void SensorBagRecorder::FailNextPayloadPoolRecycleForTest() noexcept {
 
 #endif
 
-bool SensorBagRecorder::EncodedBackpressureActive() noexcept {
-  std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
-  const size_t high_watermark = std::min(encoded_admission_high_watermark_,
-                                        kEncodedQueueCapacity);
-  return encoded_queue_count_ >= high_watermark;
-}
 
 bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets() noexcept {
-  std::array<EncodedFrameJob,
-             kMaxChannels * kMaxOldestFrameSetsEvictedPerAdmission>
-      evicted_jobs{};
+  std::array<EncodedFrameJob, kMaxEvictedFramesPerAdmission> evicted_jobs{};
   size_t evicted_job_count = 0U;
   uint64_t evicted_group_count = 0U;
   uint64_t evicted_frame_count = 0U;
   uint64_t evicted_bytes = 0U;
   bool admission_room_available = false;
+  bool retired_head = false;
 
   {
     std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     const size_t high_watermark = std::min(encoded_admission_high_watermark_,
                                           kEncodedQueueCapacity);
-    if (encoded_queue_count_ < high_watermark) {
-      return true;
-    }
-
     const size_t group_size = static_cast<size_t>(CameraMaskPopCount(camera_mask_));
     if (group_size == 0U || group_size > kMaxChannels) {
       return false;
     }
+    // Admission holds queue_mutex_, so next_frame_order_ includes all committed
+    // raw/in-flight frames, not just payloads already in the encoded ring.
 
     // next_write_order_ advances when the writer claims a frame. If it is inside a group,
     // the remainder belongs to an already-claimed frame-set and must stay protected.
@@ -1022,42 +1045,86 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
       candidate_order += group_size - group_remainder;
     }
 
-    const size_t frames_to_free = encoded_queue_count_ - high_watermark + 1U;
+    const size_t frames_to_free = encoded_queue_count_ >= high_watermark
+                                     ? encoded_queue_count_ - high_watermark + 1U
+                                     : 0U;
     const size_t groups_to_evict =
         (frames_to_free + group_size - 1U) / group_size;
-    if (groups_to_evict == 0U ||
-        groups_to_evict > kMaxOldestFrameSetsEvictedPerAdmission) {
+    if (groups_to_evict > kMaxOldestFrameSetsEvictedPerAdmission ||
+        groups_to_evict * group_size > kMaxEvictedFramesPerAdmission) {
       return false;
     }
 
-    // Validate the complete replacement set before moving any payload. If all required
-    // frame-sets are not ready, leave every old frame intact and reject only the newcomer.
-    for (size_t group_index = 0U; group_index < groups_to_evict; ++group_index) {
-      const uint64_t group_order = candidate_order + group_index * group_size;
-      bool complete_ready_group = true;
+    std::array<uint64_t, kMaxOldestFrameSetsEvictedPerAdmission> eviction_orders{};
+    size_t candidate_count = 0U;
+    // Scan complete unclaimed groups; skip protected neighbors and unfinished encodes.
+    // Validate the whole transaction before discarding payloads.
+    while (candidate_count < groups_to_evict && candidate_order < next_frame_order_ &&
+           next_frame_order_ - candidate_order >= group_size &&
+           candidate_order - next_write_order_ <= kEncodedQueueCapacity - group_size) {
+      bool ready = true;
       uint64_t group_id = 0U;
       for (size_t frame_index = 0U; frame_index < group_size; ++frame_index) {
-        const uint64_t record_order = group_order + frame_index;
-        const EncodedFrameSlot& slot =
-            encoded_slots_[record_order % kEncodedQueueCapacity];
-        if (!slot.occupied || slot.evicted || slot.record_order != record_order) {
-          complete_ready_group = false;
+        const uint64_t order = candidate_order + frame_index;
+        const EncodedFrameSlot& slot = encoded_slots_[order % kEncodedQueueCapacity];
+        if (!slot.occupied || slot.record_order != order || slot.evicted) {
+          ready = false;
           break;
         }
-        if (frame_index == 0U) {
-          group_id = slot.job.job.group_id;
-        } else if (slot.job.job.group_id != group_id) {
-          complete_ready_group = false;
-          break;
-        }
+        if (frame_index == 0U) group_id = slot.job.job.group_id;
+        else if (slot.job.job.group_id != group_id) ready = false;
       }
-      if (!complete_ready_group) {
+      const uint64_t source = source_orders_[candidate_order % kEncodedQueueCapacity];
+      ready = ready && CanDropGroupLocked(source);
+      for (size_t index = 0U; ready && index < candidate_count; ++index) {
+        const uint64_t previous = source_orders_[eviction_orders[index] % kEncodedQueueCapacity];
+        ready = source >= previous && source - previous >= options_.record_drop_min_interval;
+      }
+      // Alternate saving already drops both neighbors of every retained group.
+      if (ready && options_.record_frame_skip == 0U) {
+        eviction_orders[candidate_count++] = candidate_order;
+      }
+      candidate_order += group_size;
+    }
+    if (candidate_count != groups_to_evict) return false;
+
+    // Count the head markers this transaction can retire before committing it.
+    // A partially claimed group pins the head: reject before a new order wraps
+    // onto its slots or leaves an encoder waiting outside the reorder window.
+    uint64_t prospective_head = next_write_order_;
+    for (size_t scanned = 0U; scanned < kEncodedQueueCapacity; ++scanned) {
+      const EncodedFrameSlot& slot =
+          encoded_slots_[prospective_head % kEncodedQueueCapacity];
+      if (!slot.occupied || slot.record_order != prospective_head) {
+        break;
+      }
+      bool will_evict = slot.evicted;
+      for (size_t index = 0U; index < candidate_count; ++index) {
+        will_evict |= prospective_head >= eviction_orders[index] &&
+                      prospective_head - eviction_orders[index] < group_size;
+      }
+      if (!will_evict) {
+        break;
+      }
+      ++prospective_head;
+    }
+    if (next_frame_order_ < prospective_head ||
+        next_frame_order_ > std::numeric_limits<uint64_t>::max() - group_size ||
+        next_frame_order_ - prospective_head > kEncodedQueueCapacity - group_size) {
+      return false;
+    }
+    for (size_t frame_index = 0U; frame_index < group_size; ++frame_index) {
+      const uint64_t record_order = next_frame_order_ + frame_index;
+      const EncodedFrameSlot& slot =
+          encoded_slots_[record_order % kEncodedQueueCapacity];
+      if (slot.occupied && slot.record_order >= prospective_head) {
         return false;
       }
     }
 
-    for (size_t group_index = 0U; group_index < groups_to_evict; ++group_index) {
-      const uint64_t group_order = candidate_order + group_index * group_size;
+    for (size_t group_index = 0U; group_index < candidate_count; ++group_index) {
+      const uint64_t group_order = eviction_orders[group_index];
+      RememberDroppedGroupLocked(source_orders_[group_order % kEncodedQueueCapacity]);
       for (size_t frame_index = 0U; frame_index < group_size; ++frame_index) {
         const uint64_t record_order = group_order + frame_index;
         EncodedFrameSlot& slot = encoded_slots_[record_order % kEncodedQueueCapacity];
@@ -1075,6 +1142,7 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
       ++evicted_group_count;
       evicted_frame_count = SaturatingAdd(evicted_frame_count, group_size);
     }
+    retired_head = RetireHeadEvictedEncodedOrdersLocked();
 
     admission_room_available = encoded_queue_count_ < high_watermark;
     if (evicted_group_count != 0U) {
@@ -1095,6 +1163,8 @@ bool SensorBagRecorder::MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets()
     for (size_t index = 0U; index < evicted_job_count; ++index) {
       ReleaseEncodedFrameJob(&evicted_jobs[index]);
     }
+  }
+  if (evicted_group_count != 0U || retired_head) {
     encoded_condition_.notify_all();
     NotifyWriter(&writer_wakeup_mutex_, &writer_condition_, &writer_wakeup_generation_);
   }
@@ -1106,9 +1176,73 @@ void SensorBagRecorder::RecordEncodedBackpressureReject() noexcept {
   ++stats_.encoded_queue_full_rejects;
 }
 
-void SensorBagRecorder::RecordSourceFrameSetSeen() noexcept {
+bool SensorBagRecorder::CanDropGroupLocked(uint64_t source_order) const noexcept {
+  const auto next = std::lower_bound(dropped_source_orders_.begin(),
+                                      dropped_source_orders_.end(), source_order);
+  if (next != dropped_source_orders_.end() &&
+      *next - source_order < options_.record_drop_min_interval) return false;
+  return next == dropped_source_orders_.begin() ||
+         source_order - *(next - 1) >= options_.record_drop_min_interval;
+}
+
+void SensorBagRecorder::RememberDroppedGroupLocked(uint64_t source_order) noexcept {
+  // Keep all decisions constraining unclaimed groups, plus the nearest predecessor.
+  // The bounded reorder window bounds this preallocated vector.
+  const uint64_t oldest = next_write_order_ < next_frame_order_
+      ? source_orders_[next_write_order_ % kEncodedQueueCapacity] : current_source_order_;
+  const auto after = std::upper_bound(dropped_source_orders_.begin(),
+                                      dropped_source_orders_.end(), oldest);
+  if (after != dropped_source_orders_.begin()) {
+    dropped_source_orders_.erase(dropped_source_orders_.begin(), after - 1);
+  }
+  const auto next = std::lower_bound(dropped_source_orders_.begin(),
+                                     dropped_source_orders_.end(), source_order);
+  uint64_t distance = std::numeric_limits<uint64_t>::max();
+  if (next != dropped_source_orders_.end()) distance = *next - source_order;
+  if (next != dropped_source_orders_.begin()) {
+    distance = std::min(distance, source_order - *(next - 1));
+  }
+  dropped_source_orders_.insert(next, source_order);
   std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
-  ++stats_.source_frame_sets_seen;
+  ++stats_.drop_policy_dropped_groups;
+  if (distance != std::numeric_limits<uint64_t>::max()) {
+    stats_.drop_policy_min_observed_interval = stats_.drop_policy_min_observed_interval == 0U
+        ? distance : std::min(stats_.drop_policy_min_observed_interval, distance);
+  }
+}
+
+bool SensorBagRecorder::DropIncomingGroupLocked(uint64_t source_order,
+                                                const char* reason) noexcept {
+  {
+    std::lock_guard<RealtimeMutex> encoded_lock(encoded_mutex_);
+    if (CanDropGroupLocked(source_order)) {
+      RememberDroppedGroupLocked(source_order);
+      return true;
+    }
+  }
+  {
+    std::lock_guard<RealtimeMutex> error_lock(error_mutex_);
+    if (!fatal_error_.load(std::memory_order_acquire)) {
+      error_message_ = "bag strict drop spacing exhausted: " + std::string(reason) +
+          " source_group_order=" + std::to_string(source_order) +
+          " min_interval=" + std::to_string(options_.record_drop_min_interval);
+    }
+  }
+  {
+    std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
+    stats_.drop_policy_stopped = true;
+    stats_.drop_policy_stop_group_order = source_order;
+  }
+  drop_policy_stopped_.store(true, std::memory_order_release);
+  stopping_.store(true, std::memory_order_release);
+  g_stop_requested.store(true, std::memory_order_release);
+  queue_condition_.notify_all();
+  return false;
+}
+
+uint64_t SensorBagRecorder::RecordSourceFrameSetSeen() noexcept {
+  std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
+  return stats_.source_frame_sets_seen++;
 }
 
 void SensorBagRecorder::RecordSelectedGroup() noexcept {
@@ -1286,7 +1420,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
   ApplyRecorderWorkerPriority(kRecorderWriterNice);
   std::vector<uint8_t> imu_payload;
   imu_payload.reserve(320U);
-  std::array<icm42670_sample_t, kWriterImuHighWatermarkDrainBatch> imu_batch{};
+  std::array<icm42670_sample_t, kWriterImuDrainBatch> imu_batch{};
   std::vector<PendingEncodedWrite> pending_images;
   pending_images.reserve(kWriterImagePrefetchLimit);
   size_t pending_image_head = 0U;
@@ -1333,6 +1467,11 @@ void SensorBagRecorder::WriterEntry() noexcept {
       WriteEncodedFrameToBag(pending.encoded, pending.order_wait_ns);
       ReleaseEncodedFrameJob(&pending.encoded);
       ++image_burst_count;
+#ifdef RELEASE008_TESTING
+      if (writer_record_hook_for_test_ != nullptr) {
+        writer_record_hook_for_test_(writer_record_hook_context_for_test_, true);
+      }
+#endif
       return true;
     } catch (const std::exception& error) {
       SetFatalError(error.what());
@@ -1346,6 +1485,11 @@ void SensorBagRecorder::WriterEntry() noexcept {
     try {
       WriteImuSample(sample, &imu_payload);
       image_burst_count = 0U;
+#ifdef RELEASE008_TESTING
+      if (writer_record_hook_for_test_ != nullptr) {
+        writer_record_hook_for_test_(writer_record_hook_context_for_test_, false);
+      }
+#endif
       return true;
     } catch (const std::exception& error) {
       SetFatalError(error.what());
@@ -1418,12 +1562,12 @@ void SensorBagRecorder::WriterEntry() noexcept {
     prefetch_ready_images();
 
     if (pending_image_count() > 0U) {
-      const bool imu_high_water = imu_queue_depth() >= kWriterImuHighWatermark;
-      if (imu_high_water || image_burst_count >= kWriterImageBurstBeforeImu) {
-        // 高水位 IMU backlog 抢占 image burst，避免秒级写盘停顿后继续把 IMU ring 顶满。
-        const size_t drain_limit = imu_high_water ? kWriterImuHighWatermarkDrainBatch
-                                                  : kWriterImuDrainBatch;
-        if (!drain_imu_samples(drain_limit)) {
+      const size_t imu_backlog = imu_queue_depth();
+      if (imu_backlog >= kWriterImuHighWatermark ||
+          image_burst_count >= kWriterImageBurstBeforeImu) {
+        // Service the current backlog in bounded batches before another image write.
+        // Later arrivals wait for the next snapshot, so images still make progress.
+        if (!drain_imu_samples(imu_backlog)) {
           break;
         }
       }
@@ -1448,6 +1592,10 @@ void SensorBagRecorder::WriterEntry() noexcept {
 
 
 void SensorBagRecorder::RequestStop() noexcept {
+  {
+    std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
+    imu_input_closed_ = true;
+  }
   {
     // Publish the wait predicate under its mutex so notify cannot be lost between
     // PopFrame's predicate check and the condition-variable sleep transition.
@@ -1495,22 +1643,27 @@ bool SensorBagRecorder::PopFrame(int camera_id, SensorBagFrameJob* job) noexcept
   return true;
 }
 
-bool SensorBagRecorder::PopNextEncodedFrame(EncodedFrameJob* encoded,
-                                            uint64_t* order_wait_ns) noexcept {
-  if (encoded == nullptr || order_wait_ns == nullptr || encoded_slots_.empty()) {
-    return false;
-  }
-  std::unique_lock<RealtimeMutex> lock(encoded_mutex_);
-  bool skipped_evicted_order = false;
-  while (true) {
+bool SensorBagRecorder::RetireHeadEvictedEncodedOrdersLocked() noexcept {
+  bool retired = false;
+  for (size_t scanned = 0U; scanned < kEncodedQueueCapacity; ++scanned) {
     EncodedFrameSlot& slot = encoded_slots_[next_write_order_ % kEncodedQueueCapacity];
     if (!slot.occupied || slot.record_order != next_write_order_ || !slot.evicted) {
       break;
     }
     slot = EncodedFrameSlot{};
     ++next_write_order_;
-    skipped_evicted_order = true;
+    retired = true;
   }
+  return retired;
+}
+
+bool SensorBagRecorder::PopNextEncodedFrame(EncodedFrameJob* encoded,
+                                            uint64_t* order_wait_ns) noexcept {
+  if (encoded == nullptr || order_wait_ns == nullptr || encoded_slots_.empty()) {
+    return false;
+  }
+  std::unique_lock<RealtimeMutex> lock(encoded_mutex_);
+  const bool skipped_evicted_order = RetireHeadEvictedEncodedOrdersLocked();
 
   EncodedFrameSlot& slot = encoded_slots_[next_write_order_ % kEncodedQueueCapacity];
   if (HasFatalError() || !slot.occupied || slot.evicted ||
@@ -1702,6 +1855,7 @@ SensorBagRecorder::EncodedFrameJob SensorBagRecorder::EncodeFrame(SensorBagFrame
   encoded.job.sequence = job->sequence;
   encoded.job.frame_id = job->frame_id;
   encoded.job.group_id = job->group_id;
+  encoded.job.source_group_order = job->source_group_order;
   encoded.job.group_timestamp_ns = job->group_timestamp_ns;
   encoded.job.record_order = job->record_order;
   encoded.job.camera_timestamp_ns = job->camera_timestamp_ns;
@@ -1909,6 +2063,11 @@ void SensorBagRecorder::WriteSessionStatus(SensorBagFinishOutcome outcome, bool 
          << "\"data_complete\":" << (data_complete ? "true" : "false") << ','
          << "\"published_path\":\"" << JsonEscape(published_path) << "\","
          << "\"session_uuid\":\"" << JsonEscape(session_uuid) << "\","
+         << "\"drop_policy_min_group_interval\":" << options_.record_drop_min_interval << ','
+         << "\"drop_policy_stopped\":" << (stats.drop_policy_stopped ? "true" : "false") << ','
+         << "\"drop_policy_stop_group_order\":" << stats.drop_policy_stop_group_order << ','
+         << "\"drop_policy_dropped_groups\":" << stats.drop_policy_dropped_groups << ','
+         << "\"drop_policy_min_observed_interval\":" << stats.drop_policy_min_observed_interval << ','
          << "\"image_frames\":" << stats.image_frames << ','
          << "\"imu_samples\":" << stats.imu_samples << ','
          << "\"frame_queue_peak_depth\":" << stats.frame_queue_peak_depth << ','
@@ -1965,7 +2124,7 @@ void SensorBagRecorder::WriteSessionStatus(SensorBagFinishOutcome outcome, bool 
   AppendLatencyJson(&stream, "imu_writer_wait", stats.imu_writer_wait_latency);
   AppendLatencyJson(&stream, "imu_writer_hold", stats.imu_writer_hold_latency);
   AppendRosbagWriterStatsJson(&stream, stats.writer_stats);
-  if (HasFatalError()) {
+  if (HasFatalError() || DropPolicyStopped()) {
     stream << ",\"error\":\"" << JsonEscape(ErrorMessage()) << "\"";
   }
   stream << '}';
@@ -2013,34 +2172,5 @@ uint32_t SensorBagRecorder::FrameMetadataConnection(int camera_id) const {
   return frame_metadata_connections_.at(static_cast<size_t>(camera_id));
 }
 
-bool SensorBagRecorder::ShouldRecordGroup(uint64_t group_id,
-                                          uint64_t /*group_timestamp_ns*/) {
-  if (record_target_fps_ == 0U) {
-    return false;
-  }
-  if (options_.record_frame_skip == 0U) {
-    return true;
-  }
-
-  std::lock_guard<RealtimeMutex> lock(record_selection_mutex_);
-  for (const RecordSelection& selection : record_selections_) {
-    if (selection.group_id == group_id) {
-      return selection.selected;
-    }
-  }
-
-  // skip-one 按同步组做原子交替；同一 group 的多路回调复用上面的缓存决策。
-  bool selected = true;
-  if (options_.record_frame_skip == 1U) {
-    selected = next_group_should_record_;
-    next_group_should_record_ = !next_group_should_record_;
-  }
-
-  record_selections_.push_back(RecordSelection{group_id, selected});
-  if (record_selections_.size() > kRecordSelectionCacheCapacity) {
-    record_selections_.pop_front();
-  }
-  return selected;
-}
 
 }  // namespace robobaton_demo

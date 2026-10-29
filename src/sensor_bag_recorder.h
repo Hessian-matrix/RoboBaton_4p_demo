@@ -39,6 +39,10 @@ struct SensorBagRecorderStats {
   uint64_t recorder_admitted_groups = 0U;
   uint64_t recorder_dropped_groups = 0U;
   uint64_t recorder_written_groups = 0U;
+  uint64_t drop_policy_dropped_groups = 0U;
+  uint64_t drop_policy_min_observed_interval = 0U;
+  uint64_t drop_policy_stop_group_order = 0U;
+  bool drop_policy_stopped = false;
   uint64_t recorder_imu_admitted = 0U;
   uint64_t recorder_imu_written = 0U;
   uint64_t imu_queue_peak_depth = 0U;
@@ -119,6 +123,7 @@ struct SensorBagFrameJob {
   uint32_t raw_frame_id = 0U;
   sc132_exposure_info_t exposure{};
   uint64_t group_id = 0U;
+  uint64_t source_group_order = 0U;
   uint64_t group_timestamp_ns = 0U;
   uint64_t record_order = 0U;
   QueuedFrame raw_frame;
@@ -148,7 +153,10 @@ class SensorBagRecorder final {
     kFatal,
   };
   FrameSetAdmissionStatus TryAcceptFrameSet(const sc132_frame_set_t& frame_set) noexcept;
+#ifdef RELEASE008_TESTING
+  // Encoder/writer tests may inject individual jobs; production admits frame-sets only.
   void ObserveFrame(const QueuedFrame& frame);
+#endif
   void ObserveFrameSet(const sc132_frame_set_t& frame_set);
   void ObserveImu(const icm42670_sample_t& sample);
   void ObserveFsync(const FsyncAssociationRecord& record);
@@ -156,6 +164,9 @@ class SensorBagRecorder final {
   void Abort() noexcept;
 
   bool enabled() const noexcept { return enabled_; }
+  bool DropPolicyStopped() const noexcept {
+    return drop_policy_stopped_.load(std::memory_order_acquire);
+  }
   bool HasFatalError() const noexcept;
   std::string ErrorMessage() const;
   SensorBagRecorderStats SnapshotStats() const;
@@ -171,7 +182,10 @@ class SensorBagRecorder final {
   static constexpr size_t kFrameWorkerCount = kMaxChannels;
   static constexpr size_t kReusableJobCapacity = kQueueCapacity + kFrameWorkerCount;
   static constexpr size_t kEncodedQueueCapacity = 4096U;
-  static constexpr size_t kMaxOldestFrameSetsEvictedPerAdmission = 2U;
+  // Before the next admission, at most the raw queue and active workers can
+  // complete encodes beyond high-water. Include one incoming group of slack.
+  static constexpr size_t kMaxEvictedFramesPerAdmission = kReusableJobCapacity + kMaxChannels;
+  static constexpr size_t kMaxOldestFrameSetsEvictedPerAdmission = kMaxEvictedFramesPerAdmission;
   // 保留更大的重排窗口，吸收 writer 的秒级抖动，避免可恢复 backlog 过早转成整组丢帧。
   static constexpr size_t kEncodedAdmissionHighWatermark =
       kEncodedQueueCapacity * 15U / 16U;
@@ -182,7 +196,6 @@ class SensorBagRecorder final {
   static constexpr size_t kWriterImuDrainBatch = 64U;
   static constexpr size_t kImuQueueCapacity = 8192U;
   static constexpr size_t kWriterImuHighWatermark = kImuQueueCapacity / 2U;
-  static constexpr size_t kWriterImuHighWatermarkDrainBatch = 256U;
   static constexpr uint32_t kJpegQuality = 80U;
   struct QueueAtCapacityTracker {
     bool active = false;
@@ -216,6 +229,7 @@ class SensorBagRecorder final {
   void StopWorkers() noexcept;
   bool PopFrame(int camera_id, SensorBagFrameJob* job) noexcept;
   bool PopNextEncodedFrame(EncodedFrameJob* encoded, uint64_t* order_wait_ns) noexcept;
+  bool RetireHeadEvictedEncodedOrdersLocked() noexcept;
   size_t PopImuBatch(icm42670_sample_t* samples, size_t max_samples) noexcept;
   bool WriterInputReady() noexcept;
   bool WriterInputsClosed() noexcept;
@@ -232,11 +246,13 @@ class SensorBagRecorder final {
   void ObserveJpegTiming(uint64_t encode_ns) noexcept;
   void ObserveWriterTiming(uint64_t order_wait_ns, uint64_t writer_wait_ns,
                            uint64_t writer_hold_ns, bool image_write) noexcept;
-  bool EncodedBackpressureActive() noexcept;
   bool MakeEncodedAdmissionRoomByEvictingOldestReadyFrameSets() noexcept;
   void RecordEncodedBackpressureReject() noexcept;
+  bool CanDropGroupLocked(uint64_t source_order) const noexcept;
+  void RememberDroppedGroupLocked(uint64_t source_order) noexcept;
+  bool DropIncomingGroupLocked(uint64_t source_order, const char* reason) noexcept;
   bool HasRecordedDrops() const noexcept;
-  void RecordSourceFrameSetSeen() noexcept;
+  uint64_t RecordSourceFrameSetSeen() noexcept;
   void RecordSelectedGroup() noexcept;
   void RecordAdmittedGroup() noexcept;
   void UpdateWrittenGroupCountLocked() noexcept;
@@ -258,11 +274,6 @@ class SensorBagRecorder final {
   uint32_t ImageConnection(int camera_id) const;
   uint32_t CameraInfoConnection(int camera_id) const;
   uint32_t FrameMetadataConnection(int camera_id) const;
-  bool ShouldRecordGroup(uint64_t group_id, uint64_t group_timestamp_ns);
-  struct RecordSelection {
-    uint64_t group_id = 0U;
-    bool selected = false;
-  };
 
   RosbagV2Writer writer_;
   RealtimeMutex fsync_mutex_;
@@ -288,6 +299,11 @@ class SensorBagRecorder final {
   std::vector<EncodedFrameSlot> encoded_slots_;
   size_t encoded_queue_count_ = 0U;
   size_t encoded_admission_high_watermark_ = kEncodedAdmissionHighWatermark;
+  // Admission owns queue_mutex_; encoded_mutex_ protects head and source-order slots.
+  std::array<uint64_t, kEncodedQueueCapacity> source_orders_{};
+  std::vector<uint64_t> dropped_source_orders_;
+  uint64_t current_source_order_ = 0U;
+  std::atomic<bool> drop_policy_stopped_{false};
   std::thread writer_worker_;
   RealtimeMutex writer_wakeup_mutex_;
   RealtimeCondition writer_condition_;
@@ -296,6 +312,8 @@ class SensorBagRecorder final {
   friend struct SensorBagRecorderTestAccess;
   void (*encoded_wait_hook_for_test_)(void*) = nullptr;
   void* encoded_wait_hook_context_for_test_ = nullptr;
+  void (*writer_record_hook_for_test_)(void*, bool) = nullptr;
+  void* writer_record_hook_context_for_test_ = nullptr;
   std::atomic<bool> writer_paused_for_test_{false};
   std::atomic<bool> fail_next_payload_pool_recycle_for_test_{false};
 #endif
@@ -304,6 +322,8 @@ class SensorBagRecorder final {
   bool encoded_input_closed_ = false;
   size_t imu_queue_head_ = 0U;
   size_t imu_queue_count_ = 0U;
+  // 图像策略停止不关闭 IMU；owner 停止 producer 并排空后由 Finish 关闭。
+  bool imu_input_closed_ = false;
   std::atomic<bool> stopping_{false};
   bool enabled_ = false;
   bool finished_ = false;
@@ -318,9 +338,6 @@ class SensorBagRecorder final {
   uint32_t session_config_connection_ = 0U;
   uint32_t session_status_connection_ = 0U;
   bool session_config_written_ = false;
-  RealtimeMutex record_selection_mutex_;
-  std::deque<RecordSelection> record_selections_;
-  bool next_group_should_record_ = true;
   SensorBagFinishResult finish_result_;
   QueueAtCapacityTracker frame_queue_at_capacity_;
   QueueAtCapacityTracker encoded_queue_at_capacity_;
