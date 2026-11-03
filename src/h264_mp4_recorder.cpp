@@ -707,8 +707,8 @@ class H264Mp4Recorder::Impl {
     }
   }
 
-  void ObserveEncodedFrame(int camera_id,
-                           const prrtsp_encoded_frame_v2& frame) noexcept {
+  void ObserveEncodedFrame(int camera_id, const prrtsp_encoded_frame_v2& frame,
+                           bool skip_leading_inter_frames) noexcept {
     std::unique_lock<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_ || !CameraEnabled(camera_mask_, camera_id)) return;
     if (frame.struct_size < PRRTSP_ENCODED_FRAME_V2_0_SIZE ||
@@ -745,6 +745,8 @@ class H264Mp4Recorder::Impl {
     if (!access_unit.has_vcl) {
       return;
     }
+    if (skip_leading_inter_frames && !access_unit.has_idr &&
+        stats_.encoded_frames_admitted_by_camera[camera_id] == 0U) return;
     ++stats_.encoded_frames_selected;
     ++stats_.encoded_frames_selected_by_camera[camera_id];
     if (frame.timestamp_ns == 0U) {
@@ -952,9 +954,10 @@ class H264Mp4Recorder::Impl {
         source_health.fifo_overflow_count == 0U &&
         source_health.timing_sample_drops == 0U &&
         source_health.uncertainty_over_200_drops == 0U &&
-        source_health.producer_final_health_valid &&
-        source_health.producer_session_generation != 0U &&
-        source_health.producer_published_samples == source_health.samples &&
+        ((source_health.producer_final_health_valid &&
+          source_health.producer_session_generation != 0U &&
+          source_health.producer_published_samples == source_health.samples) ||
+         source_health.callback_window_valid) &&
         source_health.max_timestamp_uncertainty_us <=
             kMaxCompleteImuTimestampUncertaintyUs &&
         source_health.mapper_counter_valid;
@@ -1566,6 +1569,8 @@ class H264Mp4Recorder::Impl {
              << (source_health.producer_final_health_valid ? "true" : "false") << ",\n"
              << "  \"imu_source_mapper_counter_valid\": "
              << (source_health.mapper_counter_valid ? "true" : "false") << ",\n"
+             << "  \"imu_health_scope\": \""
+             << (source_health.callback_window_valid ? "callback_window" : "producer_session") << "\",\n"
              << "  \"error\": \"" << JsonEscape(preliminary.error) << "\"\n"
              << "}\n";
       bool closed = FlushAndClose(&output);
@@ -1887,8 +1892,9 @@ void H264Mp4Recorder::Start(const Options& options,
 }
 
 void H264Mp4Recorder::ObserveEncodedFrame(
-    int camera_id, const prrtsp_encoded_frame_v2& frame) noexcept {
-  if (enabled()) impl_->ObserveEncodedFrame(camera_id, frame);
+    int camera_id, const prrtsp_encoded_frame_v2& frame,
+    bool skip_leading_inter_frames) noexcept {
+  if (enabled()) impl_->ObserveEncodedFrame(camera_id, frame, skip_leading_inter_frames);
 }
 
 void H264Mp4Recorder::ObserveImu(const icm42670_sample_t& sample) noexcept {

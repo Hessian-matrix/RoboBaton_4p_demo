@@ -16,7 +16,7 @@ extern "C" {
 #include "cam_demo_common.h"
 #include "cam_demo_config.h"
 #include "cam_demo_pipeline.h"
-#include "cam_demo_rtsp.h"
+#include "cam_demo_media.h"
 
 #ifndef ROBOBATON_RELEASE_VERSION
 #define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
 
   // callback context 与关闭失败后仍被 producer 持有的 handle
   // 必须存活到进程结束，避免析构触发 restart/unload。
-  auto* rtsp = new RtspChannels();
+  auto* rtsp = new MediaChannels();
   FramePipeline* pipeline = nullptr;
 
   try {
@@ -98,7 +98,8 @@ int main(int argc, char** argv) {
     pipeline->StartWorkers();
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
-      if (!CameraMaskContains(options.camera_mask, camera_id)) {
+      if (!EncodingRequired(options) ||
+          !CameraMaskContains(options.camera_mask, camera_id)) {
         continue;
       }
       const int32_t status =

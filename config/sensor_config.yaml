@@ -8,11 +8,19 @@ camera:
   # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.
   test_exposure_midpoint: false
 rtsp:
+  enabled: false
   bps: 4000
   codec: h264
   url: /PRR
+web:
+  enabled: true
+  listen_address: 0.0.0.0
+  port: 80
+  imu_push_hz: 50
+  max_video_sessions: 8
+  max_imu_clients: 2
 imu:
-  sample_rate_hz: 1600
+  sample_rate_hz: 800
   print_rate_hz: 10
   print_metrics: false
   fsync_enabled: false

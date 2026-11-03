@@ -55,6 +55,8 @@ struct H264Mp4SourceHealth {
   uint64_t producer_published_samples = 0U;
   bool producer_final_health_valid = false;
   bool mapper_counter_valid = false;
+  // Callback-window evidence excludes losses outside the admitted first/last sample.
+  bool callback_window_valid = false;
 };
 
 enum class H264Mp4FinishOutcome {
@@ -91,8 +93,9 @@ class H264Mp4Recorder final {
   H264Mp4Recorder& operator=(const H264Mp4Recorder&) = delete;
 
   void Start(const Options& options, const std::string& output_directory);
-  void ObserveEncodedFrame(int camera_id,
-                           const prrtsp_encoded_frame_v2& frame) noexcept;
+  // Dynamic sessions ignore only pre-first-IDR VCLs, retaining standalone SPS/PPS.
+  void ObserveEncodedFrame(int camera_id, const prrtsp_encoded_frame_v2& frame,
+                           bool skip_leading_inter_frames = false) noexcept;
   void ObserveImu(const icm42670_sample_t& sample) noexcept;
   void ObserveFsync(const FsyncAssociationRecord& record) noexcept;
   void ObserveFrameSet(const sc132_frame_set_t& set) noexcept;

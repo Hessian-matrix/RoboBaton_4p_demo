@@ -24,7 +24,9 @@ extern "C" {
 #include "cam_demo_common.h"
 #include "cam_demo_config.h"
 #include "cam_demo_pipeline.h"
-#include "cam_demo_rtsp.h"
+#include "cam_demo_media.h"
+#include "sensor_web_runtime.h"
+#include "sensor_recording.h"
 #include "h264_mp4_recorder.h"
 #include "sensor_bag_recorder.h"
 #include "tee_capture_recorder.h"
@@ -44,20 +46,15 @@ struct SensorDemoImuStatsTestResult {
 #endif
 
 struct MainPipelineHooksUser {
-  robobaton_demo::SensorBagRecorder* bag_recorder = nullptr;
   robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
   robobaton_demo::FsyncAssociation* association = nullptr;
-  robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
+  robobaton_demo::SensorRecording* sessions = nullptr;
 };
 
 void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
   auto* context = static_cast<MainPipelineHooksUser*>(user);
   if (context && context->association) context->association->ObserveGroup(frame_set);
-  if (context && context->mp4_recorder) context->mp4_recorder->ObserveFrameSet(frame_set);
-  if (context == nullptr || context->bag_recorder == nullptr) {
-    return;
-  }
-  static_cast<void>(context->bag_recorder->TryAcceptFrameSet(frame_set));
+  if (context && context->sessions) context->sessions->ObserveFrameSet(frame_set);
 }
 
 void ObserveQueuedFrameForCapture(const robobaton_demo::QueuedFrame& frame,
@@ -75,7 +72,7 @@ bool InjectJoinFailure(std::thread&, void*) { return false; }
 
 robobaton_demo::PipelineHooks MainPipelineHooks(MainPipelineHooksUser* user) {
   robobaton_demo::PipelineHooks hooks{};
-  if (user != nullptr && (user->bag_recorder != nullptr || user->association != nullptr || user->mp4_recorder != nullptr)) {
+  if (user != nullptr && (user->sessions != nullptr || user->association != nullptr)) {
     hooks.on_frame_set = ObserveFrameSetForBag;
   }
   if (user != nullptr && user->capture_recorder != nullptr) {
@@ -101,14 +98,6 @@ void SignalHandler(int) {
 }
 
 
-void ObserveEncodedFrameForMp4(int camera_id,
-                               const prrtsp_encoded_frame_v2& frame,
-                               void* user) {
-  auto* recorder = static_cast<robobaton_demo::H264Mp4Recorder*>(user);
-  if (recorder != nullptr) {
-    recorder->ObserveEncodedFrame(camera_id, frame);
-  }
-}
 void ObserveEncodedFrameForCapture(int camera_id,
                                    const prrtsp_encoded_frame_v2& frame,
                                    void* user) {
@@ -465,25 +454,30 @@ struct SensorDemoShutdownContext {
   robobaton_demo::H264Mp4RecorderStats mp4_stats;
   robobaton_demo::TeeCaptureFinishResult capture_finish;
   robobaton_demo::TeeCaptureRecorderStats capture_stats;
+  robobaton_demo::SensorRecording* sessions = nullptr;
 };
 
 struct FsyncOutput {
   robobaton_demo::SensorBagRecorder* bag = nullptr;
   robobaton_demo::H264Mp4Recorder* mp4 = nullptr;
   uint64_t stdout_dropped = 0;
+  robobaton_demo::SensorRecording* sessions = nullptr;
+  robobaton_demo::FsyncAssociation* association = nullptr;
 };
 void ObserveFsyncRecord(const robobaton_demo::FsyncAssociationRecord& record, void* user) {
   auto* output = static_cast<FsyncOutput*>(user);
   if (output->bag) output->bag->ObserveFsync(record);
   if (output->mp4) output->mp4->ObserveFsync(record);
-  if (!output->bag && !output->mp4) {
+  if (!output->bag && !output->mp4 && (!output->sessions || !output->sessions->Saving())) {
     char json[1024]; const size_t n = robobaton_demo::FormatFsyncAssociation(record,json,sizeof(json));
     json[n] = '\n';
     if (::write(STDOUT_FILENO,json,n+1) != static_cast<ssize_t>(n+1)) ++output->stdout_dropped;
   }
 }
 void ObserveHardwareFsync(const icm42670_fsync_event_t& event, void* user) {
-  static_cast<robobaton_demo::FsyncAssociation*>(user)->ObserveEvent(event);
+  auto* output = static_cast<FsyncOutput*>(user);
+  if (output->association) output->association->ObserveEvent(event);
+  if (output->sessions) output->sessions->ObserveHardwareFsync(event);
 }
 
 void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132ShutdownResult& shutdown,
@@ -513,6 +507,7 @@ void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132Shutdow
   const bool session_success = context->exit_code != nullptr && *context->exit_code == 0 &&
                                shutdown.consumer_join_ok && shutdown.ownership_quiescent &&
                                shutdown.rtsp_status_ok && shutdown.rtsp_close_ok;
+  if (context->sessions) context->sessions->Shutdown(session_success, context->imu_final_health);
   // RTSP close 已结束encoded callback，随后再join recorder并执行无重编码remux。
   if (context->record_mp4_requested && context->mp4_recorder != nullptr &&
       !context->mp4_finish_done) {
@@ -543,8 +538,8 @@ void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132Shutdow
 struct SensorImuObserverState {
   ImuStats* stats = nullptr;
   robobaton_demo::ImuPrintState* print_state = nullptr;
-  robobaton_demo::SensorBagRecorder* recorder = nullptr;
-  robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
+  robobaton_demo::SensorWebRuntime* web = nullptr;
+  robobaton_demo::SensorRecording* sessions = nullptr;
 };
 
 void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
@@ -558,11 +553,10 @@ void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
   if (state->print_state != nullptr) {
     robobaton_demo::PrintImuSample(sample, state->print_state);
   }
-  if (state->recorder != nullptr) {
-    state->recorder->ObserveImu(sample);
-  }
-  if (state->mp4_recorder != nullptr) {
-    state->mp4_recorder->ObserveImu(sample);
+  if (state->sessions) state->sessions->ObserveImu(sample);
+  if (state->web != nullptr) {
+    state->web->ObserveImu(sample, state->stats != nullptr
+        ? state->stats->last_arrival_monotonic_ns : robobaton_demo::SteadyClockNowNs());
   }
 }
 
@@ -657,13 +651,15 @@ int main(int argc, char** argv) {
   SensorImuObserverState imu_observer;
   ImuConsumerOptions imu_options;
   std::thread imu_thread;
-  RtspChannels rtsp;
+  MediaChannels rtsp;
+  SensorWebRuntime web;
   std::unique_ptr<FramePipeline> pipeline;
   std::unique_ptr<ScopedNonblockingFd> output_mode;
   uint32_t imu_sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   SensorBagRecorder recorder;
   H264Mp4Recorder mp4_recorder;
   TeeCaptureRecorder capture_recorder;
+  std::unique_ptr<SensorRecording> sessions;
   MainPipelineHooksUser pipeline_hooks_user;
   FsyncOutput fsync_output;
   FsyncAssociation association(ObserveFsyncRecord, &fsync_output);
@@ -708,14 +704,28 @@ int main(int argc, char** argv) {
     if (record_mp4_requested && !Mp4CameraMaskAllowed(options.camera_mask)) {
       throw std::invalid_argument("MP4 recording requires full camera mask 0x0f");
     }
+    sessions = std::make_unique<SensorRecording>(options);
+    pipeline_hooks_user.sessions = sessions.get();
+    shutdown_context.sessions = sessions.get();
+    if (options.fsync_enabled) {
+      fsync_output.sessions = sessions.get();
+      fsync_output.association = &association;
+      pipeline_hooks_user.association = &association;
+      shutdown_context.association = &association;
+    }
     if (record_bag_requested) {
       recorder.Start(options, record_bag_path);
     }
     if (record_mp4_requested) {
       mp4_recorder.Start(options, record_mp4_directory);
-      if (!rtsp.SetEncodedFrameObserver(ObserveEncodedFrameForMp4, &mp4_recorder)) {
-        throw std::runtime_error("configure RTSP encoded observer failed");
-      }
+    }
+    if (recording_requested) {
+      sessions->AdoptStartup(record_bag_requested ? &recorder : nullptr,
+                             record_mp4_requested ? &mp4_recorder : nullptr,
+                             record_bag_requested ? record_bag_path : record_mp4_directory);
+    }
+    if (!rtsp.SetEncodedFrameObserver(SensorRecording::EncodedObserver, sessions.get())) {
+      throw std::runtime_error("configure recording encoded observer failed");
     }
     if (capture_requested) {
       if (!rtsp.SetCaptureEncodedFrameObserver(ObserveEncodedFrameForCapture,
@@ -723,17 +733,19 @@ int main(int argc, char** argv) {
         throw std::runtime_error("configure RTSP capture observer failed");
       }
     }
+    web.SetRecording(sessions.get());
+    (void)web.Start(options, &rtsp);
+    if (options.web_enabled &&
+        !rtsp.SetWebEncodedFrameObserver(SensorWebRuntime::EncodedObserver, &web)) {
+      throw std::runtime_error("configure Web encoded observer failed");
+    }
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.sample_drop_policy = options.imu_sample_drop_policy;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.final_health = &imu_final_health;
     if (options.fsync_enabled) {
-      fsync_output.bag = record_bag_requested ? &recorder : nullptr;
-      fsync_output.mp4 = record_mp4_requested ? &mp4_recorder : nullptr;
-      pipeline_hooks_user.association = &association;
-      shutdown_context.association = &association;
-      imu_options.fsync_observer = ObserveHardwareFsync; imu_options.fsync_user = &association;
+      imu_options.fsync_observer = ObserveHardwareFsync; imu_options.fsync_user = &fsync_output;
     }
     imu_print_state.print_every_samples =
         ImuPrintEverySamples(options.imu_sample_rate_hz, options.imu_print_rate_hz);
@@ -742,13 +754,16 @@ int main(int argc, char** argv) {
     imu_print_state.output_available = output_mode->active();
     imu_observer.stats = &imu_stats;
     imu_observer.print_state = &imu_print_state;
-    imu_observer.recorder = record_bag_requested ? &recorder : nullptr;
-    imu_observer.mp4_recorder = record_mp4_requested ? &mp4_recorder : nullptr;
+    imu_observer.sessions = sessions.get();
+    imu_observer.web = options.web_enabled ? &web : nullptr;
     std::cout << "Starting sensor_demo channels=" << options.channels
               << " camera_mask=0x" << std::hex << options.camera_mask << std::dec
               << " output_size=" << OutputWidth(options) << "x" << OutputHeight(options)
               << " fps=" << options.fps << " rotate=" << options.rotate_degrees
               << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
+              << " web=" << (options.web_enabled ? "enabled" : "disabled")
+              << " rtsp=" << (options.rtsp_enabled ? "enabled" : "disabled")
+              << " encoding=" << (EncodingRequired(options) ? "enabled" : "disabled")
               << " rtsp_base_port=" << options.rtsp_base_port
               << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
               << " imu_sample_drop_policy="
@@ -808,8 +823,7 @@ int main(int argc, char** argv) {
     ConfigureSc132TriggerMode(options);
     ConfigureSc132SensorProfile(options);
 
-    pipeline_hooks_user.bag_recorder = record_bag_requested ? &recorder : nullptr;
-    pipeline_hooks_user.mp4_recorder = record_mp4_requested ? &mp4_recorder : nullptr;
+    pipeline_hooks_user.sessions = sessions.get();
     pipeline_hooks_user.capture_recorder =
         capture_requested ? &capture_recorder : nullptr;
     pipeline = std::make_unique<FramePipeline>(
@@ -817,7 +831,7 @@ int main(int argc, char** argv) {
     pipeline->StartWorkers();
 
     for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
-      if (!CameraMaskContains(options.camera_mask, camera_id)) {
+      if (!EncodingRequired(options) || !CameraMaskContains(options.camera_mask, camera_id)) {
         continue;
       }
       const int32_t status =
@@ -846,12 +860,14 @@ int main(int argc, char** argv) {
     if (options.imu_start_order == ImuStartOrder::kCameraFirst) {
       start_imu();
     }
+    sessions->SetSourceReady();
 
     while (g_signal_stop == 0 &&
            !g_stop_requested.load(std::memory_order_acquire) &&
-           pipeline->FirstError() == 0 && !recorder.HasFatalError() &&
-           !mp4_recorder.HasFatalError() && !capture_recorder.HasFatalError()) {
+           pipeline->FirstError() == 0 && !capture_recorder.HasFatalError()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      web.PublishStatus(true, EncodingRequired(options), sessions->Saving(),
+                        pipeline->FirstError() != 0, !pipeline->RtspPreviewComplete());
     }
   } catch (const std::exception& error) {
     std::cerr << "fatal: " << error.what() << "\n";
@@ -862,11 +878,11 @@ int main(int argc, char** argv) {
     exit_code = 1;
     g_stop_requested.store(true, std::memory_order_release);
   }
+  web.BeginShutdown();
 
   if (pipeline != nullptr) {
     if (sc_start_attempted) {
-      if (pipeline->FirstError() != 0 || recorder.HasFatalError() ||
-          mp4_recorder.HasFatalError() || capture_recorder.HasFatalError()) {
+      if (pipeline->FirstError() != 0 || capture_recorder.HasFatalError()) {
         exit_code = 1;
       }
       shutdown_context.recorder = &recorder;
@@ -882,11 +898,7 @@ int main(int argc, char** argv) {
       shutdown_context.capture_requested = capture_requested;
       const Sc132ShutdownResult shutdown = FinishSc132ShutdownDetailed(
           pipeline.get(), &rtsp,
-          (recording_requested || capture_requested)
-              ? StopImuAndFinishRecordersBeforeSc132Stop
-              : nullptr,
-          (recording_requested || capture_requested) ? &shutdown_context
-                                                      : nullptr);
+          StopImuAndFinishRecordersBeforeSc132Stop, &shutdown_context);
       consumer_quiescent = shutdown.consumer_join_ok && shutdown.ownership_quiescent;
       rtsp_status_ok = shutdown.rtsp_status_ok;
       rtsp_close_ok = shutdown.rtsp_close_ok;
@@ -943,6 +955,8 @@ int main(int argc, char** argv) {
   if (imu_thread.joinable()) {
     imu_thread.join();
   }
+  if (sessions) sessions->Shutdown(exit_code == 0, &imu_final_health);
+  web.Stop();
   try {
     if (shutdown_context.association) shutdown_context.association->Finish();
   } catch (const std::exception& error) {

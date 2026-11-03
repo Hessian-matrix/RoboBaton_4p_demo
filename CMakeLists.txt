@@ -20,6 +20,37 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
+set(SENSOR_WEB_GO_EXECUTABLE "" CACHE FILEPATH "Go 1.27.3 executable for the embedded ARM64 Web service")
+if(NOT SENSOR_WEB_GO_EXECUTABLE)
+  if(DEFINED ENV{GO} AND NOT "$ENV{GO}" STREQUAL "")
+    set(SENSOR_WEB_GO_EXECUTABLE "$ENV{GO}" CACHE FILEPATH "Go 1.27.3 executable" FORCE)
+  else()
+    find_program(SENSOR_WEB_GO_DISCOVERED NAMES go)
+    if(SENSOR_WEB_GO_DISCOVERED)
+      set(SENSOR_WEB_GO_EXECUTABLE "${SENSOR_WEB_GO_DISCOVERED}" CACHE FILEPATH "Go 1.27.3 executable" FORCE)
+    endif()
+  endif()
+endif()
+if(NOT SENSOR_WEB_GO_EXECUTABLE)
+  message(FATAL_ERROR "sensor_web requires Go 1.27.3. Set -DSENSOR_WEB_GO_EXECUTABLE=/path/to/go or GO; automatic toolchain downloads are disabled.")
+endif()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env GOTOOLCHAIN=local GOENV=off "${SENSOR_WEB_GO_EXECUTABLE}" env GOVERSION
+  OUTPUT_VARIABLE SENSOR_WEB_GO_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE SENSOR_WEB_GO_RESULT ERROR_VARIABLE SENSOR_WEB_GO_ERROR
+)
+if(NOT SENSOR_WEB_GO_RESULT EQUAL 0 OR NOT SENSOR_WEB_GO_VERSION STREQUAL "go1.27.3")
+  message(FATAL_ERROR "sensor_web requires exactly Go 1.27.3; ${SENSOR_WEB_GO_EXECUTABLE} returned '${SENSOR_WEB_GO_VERSION}': ${SENSOR_WEB_GO_ERROR}. Set SENSOR_WEB_GO_EXECUTABLE or GO; no automatic switching.")
+endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(SENSOR_WEB_BINARY "${CMAKE_CURRENT_BINARY_DIR}/sensor_web")
+add_custom_target(sensor_web ALL
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_sensor_web.sh"
+          --go "${SENSOR_WEB_GO_EXECUTABLE}" --output "${SENSOR_WEB_BINARY}"
+  BYPRODUCTS "${SENSOR_WEB_BINARY}"
+  COMMENT "Building pinned embedded Linux ARM64 sensor_web"
+  VERBATIM
+)
 
 set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0")
 if(NOT EXISTS "${ICM42670_SO}")
@@ -120,7 +151,7 @@ add_executable(cam_demo
   src/cam_demo_common.cpp
   src/cam_demo_config.cpp
   src/cam_demo_pipeline.cpp
-  src/cam_demo_rtsp.cpp
+  src/cam_demo_media.cpp
   src/monotonic_raw_clock.cpp
 )
 
@@ -131,7 +162,9 @@ add_executable(sensor_demo
   src/cam_demo_config.cpp
   src/sensor_demo_yaml_config.cpp
   src/cam_demo_pipeline.cpp
-  src/cam_demo_rtsp.cpp
+  src/cam_demo_media.cpp
+  src/sensor_web_runtime.cpp
+  src/sensor_recording.cpp
   src/monotonic_raw_clock.cpp
   src/h264_mp4_recorder.cpp
   src/rosbag_v2_writer.cpp
@@ -139,6 +172,7 @@ add_executable(sensor_demo
   src/tee_capture_recorder.cpp
   src/x5_jpeg_encoder.cpp
 )
+add_dependencies(sensor_demo sensor_web)
 add_executable(mosaic_rtsp_demo
   src/mosaic_rtsp_demo.cpp
   src/mosaic_nv12.cpp
@@ -258,6 +292,11 @@ install(TARGETS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo m
   RUNTIME DESTINATION .
   LIBRARY DESTINATION lib
 )
+install(PROGRAMS "${SENSOR_WEB_BINARY}" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE_SCOPE.md" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/web/THIRD_PARTY_NOTICES.txt"
+              "${CMAKE_CURRENT_SOURCE_DIR}/web/dependencies.lock.json"
+        DESTINATION licenses/sensor_web)
 
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0"

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,13 @@ PROVENANCE_NAME = "runtime-provenance.json"
 PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v3"
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+GO_VERSION = "go1.27.3"
+WEB_PACKAGE_COPIES = {
+    "LICENSE": "LICENSE",
+    "LICENSE_SCOPE.md": "LICENSE_SCOPE.md",
+    "web/THIRD_PARTY_NOTICES.txt": "licenses/sensor_web/THIRD_PARTY_NOTICES.txt",
+    "web/dependencies.lock.json": "licenses/sensor_web/dependencies.lock.json",
+}
 
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
@@ -79,13 +87,203 @@ REQUIRED_FILES = {
     "bin/imu_reader_demo",
     "bin/mosaic_rtsp_demo",
     "bin/sensor_demo",
+    "bin/sensor_web",
     "bin/serial_port_demo",
     "bin/can_demo",
     "bin/ffprobe",
     "bin/rosbag_info.py",
+    *WEB_PACKAGE_COPIES.values(),
     *EXPECTED_VERSION_DEFINITIONS,
     *EXPECTED_LIBRARY_LINKS,
 }
+
+
+def web_source_paths(repo_root: Path) -> list[Path]:
+    excluded_dirs = {".git", ".cache", "__pycache__", "build", "dist", "out", "node_modules"}
+    paths = []
+    for path in sorted((repo_root / "web").rglob("*")):
+        relative = path.relative_to(repo_root / "web")
+        if any(part in excluded_dirs or part.startswith("build_") for part in relative.parts):
+            continue
+        if path.name == "sensor_web" or path.suffix in {".o", ".a", ".so", ".pyc", ".exe"}:
+            continue
+        if path.is_file():
+            if path.is_symlink():
+                raise AssertionError(f"Web source symlinks are not supported: {relative}")
+            with path.open("rb") as handle:
+                if handle.read(4) == b"\x7fELF":
+                    continue
+            paths.append(path)
+    return paths
+
+
+def web_source_digest(repo_root: Path) -> str:
+    paths = [repo_root / "VERSION", repo_root / "scripts/build_sensor_web.sh",
+             *web_source_paths(repo_root)]
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        digest.update(path.relative_to(repo_root).as_posix().encode("utf-8") + b"\0")
+        digest.update(bytes.fromhex(sha256(path)))
+    return digest.hexdigest()
+
+
+def web_dependency_lock(repo_root: Path) -> dict:
+    lock = json.loads((repo_root / "web/dependencies.lock.json").read_text(encoding="utf-8"))
+    if (lock.get("schema") != "robobaton-sensor-web-dependencies-v1"
+            or lock.get("toolchain", {}).get("version") != GO_VERSION
+            or lock.get("module") != "robobaton.local/sensorweb"
+            or lock.get("target") != {"GOOS": "linux", "GOARCH": "arm64", "CGO_ENABLED": "0"}):
+        raise AssertionError("unsupported sensor_web dependency lock/toolchain/target")
+    for filename, field in (("go.mod", "go_mod_sha256"), ("go.sum", "go_sum_sha256")):
+        if sha256(repo_root / "web/server" / filename) != lock.get(field):
+            raise AssertionError(f"sensor_web dependency lock {filename} hash drift")
+    if (lock.get("notice_file") != "web/THIRD_PARTY_NOTICES.txt"
+            or sha256(repo_root / lock["notice_file"]) != lock.get("notice_sha256")):
+        raise AssertionError("sensor_web third-party notice hash drift")
+    modules = lock.get("modules", [])
+    if not modules or len({m["path"] for m in modules}) != len(modules):
+        raise AssertionError("sensor_web dependency lock has missing or duplicate modules")
+    sums = set()
+    for module in modules:
+        if not module.get("licenses") or not module.get("license_files"):
+            raise AssertionError(f"sensor_web dependency license missing: {module['path']}")
+        sums.add(f"{module['path']} {module['version']} {module['sum']}")
+        sums.add(f"{module['path']} {module['version']}/go.mod {module['go_mod_sum']}")
+    if sums != set((repo_root / "web/server/go.sum").read_text(encoding="utf-8").splitlines()):
+        raise AssertionError("sensor_web full module graph checksum drift")
+    runtime = {m["path"]: m["version"] for m in modules if m["runtime"]}
+    requirements = dict(re.findall(r"^\s*(\S+)\s+(v\S+)",
+                                 (repo_root / "web/server/go.mod").read_text(), re.MULTILINE))
+    if runtime != requirements or runtime.get("github.com/pion/webrtc/v4") != "v4.2.24":
+        raise AssertionError("sensor_web runtime module requirements drift")
+    return lock
+
+
+def elf_sections(path: Path) -> tuple[bytes, dict[str, tuple]]:
+    data = path.read_bytes()
+    if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01":
+        raise AssertionError(f"sensor_web must be a little-endian ELF64 executable: {path}")
+    header = struct.unpack_from("<16sHHIQQQIHHHHHH", data)
+    if header[1:3] != (2, 183):
+        raise AssertionError("sensor_web must be a static AArch64 ET_EXEC executable")
+    offset, size, count, names_index = header[6], header[11], header[12], header[13]
+    if size != 64 or not count or names_index >= count or offset + size * count > len(data):
+        raise AssertionError("sensor_web has invalid ELF section headers")
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + i * size) for i in range(count)]
+    names_section = sections[names_index]
+    names = data[names_section[4]:names_section[4] + names_section[5]]
+    result = {}
+    for section in sections:
+        if section[0] >= len(names):
+            raise AssertionError("sensor_web has invalid ELF section name")
+        name = names[section[0]:].split(b"\0", 1)[0].decode("ascii")
+        if section[1] != 8 and section[4] + section[5] > len(data):
+            raise AssertionError("sensor_web has truncated ELF section data")
+        result[name] = section
+    return data, result
+
+
+def go_linked_strings(data: bytes, sections: dict[str, tuple]) -> dict[str, str]:
+    if ".symtab" not in sections or ".strtab" not in sections:
+        raise AssertionError("sensor_web must retain Go ELF symbols for linked version verification")
+    symbols, strings = sections[".symtab"], sections[".strtab"]
+    names = data[strings[4]:strings[4] + strings[5]]
+    if symbols[9] != 24 or symbols[5] % 24:
+        raise AssertionError("sensor_web has invalid ELF symbols")
+
+    def virtual_bytes(address: int, length: int) -> bytes:
+        for section in sections.values():
+            if (section[1] != 8 and section[3] <= address
+                    and address + length <= section[3] + section[5]):
+                start = section[4] + address - section[3]
+                return data[start:start + length]
+        raise AssertionError("sensor_web linked Go string points outside ELF data")
+
+    values = {}
+    for offset in range(symbols[4], symbols[4] + symbols[5], 24):
+        name_offset, _, _, _, address, size = struct.unpack_from("<IBBHQQ", data, offset)
+        name = names[name_offset:].split(b"\0", 1)[0]
+        if name in {b"main.version", b"main.sourceDigest"}:
+            if size != 16:
+                raise AssertionError("sensor_web linked version/digest is not a Go string")
+            pointer, length = struct.unpack("<QQ", virtual_bytes(address, 16))
+            if length > 128:
+                raise AssertionError("sensor_web linked version/digest exceeds expected size")
+            values[name.decode()] = virtual_bytes(pointer, length).decode("ascii")
+    return values
+
+
+def go_build_info(data: bytes, sections: dict[str, tuple]) -> tuple[str, dict, dict, str]:
+    # Go 1.18+ inline format: https://go.dev/src/debug/buildinfo/buildinfo.go
+    section = sections.get(".go.buildinfo")
+    if section is None:
+        raise AssertionError("sensor_web missing generated Go build info")
+    blob = data[section[4]:section[4] + section[5]]
+    if len(blob) < 32 or blob[:14] != b"\xff Go buildinf:" or blob[15] != 2:
+        raise AssertionError("sensor_web unsupported Go build info header")
+
+    def decode_string(offset: int) -> tuple[bytes, int]:
+        length = 0
+        for shift in range(0, 70, 7):
+            if offset >= len(blob):
+                break
+            value = blob[offset]
+            offset += 1
+            length |= (value & 127) << shift
+            if value < 128:
+                if offset + length > len(blob):
+                    break
+                return blob[offset:offset + length], offset + length
+        raise AssertionError("sensor_web truncated Go build info string")
+
+    compiler, offset = decode_string(32)
+    framed, _ = decode_string(offset)
+    if len(framed) < 33 or framed[-17] != 10:
+        raise AssertionError("sensor_web invalid Go module info framing")
+    settings, modules, package_path = {}, {}, ""
+    for line in framed[16:-16].decode("utf-8").splitlines():
+        fields = line.split("\t")
+        if fields[0] == "path" and len(fields) == 2:
+            package_path = fields[1]
+        elif fields[0] == "dep" and len(fields) == 4:
+            if fields[1] in modules:
+                raise AssertionError("sensor_web duplicate module in build info")
+            modules[fields[1]] = {"version": fields[2], "sum": fields[3]}
+        elif fields[0] == "=>":
+            raise AssertionError("sensor_web replacement modules are not permitted")
+        elif fields[0] == "build" and len(fields) == 2:
+            key, separator, value = fields[1].partition("=")
+            if not separator or key in settings:
+                raise AssertionError("sensor_web invalid duplicate build setting")
+            settings[key] = json.loads(value) if value.startswith('"') else value
+    return compiler.decode("ascii"), settings, modules, package_path
+
+
+def verify_sensor_web(path: Path, repo_root: Path) -> dict:
+    lock = web_dependency_lock(repo_root)
+    data, sections = elf_sections(path)
+    if re.search(r"^\s*INTERP\s", readelf(path, "-l"), re.MULTILINE) or needed(path):
+        raise AssertionError("sensor_web must be static: no PT_INTERP or DT_NEEDED")
+    compiler, settings, modules, package_path = go_build_info(data, sections)
+    if compiler != GO_VERSION or package_path != lock["module"]:
+        raise AssertionError("sensor_web Go compiler/main package identity drift")
+    expected_settings = {"GOOS": "linux", "GOARCH": "arm64", "CGO_ENABLED": "0",
+                         "-trimpath": "true", "-buildmode": "exe", "-compiler": "gc"}
+    if any(settings.get(key) != value for key, value in expected_settings.items()):
+        raise AssertionError("sensor_web Go build settings drift")
+    expected_modules = {m["path"]: {"version": m["version"], "sum": m["sum"]}
+                        for m in lock["modules"] if m["runtime"]}
+    if modules != expected_modules:
+        raise AssertionError("sensor_web linked Go module graph/version/sum drift")
+    linked = go_linked_strings(data, sections)
+    version = (repo_root / "VERSION").read_text(encoding="utf-8").strip()
+    digest = web_source_digest(repo_root)
+    if linked.get("main.version") != version:
+        raise AssertionError("sensor_web linked application VERSION drift")
+    if linked.get("main.sourceDigest") != digest:
+        raise AssertionError("sensor_web embedded source digest does not match current Web inputs")
+    return {"compiler": compiler, "version": version, "source_digest": digest,
+            "modules": modules, "settings": settings, "binary_sha256": sha256(path)}
 
 
 def sha256(path: Path) -> str:
@@ -254,9 +452,13 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
         repo_root / "scripts/package_runtime.sh",
         repo_root / "scripts/verify_runtime_package.py",
         repo_root / "scripts/runtime_ffprobe_frame_count.sh",
+        repo_root / "scripts/build_sensor_web.sh",
+        repo_root / "LICENSE",
+        repo_root / "LICENSE_SCOPE.md",
     ]
     paths.extend(sorted((repo_root / "src").glob("*")))
     paths.extend(sorted((repo_root / "lib").glob("lib*.so*")))
+    paths.extend(web_source_paths(repo_root))
     return [path for path in paths if path.is_file() or path.is_symlink()]
 
 
@@ -275,6 +477,8 @@ def expected_inventory_nodes() -> dict[str, str]:
         "bin": "dir",
         "config": "dir",
         "lib": "dir",
+        "licenses": "dir",
+        "licenses/sensor_web": "dir",
         MANIFEST_NAME: "regular",
     }
     for relative in REQUIRED_FILES:
@@ -586,6 +790,9 @@ def verify_package(
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")
+    if not (package_dir / "bin/sensor_web").stat().st_mode & stat.S_IXUSR:
+        raise AssertionError("not executable: bin/sensor_web")
+    verify_sensor_web(package_dir / "bin/sensor_web", repo_root)
 
     for relative, expected_needed in EXPECTED_NEEDED.items():
         executable = package_dir / relative
@@ -636,11 +843,17 @@ def verify_package(
     for relative, symbol in version_getters.items():
         if symbol not in dynamic_symbols(package_dir / relative):
             raise AssertionError(f"missing release version getter {symbol} in {relative}")
+    for relative in EXPECTED_VERSION_DEFINITIONS:
+        if sha256(repo_root / relative) != sha256(package_dir / relative):
+            raise AssertionError(f"runtime producer library copy drift: {relative}")
 
 
     for source_relative, package_relative in EXPECTED_SCRIPT_COPIES.items():
         if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):
             raise AssertionError(f"runtime script copy drift: {package_relative} != {source_relative}")
+    for source_relative, package_relative in WEB_PACKAGE_COPIES.items():
+        if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):
+            raise AssertionError(f"runtime license/lock copy drift: {package_relative}")
 
 
 def main() -> int:
@@ -655,9 +868,18 @@ def main() -> int:
     parser.add_argument("--triplet", default="")
     parser.add_argument("--toolchain-file", type=Path)
     parser.add_argument("--build-dir", type=Path)
+    parser.add_argument("--web-source-digest", action="store_true")
+    parser.add_argument("--sensor-web", type=Path)
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
+    if args.web_source_digest:
+        web_dependency_lock(repo_root)
+        print(web_source_digest(repo_root))
+        return 0
+    if args.sensor_web is not None:
+        print(json.dumps(verify_sensor_web(args.sensor_web.resolve(), repo_root), sort_keys=True))
+        return 0
     if args.check_source:
         capture_source_snapshot(repo_root)
 
@@ -692,6 +914,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (AssertionError, subprocess.CalledProcessError) as error:
+    except (AssertionError, OSError, ValueError, KeyError, struct.error, subprocess.CalledProcessError) as error:
         print(f"Runtime ABI package verification failed: {error}", file=sys.stderr)
         raise SystemExit(1)

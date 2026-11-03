@@ -1,5 +1,6 @@
 #include "cam_demo_config.h"
 #include "sensor_demo_yaml_config.h"
+#include <arpa/inet.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -47,6 +48,10 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --trigger-mode <vin_lpwm> SC132 hardware trigger, default "
             << kDefaultSc132TriggerMode << "\n";
   if (include_imu_options) {
+    std::cout << "  --web/--no-web   Enable/disable HTTP, WebRTC and IMU preview (default on)\n"
+              << "  --rtsp/--no-rtsp Enable/disable independent RTSP output (default off)\n"
+              << "  --web-port <1..65535> HTTP port, default 80\n"
+              << "  --web-listen <IPv4> HTTP and ICE bind address, default 0.0.0.0\n";
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
               << " YAML config is loaded before CLI options; missing file is created with defaults\n";
     std::cout << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
@@ -282,6 +287,14 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.rtsp_base_port > kMaxRtspPort - (kMaxChannels - 1)) {
     throw std::invalid_argument("--rtsp-base-port must keep four channel ports in 1..65535");
   }
+  in_addr web_address{};
+  if (inet_pton(AF_INET, options.web_listen_address.c_str(), &web_address) != 1 ||
+      options.web_port == 0U || options.web_port > 65535U ||
+      options.web_imu_push_hz == 0U || options.web_imu_push_hz > 50U ||
+      options.web_max_video_sessions == 0U || options.web_max_video_sessions > 8U ||
+      options.web_max_imu_clients == 0U || options.web_max_imu_clients > 2U) {
+    throw std::invalid_argument("invalid web address, port or preview limits");
+  }
   if (options.rotate_degrees != 0 && options.rotate_degrees != 90 &&
       options.rotate_degrees != 180 && options.rotate_degrees != 270) {
     throw std::invalid_argument("--rotate must be 0, 90, 180, or 270");
@@ -417,6 +430,14 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
                       "--frame-timeout-ms"));
     } else if (arg == "--trigger-mode") {
       options.trigger_mode = RequireValue(argc, argv, &i, "--trigger-mode");
+    } else if (accept_imu_options && (arg == "--web" || arg == "--no-web")) {
+      options.web_enabled = arg == "--web";
+    } else if (accept_imu_options && (arg == "--rtsp" || arg == "--no-rtsp")) {
+      options.rtsp_enabled = arg == "--rtsp";
+    } else if (accept_imu_options && arg == "--web-port") {
+      options.web_port = ParseUint32(RequireValue(argc, argv, &i, "--web-port"), "--web-port");
+    } else if (accept_imu_options && arg == "--web-listen") {
+      options.web_listen_address = RequireValue(argc, argv, &i, "--web-listen");
     } else if (accept_imu_options && arg == "--sample-rate-hz") {
       options.imu_sample_rate_hz =
           ParseUint32(RequireValue(argc, argv, &i, "--sample-rate-hz"), "--sample-rate-hz");

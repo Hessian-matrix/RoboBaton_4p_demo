@@ -1,252 +1,92 @@
-# X5 SC132 4-Camera, IMU, UART, and CAN Demo
+# RoboBaton 4P non-ROS Demo
 
-中文说明：[README.md](README.md)
+[中文](README.md) · [English documentation](https://4p-doc-en.readthedocs.io/en/latest/index.html)
 
-This is the public V2 non-ROS demo repository for RoboBaton 4P. It provides the X5 runtime package, SC132 four-camera RTSP examples, ICM-42670-P IMU examples, UART1/UART7 examples, a SocketCAN CAN example, public headers, and matching prebuilt runtime libraries.
+X5 examples for SC132 four-camera capture, RTSP, ICM-42670-P IMU, UART, and SocketCAN. Wiring, deployment, parameters, recording, APIs, and troubleshooting are maintained in the public documentation repository [4P_doc](https://github.com/Hessian-matrix/4P_doc).
 
-> **The [4P_doc](https://4p-doc-en.readthedocs.io/en/latest/index.html) documentation is authoritative for end users.** This README keeps only the repository entry point, minimum run path, and support boundaries. Use the documentation site for deployment, persistence, wiring, data/API contracts, and troubleshooting.
+## Repository Contents
 
-Current source uses `icm42670_*` / `icm42670_driver.h`, IMU ABI 3.0, SONAME `libicm42670.so.3`, and real SO `libicm42670.so.3.0.0`; all exports use only `ICM42670_X5_3.0`. Field names and layouts are unchanged, but `host_timestamp_ns` is now the RAW observation at the packet's successful SPI FIFO burst completion, converted to realtime using the bridge measured for that observation. Packets in one burst may share it; FSYNC-deferred publication retains the converted value, without remapping old RAW at publication. It is not IRQ-edge, sample, or exposure time. FIFO order and measured TMST define sample identity and timing; INT1 only wakes acquisition. GPIO notification sequence gaps are diagnostic, not proof of sample loss or independently fatal. Software versions, documentation revisions, and board acceptance are independent; identical version strings do not prove identical manifests.
+- `demo/`: complete X5 runtime package with `sensor_demo`, `cam_demo`, `mosaic_rtsp_demo`, `imu_reader_demo`, `serial_port_demo`, and `can_demo`.
+- `src/`, `include/`, `lib/`, `config/`: example sources, public headers, matching prebuilt libraries, and default configuration.
+- `scripts/`: build, packaging, and runtime verification entry points.
 
-## Contents
+This repository builds user-side examples, not the underlying runtime libraries. Keep sources, headers, libraries, and configuration matched. Deploy the complete runtime package, preserving symbolic links; do not replace individual `.so` files.
 
-```text
-demo/       Complete X5 package for `/root/demo` (includes the `mosaic_rtsp_demo` four-view example)
-include/    Public C headers
-lib/        Prebuilt libraries matching the current demo and headers
-config/     Default `sensor_demo` YAML
-src/        Demo source (includes `mosaic_rtsp_demo.cpp` / `mosaic_nv12.*`)
-scripts/    Build, packaging, and runtime verification entry points (includes `build_mosaic_rtsp_demo.sh`)
-```
+## Getting Started
 
-Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the configuration file.
-
-Each library family in `lib/` and `demo/lib/` has one real `libNAME.so.M.m.p` file and exact same-directory relative links: `libNAME.so.M -> libNAME.so.M.m.p`, `libNAME.so -> libNAME.so.M` (NAME is `icm42670`, `sc132`, or `prrtsp`). Copy complete packages with link-preserving `tar`, `cp -a`, or `rsync -a`, not dereferencing copies. Packaging and verification reject flattened aliases and absolute, wrong, or broken links. `manifest.sha256` checks resolved bytes; v3 `runtime-provenance.json` also binds link text. Regenerate packages with older provenance.
-
-| Library | Real file | SONAME | Symbol nodes |
-|---|---|---|---|
-| ICM42670 | `libicm42670.so.3.0.0` | `libicm42670.so.3` | `ICM42670_X5_3.0` |
-| SC132 | `libsc132.so.3.0.0` | `libsc132.so.3` | `LIBSC132_3.0` |
-| PRRTSP | `libprrtsp.so.2.0.1` | `libprrtsp.so.2` | `LIBPRRTSP_2.0` |
-
-`M.m.p` identifies the real-library revision; `M` is the ABI major, independent of software and PCB versions. Both ICM42670 and SC132 ABI 3.0 require rebuilt consumers and removal of old-major libraries; never add `.so.2 -> .so.3` links or old symbol aliases. IMU sample time remains measured TMST-to-RAW-to-realtime and follows backward wall-clock steps; order by `sample_sequence`, not unique host observations or increasing realtime. This design does not fix the underlying GPIO/kernel cause, change LPWM/the kernel, or guarantee zero loss under arbitrary load. FIFO overflow, bad packets, ambiguous clocks, and invalid epochs still fail; `200µs` admission is unchanged.
-
-
-Camera ABI 3.0 provides a frozen per-frame ISP exposure observation in `sc132_frame_info_t.exposure`, also saved in bag frame metadata, MP4 `exposure.jsonl`, and tee indexes. `status=1` is an estimate, not certified applied exposure or an actual exposure midpoint; `status=0` is unavailable. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html) for fields, join keys, and limits.
-
-## Version and package matching
-
-Use the repository, `demo/`, prebuilt libraries, and public documentation as one release composition. Confirm `VERSION`, the repository tag, and `demo/manifest.sha256`; do not mix source, headers, shared libraries, and runtime packages from different releases.
-
-On the board, query program and runtime-library versions:
+Prepare the device and runtime package using [First Power-On](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Deployment, Upgrade, and Rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html), then run on X5:
 
 ```bash
 cd /root/demo
-./cam_demo --version
-./mosaic_rtsp_demo --version
 ./sensor_demo --version
-./imu_reader_demo --version
-./serial_port_demo --version
-./can_demo --version
-```
-
-Each demo's `--version` prints its product version and the project-owned shared objects linked by that process: `cam_demo` and `mosaic_rtsp_demo` report `libsc132`/`libprrtsp`, `sensor_demo` reports `libicm42670`/`libsc132`/`libprrtsp`, and `imu_reader_demo` reports `libicm42670`. This detects mixed packages.
-
-These version queries do not initialize the camera, IMU, or UART. For compatibility, ABI, and release details, see [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html), [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html), and [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html).
-
-Accepted parameter values are not sustained-throughput promises for every persistence, streaming, DDS, and load combination. The approximately 300-second non-ROS 60fps + 1600Hz FSYNC pressure-console evidence covers association and rates, not clean decoding of saved images or ROS2 60fps. CPU/eMMC-stressed bags may legally stop early when strict drop spacing is exhausted; correct policy does not mean sustained recording passed. LPWM long tails, 60fps RTSP decoder warnings, end-to-end IMU boundary counts, and long-duration validation of the new composition remain incomplete. Built software, a board update, and a formal release are separate states. See [Release and support](https://4p-doc-en.readthedocs.io/en/latest/release-and-support.html) for shared limits.
-
-## Choose a demo
-
-| Program | Purpose |
-|---|---|
-| `sensor_demo` | Four cameras, RTSP, and IMU together; optional ROS1 bag or H.264 MP4 persistence |
-| `cam_demo` | Four cameras and RTSP |
-| `mosaic_rtsp_demo` | Four NV12 views combined into one RTSP stream, default port `558` |
-| `imu_reader_demo` | Standalone IMU reading |
-| `serial_port_demo` | UART1/UART7 example; not for DEBUG_UART |
-| `can_demo` | TCAN4550 SocketCAN classical CAN / CAN FD transmit/receive example, explicit FD/BRS opt-in; preconfigured interface required |
-
-## Default run
-
-The default package is `demo/`. After deployment, run on X5:
-
-```bash
-cd /root/demo
 ./sensor_demo
 ```
 
-Camera/RTSP only:
+Press `Ctrl+C` to stop normally. Keep `cam-service` running and do not run multiple camera applications concurrently. See [non-ROS Demo Usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html) for other examples and complete parameters.
+
+### LAN Video and Six-Axis Preview
+
+In current source, `sensor_demo` enables Web and disables RTSP by default. Open `http://<device-ip>/` from a computer on the same trusted LAN for four native H.264 videos, six-axis IMU values, and trends. Assets are embedded offline; no plugin is needed. The application owns and reaps `sensor_web`; do not launch it separately. This feature has not been released as a new software version or accepted across all browsers, two-computer steady state, or GPUs.
+
+The top-right language button shows the target language: `EN` on the Chinese page and `CH` on the English page. Chinese is the default; the browser remembers the choice when local storage is available. Switching preserves connections, recording options, and accepted bias. The documentation link opens the matching language in a new tab.
+
+All functionality is on **one homepage**, without left-side page navigation or separate hash views. The workspace contains four cards: cameras, attitude, raw six-axis telemetry, and always-present “录制与保存” (Recording and Saving). At widths ≥1440px, all four are columns with aligned top and bottom edges and equal outer heights; cameras are largest and attitude is slightly wider than telemetry. At 1100–1439px, cameras/attitude/telemetry form three columns with recording in a full-width row below. At 768–1099px, cameras and recording each span the full width, while attitude and telemetry sit side by side. Below 768px, all cards stack. Calibration and relative-heading reset remain in the attitude card.
+
+At a browser viewport ≥1440px wide and ≥680px high (CSS pixels), desktop uses a compact title and four health summaries, and all four cards fill the main workspace at equal height. The model and traces grow into the available space; overflow scrolls inside each panel. The video grid stays centered in the camera column. Narrow or short windows below either threshold and mobile devices use normal document scrolling.
+
+Six-axis trends default to the last 2 seconds, with 5- and 10-second choices. X/Y/Z have separate traces, independently autoscaled over the visible window with three labeled vertical ticks. Vertical axes retain absolute raw values in the title's m/s² or rad/s; horizontal axes show seconds relative to browser now. Ranges may differ, so trace heights cannot directly compare amplitudes across axes. No averaging or gravity/bias subtraction is applied; receive gaps over 250ms break the trace. Only preview changes, not sampling, saving, or attitude. Desktop overflow scrolls within the panel; refresh restores 2 seconds.
+
+Expand “运行诊断” (Runtime Diagnostics) inline below the main workspace to inspect source states and actual per-camera decoder, frame-rate (fps), and packet-loss diagnostic text; missing fields still show `unknown`.
+
+The camera card uses a small single-line “相机” (Cameras) heading aligned with resolution/frame rate/codec, without the `CAMERAS / 01` eyebrow. Per-camera header rows and expansion buttons are removed; CAM labels overlay the image's top-left corner and playback state its bottom-right corner. Double-click an image to expand/restore it, or focus it and press Enter or Space; `Esc` only exits single-camera expansion, not recording. Both grid and expansion use source-aspect `contain`, without cropping or stretching; source-image bars remain. Compact desktops maximize image size against the grid's remaining width and height.
+
+The interface labels cameras **CAM1–CAM4**, corresponding to internal `camera_id` 0–3; APIs, recording filenames, and data indices are unchanged. Compact desktops enlarge the four frames at the source aspect ratio and reduce the camera card's horizontal padding; all four outer cards remain equal in height. The camera card has no explanatory footer. Side-by-side browser playback is still not a camera-display synchronization or FSYNC-accuracy acceptance test.
+
+Expanding or collapsing recording details, advanced options, or diagnostics does not navigate, reload the document, recreate WebRTC connections, SSE subscriptions, or the attitude Worker, or reset current options or accepted gyro bias in the browser session. **Refreshing the browser still resets local options to page defaults and clears calibration**; these states are not persisted. Calibration and relative-heading reset are available in the attitude card and affect only the browser attitude preview; the layout adds no HTTP API, authentication, or hardware controls.
 
 ```bash
-./cam_demo
+./sensor_demo --no-web --rtsp   # traditional RTSP only
+./sensor_demo --web --rtsp      # both outputs share one encoder per camera
+./sensor_demo --no-web --no-rtsp # no network output; saving remains independent
 ```
 
-Run `./mosaic_rtsp_demo` for four-view RTSP at `rtsp://<x5-ip>:558/PRR`; `--fps` supports `25/30/40/50/60`. See [Mosaic usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-mosaic) for parameters and limits.
+YAML `web.enabled` and `rtsp.enabled` are independent; `rtsp.bps/codec` remain shared encoding parameters. Web video supports H.264 only; H.265 is not transcoded and IMU telemetry remains available. HTTP uses TCP 80 and WebRTC uses UDP/TCP 8189; allowing HTTP alone is insufficient. Port conflicts degrade Web without taking over other services or stopping acquisition/saving.
 
-IMU only:
+There is no authentication: use only a trusted isolated LAN. HTTP signaling/telemetry lacks transport authenticity; do not expose it directly to the Internet or untrusted networks. Hardware decoding depends on the browser, OS, and driver; missing diagnostics show `unknown`, and a GPU does not imply four hardware-decoded streams. Side-by-side playback does not establish display or camera/IMU synchronization.
 
-```bash
-./imu_reader_demo
-```
+The always-present “录制与保存” (Recording and Saving) card contains one form. Its default view shows format, fixed storage, start/stop/query, device state, device-timed duration, and bytes written. A native “高级选项” (Advanced Options) details section is closed by default and contains frame skipping and minimum drop interval. A second, initially closed “录制详情与使用说明” (Recording Details and Usage) section contains free space, drop counts, final outcome, session ID, actual format/storage, output path, integrity/cleanup, health scope, and use boundaries. Actual errors, uncertain-command messages, and stopping/drain/remux messages stay outside the folds. Invalid hidden advanced values automatically open Advanced Options before browser validation feedback is shown. Existing validation, fresh-state/capability checks, command locks, and device acknowledgments/queries remain. Starting is unavailable when status is missing or stale, a command is pending or its outcome uncertain, or the device does not allow a start.
 
-After stop, `imu_reader_demo` emits one `IMU_RUNTIME_HEALTH final=yes` record with session validity, producer/consumer sample counts, output drops, and final GPIO/FIFO/mapper/invalid-packet counters. Samples and the final record use best-effort nonblocking output; a missing final record is not proof of healthy completion. `--print-rate-hz 0` disables samples, not the final record.
+Select format and fixed storage in the recording card and start; expand Advanced Options to adjust frame skipping or minimum drop interval when needed. Use “停止录制” (Stop Recording) and wait for device drain/remux and its final result; only `published_complete`, `data_complete=true`, and `cleanup_complete=true` establish complete publication. Cameras, native IMU, and preview continue; sessions can be repeated. Closing/disconnecting the browser does not stop recording; reopen the page to query actual state, and never blindly retry after command timeouts. Runtime storage is `recordings` under the real ELF directory (standard package `/root/demo/bin/recordings`); TF is mounted `/mnt/sdcard/recordings`, without arbitrary paths. Bag/MP4 are mutually exclusive; MP4 requires four-camera H.264. Storage, API, and native-data contracts are unchanged. Startup CLI/YAML saving remains and can be stopped from Web; saving does not use browser-decimated/attitude-filtered data, and dynamic MP4 health covers only `callback_window`. With no authentication, anyone reaching the device can start/stop disk writes. See [Saving Data](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
 
-UART1/UART7 example:
+The page provides client-side attitude preview: a browser Web Worker fuses dedicated ≤50Hz six-axis inputs into a quaternion, showing Roll/Pitch/relative Yaw. The device computes neither attitude nor bias; it only applies four cascaded one-pole low-pass stages to every native sample before decimation. Each pole is `min(10Hz, telemetry limit×0.2, source rate×0.2)`, with about 64ms low-frequency group delay at the default 800→50Hz. SSE adds `attitude_accel_mps2` / `attitude_gyro_rps`; raw six-axis value/trace fields, native sampling, saving, and public ABI are unchanged. World +Z is up, and initialization follows current gravity. Both raw and filtered acceleration must pass the gravity band for tilt correction; otherwise only gyros integrate.
 
-```bash
-./serial_port_demo
-```
+On first opening the page or entering a new source session, keep the **actual device completely stationary**. The Worker automatically initializes three-axis gyro bias after about **3 seconds** of continuous low-motion, gravity-consistent telemetry, without requiring a button click. It checks a minimum sample count, continuous timestamps, gravity/angular-rate magnitude, accelerometer/gyro variance, and first-versus-last segment changes in both accelerometer and gyro means. Detected motion, strong vibration, sparse data, or timestamp gaps reset the candidate window; no learning occurs during detected motion.
 
-While waiting for RX, `SIGINT`/`SIGTERM` exits with status `0` and restores the original serial-port settings. Unrelated signal interruptions preserve the RX deadline; genuine device/I/O errors remain failures. External wire transfers and hardware TX backpressure require separate validation.
+Integration and bias means use the inputs filtered before decimation; stationary-quality checks still use raw six-axis values, so filtering cannot conceal strong vibration. Non-increasing time, a sequence reset, or a native-sample gap over 100ms reseeds the filter. Invalid input makes attitude fields unavailable; missing samples are not extrapolated.
 
-### CAN Demo
+Once bias is known, conservative automatic updates require a complete approximately 3-second stationary window whose **mean residual angular-rate vector magnitude is ≤0.002 rad/s (about 0.11°/s)**. Exponential tracking with a **6-second time constant** follows gradual bias changes; accepting an automatic estimate does not re-zero heading or jump attitude. Status text indicates waiting/collection progress for automatic stationary estimation and estimated/tracking states. These states describe the checks, not proof of actual stillness or absolute-heading accuracy.
 
-The BSP must register and configure a CAN network interface first. `can_demo` does not access SPI registers or change device tree, GPIO, bitrate, or interface state. By default it transmits classical CAN standard/extended data frames and receives data/remote frames (`0..8` bytes). `--fd` enables FD transmission or mixed classical/FD reception and requires an FD-enabled interface (MTU `72`); `--brs` enables the data-phase bit-rate switch only with `--mode tx --fd`. FD transmit lengths are `0..8,12,16,20,24,32,48,64` bytes; other lengths are rejected without implicit padding. FD has no remote frames.
+With known bias, automatic tracking also checks raw mean residual angular rates over approximately 1-second sections and the final partial section, so the pre-decimation filter's latency cannot hide a late turn. Excessive noise defers updates instead of freezing heading. Invalid six-axis, attitude-input, or time fields discard partial automatic windows and interrupt manual calibration while retaining accepted bias within the same session.
 
-```bash
-cd /root/demo
-./can_demo --help
-# Receive on can0; Ctrl-C stops. Alternatively set a finite count and idle timeout.
-./can_demo --interface can0 --mode rx --count 10 --timeout-ms 5000
-# Send 10 standard frames; hexadecimal ID, payload without separators.
-./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
-# 29-bit extended frame; sends once by default.
-./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
-# After configuring FD with the peer's arbitration/data bitrates, receive mixed classical/FD frames.
-./can_demo --interface can0 --mode rx --fd --count 10 --timeout-ms 5000
-# 16-byte FD frame; omit --brs to keep the arbitration bitrate during the data phase.
-./can_demo --interface can0 --mode tx --fd --brs --id 123 --data 000102030405060708090A0B0C0D0E0F
-```
+The “静置校准零偏” (Calibrate gyro bias while stationary) button remains available for manual re-estimation: stop the device completely, click, and keep it stationary for about **3 seconds** until the page reports the result. Motion, instability, vibration, or sparse data can reject the attempt without replacing previously accepted bias. Keep still, wait for stable telemetry, and retry. After temperature changes, stationary dwell allows automatic tracking, or you can explicitly recalibrate.
 
-Without options, receive indefinitely. TX defaults to one `123#0102030405060708` frame; `--count 0` runs continuously. Exit codes: `0` completed or interrupted normally, `1` interface/I/O/receive-timeout failure, `2` invalid arguments. `tx_queued` means kernel acceptance only; local SocketCAN loopback is not external-bus proof. See [CAN usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-can) for interface setup, wiring, and two-node checks. Build alone with `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`; use `scripts/package_runtime.sh` to regenerate the full `demo/` package.
+Every quaternion integration step subtracts accepted three-axis bias first. **There is no stationary Yaw freeze, hard angular-rate deadband, or display-only damping.** “重置相对航向” (Reset relative heading) realigns current gravity rather than zeroing tilt, retaining accepted bias within the same application session. After 500ms without valid attitude the model freezes; reconnection, non-increasing timestamps, or gaps over 250ms realign it. Time discontinuities cancel incomplete candidate windows/manual calibration but preserve accepted bias within the same source session. A new source session or page reload clears bias, which is automatically re-estimated after another approximately 3-second stationary dwell.
 
-FD output is `ID##<flags><data>`, where flags bit 0 is BRS and bit 1 is ESI, e.g. `tx 123##1000102030405060708090A0B0C0D0E0F`. Classical output is unchanged; `--extended` selects only a 29-bit ID, not FD. Application FD support is not board-level BSP integrity acceptance. Long FD payloads may be corrupted on affected BSPs; fix the underlying issue and verify the full payload byte-for-byte at a second physical node.
+Six-axis data cannot fully distinguish bias from steady slow rotation: automatic tracking may absorb slow residual rotation below the threshold above. Initial estimation and manual calibration likewise require actual stillness; neither perfect motion detection nor preservation of arbitrarily slow motion is claimed. After calibration, genuine rotation ≥0.005 rad/s (about 0.29°/s) must remain measurable rather than being removed as bias. Without an external heading reference, Yaw is relative only, unobservable, and still drifts; no absolute or drift-free heading is provided. This is not for navigation or a replacement for full sensor calibration. Motion acceleration, vibration, residual bias, and telemetry extraction affect preview accuracy.
 
-For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html).
+To deploy this update, rebuild `sensor_demo`, the `sensor_web` helper containing the embedded page/Worker, and the full runtime package, replace the package as a matched set, and restart the application normally. A browser refresh alone does not update the running embedded code. These instructions do not establish board deployment or acceptance.
 
-### Start sensor_demo at boot
+Deployment here means only an authorized local runtime-package update on the user's device, not a new software-version release or an expansion of the existing acceptance scope.
 
-Boot autostart of `sensor_demo` is managed by the top-level `start_sensor_demo.sh`:
+Source builds additionally require exact Go `1.27.3`, a pre-provisioned module cache, and `SENSOR_WEB_GO_EXECUTABLE`; builds do not download dependencies or switch toolchains automatically. The complete runtime includes ARM64 `bin/sensor_web` and third-party licenses; the device needs no Go installation.
 
-```bash
-cd /root/demo
-./start_sensor_demo.sh            # run sensor_demo in the foreground (same as ./sensor_demo)
-./start_sensor_demo.sh enable     # install boot autostart (requires root)
-./start_sensor_demo.sh disable    # remove boot autostart (requires root)
-./start_sensor_demo.sh status     # show autostart and process state
-```
+## Documentation
 
-Autostart is implemented through `/userdata/startup.sh`, executed by the system `S99auto_startup` after `/userdata` is mounted. The script only appends/removes its own marked block and never overwrites other applications' content. The image-provided Wi-Fi command `wifi_setup` uses separate `/etc/init.d/S99wifi_setup` and `/userdata/wifi/autostart.enabled`, not this shared file. Autostart uses the packaged default configuration; edit `config/sensor_config.yaml` to adjust it, no need to re-run `enable`.
-
-For the exposure-midpoint test, set `test_exposure_midpoint: true` in the `camera` section of `config/sensor_config.yaml`; default `false`. Restart `sensor_demo` to apply it. Explicit YAML overrides `SC132_TEST_EXPOSURE_MIDPOINT`; only an omitted key preserves environment control. Image timestamps, including ROS1 bag image `header.stamp`, use trigger time plus half exposure duration; IMU stamps and bag record time are unchanged. Unavailable exposure stops acquisition. Rebuild both the application and a supporting `libsc132.so`; old prebuilt packages do not gain support automatically. This is not a calibrated actual midpoint. See [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html#test-exposure-midpoint).
-
-## Persistence
-
-`sensor_demo` does not persist data automatically. The default format field is MP4 and the default path is `/root/demo/save_mp4/`. Explicitly select one mode when enabling persistence:
-
-```bash
-# ROS1 bag v2.0
-./sensor_demo --record-bag /data/run.bag
-
-# H.264 MP4 session
-./sensor_demo --record-mp4-dir /data/mp4_session
-```
-
-ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
-
-ROS1 bags default to strict drop spacing: `--record-drop-min-interval 10` (YAML: `save_data.drop_min_interval`). Under overload, only fully encoded camera groups not yet claimed by the writer are eviction candidates. Candidates must be at least 10 arrival ordinals from every previous drop; the recorder uses consecutive frame-set arrival order, not possibly sparse producer `group_id`. If no old candidate qualifies, the incoming group may be dropped only under the same rule. Otherwise recording explicitly stops, drains accepted data, publishes `*.partial.bag`, and exits nonzero instead of relaxing the spacing. This does not cover acquisition-source, hardware, or IMU losses and does not guarantee sustained 30 fps throughput. Intentional alternate saving requires `--record-frame-skip 1 --record-drop-min-interval 2` (YAML: `skip: true`, `drop_min_interval: 2`).
-
-Read back `source_group_order` in `/cameraN/frame_metadata` (`N=0..3`) to compare retained groups across cameras; `group_id` preserves producer identity. `/robobaton/session_config` records `drop_policy_min_group_interval`; `/robobaton/session_status` records `drop_policy_stopped`, `drop_policy_stop_group_order`, `drop_policy_dropped_groups`, `drop_policy_min_observed_interval`, and the stop reason. On a policy stop, the terminal ordinal is the exclusive upper bound of recorded coverage, not another legal drop.
-
-Current MP4 sessions always create `exposure.jsonl` and `fsync.jsonl`; the latter has records only when FSYNC is enabled. Exposure sidecars describe input observations and may outnumber saved encoded frames. Join by camera and microsecond-quantized group-trigger time against CSV, not by row number or source frame ID as an MP4 index. Default `--imu-sample-drop-policy allow-counted` can continue with counted sample losses. Bag complete does not independently prove zero producer drops; MP4 complete additionally checks final producer health and sample counts. A complete dataset requires actual payload readback, not just an exit code or playable MP4s.
-
-## Debug-console autologin switch
-
-On an image with this feature integrated, root uses `uart-autologin status|enable|disable` to manage DEBUG_UART (ttyS0) login. Fresh userdata defaults to passwordless root; disabling restores normal username/password authentication at the next login. The choice persists in `/userdata/uart-autologin/state`, without changing a read-only rootfs, terminating existing sessions, or affecting SSH or UART1/UART7. Anyone with physical debug-console access gains root while enabled; use only in trusted physical environments. Sources are `scripts/env_setup/uart-autologin.sh` and `uart-autologin-login.sh`. Merely copying them into the Demo does not change getty; the image maintainer must integrate the unique console entry.
-
-## Build from source
-
-Cross-compile on an Ubuntu 22.04 x86_64 host and run the generated package on X5. Provide matching `./include`, `./lib`, the `x5_4cam_cross_toolchain_20261009` bundle, and host CMake. See the build page below for download availability and host installation steps.
-
-```bash
-export X5_TOOLCHAIN_ROOT="/path/to/x5_4cam_cross_toolchain_20261009"
-source "$X5_TOOLCHAIN_ROOT/setup_4cam_cross_env.sh"
-cmake -S . -B build_x5 \
-  -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
-cmake --build build_x5 --parallel 4
-```
-
-Maintainers refresh the complete runtime package with:
-
-```bash
-scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
-python3 scripts/verify_runtime_package.py demo
-```
-
-Packaging supports standalone clones and verifies the source commit, file hashes, and complete runtime package. A custom `--build-dir` must stay inside the source repository; use a new build directory after switching bundles.
-
-For toolchain preparation, dependencies, build boundaries, and package verification, see [Open-source demo build](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html).
-
-## Deployment
-
-The board target directory is `/root/demo`. Deployment must follow:
-
-```text
-unique temporary directory
-→ complete manifest verification
-→ old-application exit check
-→ backup of the old directory
-→ atomic promotion
-→ help/smoke verification
-→ restore the latest backup on failure
-```
-
-Do not delete `/root/demo` before uploading a new package, and do not test the camera with `cam-service` stopped. For the complete procedure, see [Deployment, upgrade, and rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html).
-
-## Support-boundary summary
-
-- Camera output is NV12, `1280x1088` by default, with optional VSE hardware full-frame scaled canvases `640x480`, `720x480`, and `1280x720`; RTSP defaults to H.264, with optional H.265, path `/PRR`, and default ports `554..557`.
-- The public camera set is `25/30/40/50/60fps`, default `30fps`; `rotate=180` is supported only at `30fps`.
-- The IMU natively supports `25/50/100/200/400/800/1600Hz`, default `800Hz`, using sensor-timestamp FIFO. Old `500/1000/2000Hz` values are explicitly rejected, not silently resampled.
-- All camera entries use VIN LPWM hardware triggering. Camera and IMU FSYNC share the LPWM IO; INT1 uses `34120000.gpio` offset `8` solely to wake FIFO draining. Camera hardware trigger edges, measured-TMST IMU samples, and burst-completion host observations use `CLOCK_REALTIME`, preserved by CLI/saving; host values may repeat and FSYNC deferral retains them. Bag record time independently reads realtime. Clock steps may move stamps backward; internal timeouts remain monotonic. Cameras require read-only X5 `/dev/mem` access and stop on missing captures/bounded mappings without arrival-time fallbacks. A common domain does not establish exposure synchronization, TF, or calibration.
-- `sensor_demo --fsync --sample-rate-hz 1600` or YAML `imu.fsync_enabled: true` enables trigger-to-sample association (default off, only `800/1600Hz`). Results reach stdout, bag `/robobaton/fsync`, or MP4 `fsync.jsonl`. Accept only `status=1`; missing/ambiguous cases are explicit. This changes neither sample phase nor exposure-sync or zero-loss guarantees.
-- The IMU consumer uses `SCHED_RR/3`, the acquisition owner uses `SCHED_FIFO/20`, and the camera RAW observer uses `SCHED_FIFO/60`, inherits the allowed CPU mask, and sleeps `50µs` per iteration. Realtime scheduling permission is required. IMU no longer uses an independent INT1 clock observer or packet/edge identity matching; notification sequence gaps are diagnostic, not independently fatal. Cross-priority queues use priority-inheritance locks. Applications do not automatically change IRQ/debug or realtime quotas, and this redesign does not fix the underlying GPIO/kernel root cause. Inspect final post-stop `IMU_RUNTIME_HEALTH` and actual payloads; counted drops are not zero loss.
-- UART1/UART7 use `3.3V`, DEBUG_UART uses `1.8V`. The V2 UART7 5-pin connector has an independent PPS input enabled by default, without RX/TX multiplexing. Use official V2 pinout, power limits, and hot-plug boundaries; confirm pin order and voltage, then wire with power off. Hot-plug support is not promised.
-- Camera operation requires the X5 board-side `cam-service`; this is not a general-purpose host package.
-
-For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html), [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html), and [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html).
-
-## Troubleshooting
-
-When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION`, manifest results, the command, exit code, and necessary logs. Do not submit real IPs, credentials, or internal paths. Start with [Troubleshooting](https://4p-doc-en.readthedocs.io/en/latest/troubleshooting.html).
-
-## Public documentation index
-
-- [Product introduction](https://4p-doc-en.readthedocs.io/en/latest/getting-started/Product_Introduction.html)
-- [Product and compatibility](https://4p-doc-en.readthedocs.io/en/latest/getting-started/product-and-compatibility.html)
-- [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html)
-- [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html)
-- [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html)
-- [Deployment, upgrade, and rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html)
-- [Open-source demo build](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html)
-- [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html)
-- [Data contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html)
-- [API reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html)
-- [Hardware and safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html)
+- [Source Builds and Runtime Verification](https://4p-doc-en.readthedocs.io/en/latest/development/open-source-build.html)
+- [Data Persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html)
+- [Data Contracts](https://4p-doc-en.readthedocs.io/en/latest/development/data-contracts.html) · [API Reference](https://4p-doc-en.readthedocs.io/en/latest/development/api-reference.html)
+- [Hardware and Safety](https://4p-doc-en.readthedocs.io/en/latest/getting-started/hardware-and-safety.html)
 - [Troubleshooting](https://4p-doc-en.readthedocs.io/en/latest/troubleshooting.html)
-- [Changelog](https://4p-doc-en.readthedocs.io/en/latest/changelog.html)
+- [Versions, Known Limitations, and Support](https://4p-doc-en.readthedocs.io/en/latest/release-and-support.html)
 
-### Mosaic RTSP Demo
-
-Four-view mosaic RTSP example:
-
-```bash
-./mosaic_rtsp_demo
-./mosaic_rtsp_demo --fps 40
-./mosaic_rtsp_demo --fps 50
-```
-
-Fixed RTSP URL `rtsp://<x5-ip>:558/PRR`; supports `--fps <25|30|40|50|60>`. For detailed parameters, run statistics, and boundaries, see [non-ROS Demo usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-mosaic).
-
-License and third-party component information are defined by this repository's `LICENSE` and release documentation.
+See this repository's [LICENSE](LICENSE) and public release notes for licensing and third-party components.

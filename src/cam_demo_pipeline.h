@@ -14,7 +14,7 @@ extern "C" {
 
 namespace robobaton_demo {
 
-class RtspChannels;
+class MediaChannels;
 
 struct PipelineHooks {
   void (*on_frame_set)(const sc132_frame_set_t& frame_set, void* user) = nullptr;
@@ -29,7 +29,7 @@ struct PipelineHooks {
 // FramePipeline 唯一持有 callback context 和 retained jobs。
 class FramePipeline {
  public:
-  FramePipeline(Options options, RtspChannels* rtsp, PipelineHooks hooks = {});
+  FramePipeline(Options options, MediaChannels* media, PipelineHooks hooks = {});
   ~FramePipeline();
 
   FramePipeline(const FramePipeline&) = delete;
@@ -75,11 +75,11 @@ using Sc132BeforeBlockingStopHook = void (*)(const Sc132ShutdownResult& result,
                                              void* user) noexcept;
 
 Sc132ShutdownResult FinishSc132ShutdownDetailed(
-    FramePipeline* pipeline, RtspChannels* rtsp,
+    FramePipeline* pipeline, MediaChannels* rtsp,
     Sc132BeforeBlockingStopHook before_blocking_stop = nullptr,
     void* before_blocking_stop_user = nullptr) noexcept;
 
 // 关闭顺序：admission-close、request、drain、join、RTSP frame release、blocking stop。
-bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept;
+bool FinishSc132Shutdown(FramePipeline* pipeline, MediaChannels* rtsp) noexcept;
 
 }  // namespace robobaton_demo

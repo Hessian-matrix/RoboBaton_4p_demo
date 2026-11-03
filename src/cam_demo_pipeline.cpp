@@ -17,7 +17,7 @@
 #include <utility>
 #include <unistd.h>
 
-#include "cam_demo_rtsp.h"
+#include "cam_demo_media.h"
 
 namespace robobaton_demo {
 namespace {
@@ -279,10 +279,15 @@ uint32_t RuntimeMonitorIntervalMs(const Options& options) noexcept {
 
 class FramePipeline::Impl {
  public:
-  Impl(Options options, RtspChannels* rtsp, PipelineHooks hooks)
-      : options_(std::move(options)), rtsp_(rtsp), hooks_(hooks) {
-    if (rtsp_ == nullptr) {
-      throw std::invalid_argument("FramePipeline requires RTSP owner");
+  Impl(Options options, MediaChannels* media, PipelineHooks hooks)
+      : options_(std::move(options)), media_(media), hooks_(hooks),
+        encoding_required_(EncodingRequired(options_)),
+        non_rtsp_encoded_consumers_(options_.web_enabled ||
+                                   !options_.record_mp4_directory.empty() ||
+                                   (options_.capture_enabled &&
+                                    !options_.capture_directory.empty())) {
+    if (media_ == nullptr) {
+      throw std::invalid_argument("FramePipeline requires media owner");
     }
     group_barrier_.Configure(options_.camera_mask);
   }
@@ -586,9 +591,18 @@ class FramePipeline::Impl {
  private:
 
 
+  bool HasNonRtspEncodedConsumers() const noexcept {
+    return non_rtsp_encoded_consumers_;
+  }
+
   bool ShouldDegradeRtspPreview(int32_t result) const noexcept {
-    if (options_.rtsp_preview_failure_policy != RtspPreviewFailurePolicy::kDegradePreview) {
+    if (!options_.rtsp_enabled ||
+        options_.rtsp_preview_failure_policy != RtspPreviewFailurePolicy::kDegradePreview) {
       return false;
+    }
+    // 其他 AU 消费者仍依赖 codec；只有明确的 RTSP 错误可隔离该 sink。
+    if (HasNonRtspEncodedConsumers()) {
+      return result == PRRTSP_E_RTSP;
     }
     return result == PRRTSP_E_TIMEOUT || result == PRRTSP_E_RTSP ||
            result == PRRTSP_E_CODEC || result == PRRTSP_E_STATE ||
@@ -798,9 +812,9 @@ class FramePipeline::Impl {
               "queue=%zu/%zu queue_full_rejects=%llu pipeline_delay_ms=%llu "
               "camera_ts_ns=%llu camera_ts_domain=%s rtsp_ts_ns=%llu "
               "rtsp_ts_domain=%s send_avg_ms=%.2f send_max_ms=%.2f "
-              "rtsp_endpoint=ch%d rtsp_port=%d rtsp_degraded=%d "
+              "rtsp_endpoint=ch%d rtsp_port=%d rtsp_enabled=%d rtsp_degraded=%d "
               "rtsp_preview_dropped=%llu rtsp_last_error=%d "
-              "monotonic_ns=%llu sent_total=%llu\n",
+              "encoding_generation=%llu monotonic_ns=%llu sent_total=%llu\n",
               camera_id, fps,
               static_cast<unsigned long long>(diagnostic.last_sequence),
               static_cast<unsigned long long>(diagnostic.last_group_id),
@@ -813,8 +827,12 @@ class FramePipeline::Impl {
               static_cast<unsigned long long>(diagnostic.last_rtsp_timestamp_ns),
               TimestampDomainName(diagnostic.last_rtsp_timestamp_domain),
               send_average_ms, send_max_ms, camera_id + 1,
-              RtspPortForChannel(options_, camera_id), preview_degraded ? 1 : 0,
+              options_.rtsp_enabled && !preview_degraded
+                  ? RtspPortForChannel(options_, camera_id) : 0,
+              options_.rtsp_enabled && !preview_degraded ? 1 : 0,
+              preview_degraded ? 1 : 0,
               static_cast<unsigned long long>(preview_dropped), preview_last_error,
+              static_cast<unsigned long long>(media_->StreamGeneration(camera_id)),
               static_cast<unsigned long long>(diagnostic_now_ns),
               static_cast<unsigned long long>(total_sent))) {
         return false;
@@ -836,7 +854,12 @@ class FramePipeline::Impl {
         if (!group_barrier_.Wait(camera_id, frame.group_id)) {
           break;
         }
-        if (rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire)) {
+        if (!encoding_required_) {
+          group_barrier_.MarkProcessed(camera_id, frame.group_id);
+          continue;
+        }
+        if (rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire) &&
+            !HasNonRtspEncodedConsumers()) {
           RecordRtspPreviewDrop(camera_id, RtspPreviewLastError(camera_id));
           group_barrier_.MarkProcessed(camera_id, frame.group_id);
           continue;
@@ -850,17 +873,29 @@ class FramePipeline::Impl {
                                           frame.rtsp_timestamp_domain,
                                           frame.enqueue_timestamp_ns};
         const uint64_t send_start_ns = PipelineNowNs();
-        const int32_t send_result = rtsp_->Send(camera_id, frame);
+        const int32_t send_result = media_->Send(camera_id, frame);
         const uint64_t send_complete_ns = PipelineNowNs();
         if (send_result != PRRTSP_OK) {
-          if (ShouldDegradeRtspPreview(send_result)) {
+          if (!rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire) &&
+              ShouldDegradeRtspPreview(send_result)) {
             RecordRtspPreviewDrop(camera_id, send_result);
+            if (HasNonRtspEncodedConsumers()) {
+              // send 已消费源租约且已回调本帧 AU；关闭成功后才允许新 encoder 接管。
+              const int32_t reopen_result = media_->DisableRtsp(camera_id, options_);
+              if (reopen_result != PRRTSP_OK) {
+                RequestFailure(reopen_result);
+                break;
+              }
+            }
             group_barrier_.MarkProcessed(camera_id, sample.group_id);
             continue;
           }
           // 保留原始 send status，失败帧 release 且不计成功。
           RequestFailure(send_result);
           break;
+        }
+        if (rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire)) {
+          RecordRtspPreviewDrop(camera_id, RtspPreviewLastError(camera_id));
         }
         group_barrier_.MarkProcessed(camera_id, sample.group_id);
         RecordSuccessfulSend(camera_id, sample, send_complete_ns - send_start_ns,
@@ -911,8 +946,10 @@ class FramePipeline::Impl {
   }
 
   Options options_;
-  RtspChannels* rtsp_;
+  MediaChannels* media_;
   PipelineHooks hooks_;
+  const bool encoding_required_;
+  const bool non_rtsp_encoded_consumers_;
   std::array<FrameQueue, kMaxChannels> queues_;
   GroupSendBarrier group_barrier_;
   std::array<std::thread, kMaxChannels> workers_;
@@ -939,8 +976,8 @@ class FramePipeline::Impl {
   std::condition_variable diagnostics_condition_;
 };
 
-FramePipeline::FramePipeline(Options options, RtspChannels* rtsp, PipelineHooks hooks)
-    : impl_(new Impl(std::move(options), rtsp, hooks)) {}
+FramePipeline::FramePipeline(Options options, MediaChannels* media, PipelineHooks hooks)
+    : impl_(new Impl(std::move(options), media, hooks)) {}
 
 FramePipeline::~FramePipeline() {
   impl_->BeginShutdown(false);
@@ -963,6 +1000,7 @@ void FramePipeline::BeginShutdown(bool request_sc_stop) noexcept {
 }
 bool FramePipeline::Join() noexcept { return impl_->Join(); }
 int32_t FramePipeline::FirstError() const noexcept { return impl_->FirstError(); }
+bool FramePipeline::HasFatalError() const { return impl_->FirstError() != 0; }
 uint64_t FramePipeline::TotalSentFrames(int camera_id) const noexcept {
   return impl_->TotalSentFrames(camera_id);
 }
@@ -996,7 +1034,7 @@ void FramePipeline::FrameSetCallback(const sc132_frame_set_t* frame_set, void* u
 }
 
 Sc132ShutdownResult FinishSc132ShutdownDetailed(
-    FramePipeline* pipeline, RtspChannels* rtsp,
+    FramePipeline* pipeline, MediaChannels* rtsp,
     Sc132BeforeBlockingStopHook before_blocking_stop,
     void* before_blocking_stop_user) noexcept {
   Sc132ShutdownResult result;
@@ -1028,7 +1066,7 @@ Sc132ShutdownResult FinishSc132ShutdownDetailed(
   return result;
 }
 
-bool FinishSc132Shutdown(FramePipeline* pipeline, RtspChannels* rtsp) noexcept {
+bool FinishSc132Shutdown(FramePipeline* pipeline, MediaChannels* rtsp) noexcept {
   const Sc132ShutdownResult result = FinishSc132ShutdownDetailed(pipeline, rtsp);
   return result.consumer_join_ok && result.rtsp_status_ok && result.rtsp_close_ok &&
          result.sc132_cleanup_reached && result.ownership_quiescent;

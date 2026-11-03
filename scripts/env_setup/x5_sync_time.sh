@@ -48,6 +48,8 @@ Usage:
 Purpose:
   Synchronize the X5 system clock from NTP without claiming daemon lock
   unless ntpq reports a selected (*) peer.
+  This is a manual recovery command, not a boot service. For persistent
+  NTP-owner setup, use configure_x5_ntp_boot.py from this directory.
 
 Options:
   --server <host-or-ip>       Primary one-shot NTP source.

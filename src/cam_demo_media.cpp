@@ -1,4 +1,4 @@
-#include "cam_demo_rtsp.h"
+#include "cam_demo_media.h"
 
 #include <cstdio>
 #include <cstring>
@@ -19,15 +19,21 @@ void ReleaseSc132Frame(void* user) {
 
 }  // namespace
 
-RtspChannels::RtspChannels() {
+bool EncodingRequired(const Options& options) noexcept {
+  return options.rtsp_enabled || options.web_enabled ||
+         !options.record_mp4_directory.empty() ||
+         (options.capture_enabled && !options.capture_directory.empty());
+}
+
+MediaChannels::MediaChannels() {
   for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
     encoded_contexts_[camera_id].owner = this;
     encoded_contexts_[camera_id].camera_id = camera_id;
   }
 }
 
-bool RtspChannels::SetEncodedFrameObserver(EncodedFrameObserver observer,
-                                           void* user) noexcept {
+bool MediaChannels::SetEncodedFrameObserver(EncodedFrameObserver observer,
+                                            void* user) noexcept {
   if ((observer == nullptr && user != nullptr) || OpenHandleCount() != 0U) {
     return false;
   }
@@ -36,8 +42,8 @@ bool RtspChannels::SetEncodedFrameObserver(EncodedFrameObserver observer,
   return true;
 }
 
-bool RtspChannels::SetCaptureEncodedFrameObserver(EncodedFrameObserver observer,
-                                                  void* user) noexcept {
+bool MediaChannels::SetCaptureEncodedFrameObserver(EncodedFrameObserver observer,
+                                                   void* user) noexcept {
   if ((observer == nullptr && user != nullptr) || OpenHandleCount() != 0U) {
     return false;
   }
@@ -46,14 +52,24 @@ bool RtspChannels::SetCaptureEncodedFrameObserver(EncodedFrameObserver observer,
   return true;
 }
 
-void RtspChannels::EncodedFrameBridge(const prrtsp_encoded_frame_v2* frame,
-                                      void* user) noexcept {
+bool MediaChannels::SetWebEncodedFrameObserver(EncodedFrameObserver observer,
+                                               void* user) noexcept {
+  if ((observer == nullptr && user != nullptr) || OpenHandleCount() != 0U) {
+    return false;
+  }
+  web_encoded_observer_ = observer;
+  web_encoded_observer_user_ = user;
+  return true;
+}
+
+void MediaChannels::EncodedFrameBridge(const prrtsp_encoded_frame_v2* frame,
+                                       void* user) noexcept {
   try {
     auto* context = static_cast<EncodedObserverContext*>(user);
     if (frame == nullptr || context == nullptr || context->owner == nullptr) {
       return;
     }
-    // 两个 slot 独立分发：主 observer（MP4）与 tee 采集 observer 互不干扰。
+    // MP4、tee 与 Web 各有独立 slot，Web 不替换保存消费者。
     if (context->owner->encoded_observer_ != nullptr) {
       context->owner->encoded_observer_(context->camera_id, *frame,
                                         context->owner->encoded_observer_user_);
@@ -63,12 +79,16 @@ void RtspChannels::EncodedFrameBridge(const prrtsp_encoded_frame_v2* frame,
           context->camera_id, *frame,
           context->owner->capture_encoded_observer_user_);
     }
+    if (context->owner->web_encoded_observer_ != nullptr) {
+      context->owner->web_encoded_observer_(
+          context->camera_id, *frame, context->owner->web_encoded_observer_user_);
+    }
   } catch (...) {
     // 编码observer是非阻塞旁路；异常不得跨越PRRTSP C callback边界。
   }
 }
 
-bool RtspChannels::ValidPath(const std::string& path) noexcept {
+bool MediaChannels::ValidPath(const std::string& path) noexcept {
   if (path.size() < 2U || path.size() > PRRTSP_PATH_CONTENT_MAX_BYTES_V2_0 ||
       path.front() != '/') {
     return false;
@@ -83,12 +103,13 @@ bool RtspChannels::ValidPath(const std::string& path) noexcept {
   return true;
 }
 
-int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noexcept {
+int32_t MediaChannels::Open(int camera_id, int port, const Options& options) noexcept {
   if (!ValidCameraId(camera_id) || handles_[camera_id] != nullptr ||
-      port <= 0 || options.fps <= 0 || options.bps <= 0 ||
+      options.fps <= 0 || options.bps <= 0 ||
       static_cast<unsigned long long>(options.bps) >
           static_cast<unsigned long long>(std::numeric_limits<uint32_t>::max()) ||
-      !ValidPath(options.url)) {
+      (options.rtsp_enabled && !rtsp_disabled_[camera_id] &&
+       (port <= 0 || !ValidPath(options.url)))) {
     return PRRTSP_E_INVALID_ARGUMENT;
   }
 
@@ -112,26 +133,33 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
       return PRRTSP_E_UNSUPPORTED;
   }
 
+  const bool rtsp_enabled = options.rtsp_enabled && !rtsp_disabled_[camera_id];
+  const bool callback_required = !rtsp_enabled || encoded_observer_ != nullptr ||
+                                capture_encoded_observer_ != nullptr ||
+                                web_encoded_observer_ != nullptr;
   prrtsp_stream_config_v2 config{};
-  config.struct_size = (encoded_observer_ == nullptr &&
-                        capture_encoded_observer_ == nullptr)
-                           ? PRRTSP_STREAM_CONFIG_V2_1_SIZE
-                           : PRRTSP_STREAM_CONFIG_V2_2_SIZE;
+  config.struct_size = callback_required ? PRRTSP_STREAM_CONFIG_V2_2_SIZE
+                                         : PRRTSP_STREAM_CONFIG_V2_1_SIZE;
   config.flags = PRRTSP_STREAM_FLAG_EXTERNAL_NV12;
+  if (!rtsp_enabled) {
+    config.flags |= PRRTSP_STREAM_FLAG_DISABLE_RTSP;
+  }
   config.width = static_cast<uint32_t>(output_width);
   config.height = static_cast<uint32_t>(output_height);
   config.fps_num = static_cast<uint32_t>(options.fps);
   config.fps_den = 1U;
   config.bitrate_kbps = static_cast<uint32_t>(options.bps);
   config.rotation_clockwise = 0U;
-  config.port = static_cast<uint32_t>(port);
+  config.port = rtsp_enabled ? static_cast<uint32_t>(port) : 0U;
   config.operation_timeout_ms = 1000U;
   config.codec = codec;
-  if (encoded_observer_ != nullptr || capture_encoded_observer_ != nullptr) {
+  if (callback_required) {
     config.encoded_frame_callback = EncodedFrameBridge;
     config.encoded_frame_user = &encoded_contexts_[camera_id];
   }
-  std::memcpy(config.path, options.url.data(), options.url.size());
+  if (rtsp_enabled) {
+    std::memcpy(config.path, options.url.data(), options.url.size());
+  }
 
   prrtsp_stream_t* opened = nullptr;
   const int32_t result = prrtsp_stream_open(&config, &opened);
@@ -141,11 +169,31 @@ int32_t RtspChannels::Open(int camera_id, int port, const Options& options) noex
     widths_[camera_id] = config.width;
     heights_[camera_id] = config.height;
   }
+  if (result == PRRTSP_OK && stream_generations_[camera_id].load() !=
+                                std::numeric_limits<uint64_t>::max()) {
+    stream_generations_[camera_id].fetch_add(1U, std::memory_order_release);
+  }
   return result;
 }
 
-bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
-                                   prrtsp_nv12_frame_v2* descriptor) const noexcept {
+int32_t MediaChannels::DisableRtsp(int camera_id, const Options& options) noexcept {
+  if (!ValidCameraId(camera_id) || handles_[camera_id] == nullptr) {
+    return PRRTSP_E_INVALID_ARGUMENT;
+  }
+  for (uint32_t attempt = 0U; attempt < kCloseAttemptLimit &&
+                              handles_[camera_id] != nullptr; ++attempt) {
+    (void)prrtsp_stream_close(&handles_[camera_id]);
+  }
+  if (handles_[camera_id] != nullptr) {
+    return PRRTSP_E_CLEANUP_REQUIRED;
+  }
+  rtsp_disabled_[camera_id] = true;
+  close_calls_[camera_id] = 0U;
+  return Open(camera_id, 0, options);
+}
+
+bool MediaChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
+                                    prrtsp_nv12_frame_v2* descriptor) const noexcept {
   if (!ValidCameraId(camera_id) || descriptor == nullptr ||
       handles_[camera_id] == nullptr || frame.frame == nullptr ||
       frame.y_data == nullptr || frame.uv_data == nullptr || frame.y_phys == 0U ||
@@ -212,7 +260,7 @@ bool RtspChannels::BuildDescriptor(int camera_id, const QueuedFrame& frame,
   return true;
 }
 
-int32_t RtspChannels::Send(int camera_id, QueuedFrame& frame) noexcept {
+int32_t MediaChannels::Send(int camera_id, QueuedFrame& frame) noexcept {
   prrtsp_nv12_frame_v2 descriptor{};
   if (!BuildDescriptor(camera_id, frame, &descriptor)) {
     return PRRTSP_E_INVALID_ARGUMENT;
@@ -222,7 +270,7 @@ int32_t RtspChannels::Send(int camera_id, QueuedFrame& frame) noexcept {
                                      ReleaseSc132Frame, owner);
 }
 
-bool RtspChannels::CaptureStatuses() noexcept {
+bool MediaChannels::CaptureStatuses() noexcept {
   bool success = true;
   for (int camera_id = 0; camera_id < kMaxChannels; ++camera_id) {
     if (handles_[camera_id] == nullptr) {
@@ -240,7 +288,7 @@ bool RtspChannels::CaptureStatuses() noexcept {
   return success;
 }
 
-bool RtspChannels::CloseReverse() noexcept {
+bool MediaChannels::CloseReverse() noexcept {
   bool success = true;
   for (int camera_id = kMaxChannels - 1; camera_id >= 0; --camera_id) {
     while (handles_[camera_id] != nullptr &&
@@ -256,7 +304,7 @@ bool RtspChannels::CloseReverse() noexcept {
   return success;
 }
 
-size_t RtspChannels::OpenHandleCount() const noexcept {
+size_t MediaChannels::OpenHandleCount() const noexcept {
   size_t count = 0U;
   for (const prrtsp_stream_t* handle : handles_) {
     if (handle != nullptr) {
@@ -266,12 +314,18 @@ size_t RtspChannels::OpenHandleCount() const noexcept {
   return count;
 }
 
-const prrtsp_stream_status_v2& RtspChannels::Status(int camera_id) const noexcept {
+const prrtsp_stream_status_v2& MediaChannels::Status(int camera_id) const noexcept {
   return statuses_[camera_id];
 }
 
-int32_t RtspChannels::LastStatusResult(int camera_id) const noexcept {
+int32_t MediaChannels::LastStatusResult(int camera_id) const noexcept {
   return status_results_[camera_id];
+}
+
+uint64_t MediaChannels::StreamGeneration(int camera_id) const noexcept {
+  return ValidCameraId(camera_id)
+             ? stream_generations_[camera_id].load(std::memory_order_acquire)
+             : 0U;
 }
 
 }  // namespace robobaton_demo

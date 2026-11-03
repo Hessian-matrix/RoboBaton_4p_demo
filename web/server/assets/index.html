@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RoboBaton 4P · 设备总览</title><link rel="stylesheet" href="/style.css"><script src="/i18n.js" defer></script><script src="/dashboard.js" defer></script><script src="/attitude.js" defer></script><script src="/recording.js" defer></script><script src="/app.js" defer></script></head>
+<body>
+<a class="skip-link" href="#main-content">跳至内容</a>
+<header class="app-header"><div class="brand"><span class="brand-mark" aria-hidden="true">4P</span><div><p class="eyebrow">ROBOBATON</p><p class="brand-name">传感器工作台</p></div></div><div class="header-tools"><div class="health"><span id="connection" role="status">连接设备中</span><span id="composition">—</span></div><div class="header-actions"><button id="language-toggle" type="button" lang="en" aria-label="切换到英文">EN</button><a id="online-docs" class="header-link" href="https://4p-docs.readthedocs.io/zh-cn/latest/index.html" hreflang="zh-CN" target="_blank" rel="noopener noreferrer" aria-label="在线文档（新标签页打开）">在线文档 <span aria-hidden="true">↗</span></a></div></div></header>
+<main id="main-content" tabindex="-1">
+<div class="workspace-toolbar">
+<div class="page-heading"><div><p class="eyebrow">LIVE WORKSPACE</p><h1>设备总览</h1><p class="page-description">四路影像 · 惯性遥测 · 设备录制</p></div></div>
+<section class="summary-strip" aria-label="实时设备摘要">
+  <div><span class="metric-label">相机连接</span><strong id="summary-cameras">等待连接</strong><small>独立 WebRTC 会话</small></div>
+  <div><span class="metric-label">源采集</span><strong id="summary-capture">等待状态</strong><small>不代表显示同步</small></div>
+  <div><span class="metric-label">IMU 数据</span><strong id="summary-imu">等待样本</strong><small id="summary-rate">原生 / 预览</small></div>
+  <div><span class="metric-label">传感器温度</span><strong id="summary-temperature">—</strong><small>温变后建议重校准</small></div>
+</section>
+</div>
+<p id="fatal" class="error-panel" role="alert" hidden></p>
+<div class="workspace-grid">
+<section id="video-panel" class="panel" aria-labelledby="video-heading"><div class="section-heading"><h2 id="video-heading">相机</h2><span id="video-config">—</span></div><div id="cameras" class="camera-grid"></div></section>
+<section id="attitude-panel" aria-labelledby="attitude-heading" class="panel attitude-panel">
+  <div class="section-heading"><div><p class="eyebrow">ATTITUDE / 02</p><h2 id="attitude-heading">惯性姿态</h2></div><span id="attitude-state" role="status">等待有效重力样本</span></div>
+  <div class="attitude-layout">
+    <div class="model-stage"><svg id="attitude-model" class="unavailable" viewBox="0 0 480 320" role="img" aria-labelledby="attitude-model-title attitude-model-desc">
+      <title id="attitude-model-title">IMU 设备坐标系姿态模型</title><desc id="attitude-model-desc">简化板体随六轴融合姿态旋转，标记设备正 X、Y、Z 轴。角度数值见下方。</desc>
+      <path class="model-grid" d="M40 240H440 M80 260H400 M120 280H360 M80 260L240 180L400 260 M40 240L240 140L440 240"/>
+      <g id="attitude-faces"></g><g id="attitude-axes"></g>
+    </svg><span class="model-caption">设备坐标系 · 世界 +Z 向上</span></div>
+    <div class="attitude-readout"><dl class="attitude-values"><div><dt>横滚 Roll · X</dt><dd id="attitude-roll">—</dd></div><div><dt>俯仰 Pitch · Y</dt><dd id="attitude-pitch">—</dd></div><div><dt>相对 Yaw · Z</dt><dd id="attitude-yaw">—</dd></div></dl><div class="attitude-actions"><button id="attitude-calibrate" class="primary" disabled>静置校准零偏</button><button id="attitude-reset" disabled>重置相对航向</button></div><p id="attitude-calibration" class="calibration-status" role="status">等待实时样本</p></div>
+  </div>
+  <p class="note">静置约 3 秒自动估计零偏。</p>
+  <details class="attitude-help"><summary>姿态与校准边界</summary><p>静置约 3 秒后自动估计零偏，之后仅在低运动窗口保守跟踪；也可手动重校。极慢匀速转动可能被误认为零偏。重置保留零偏，刷新后重新估计。</p><p>六轴融合由浏览器 Worker 计算。无磁力计，Yaw 无绝对北向且仍会漂移；重力辅助横滚/俯仰。自动静置判断不是运动真值，初始匀速转动或校准后低于约 0.11°/秒的转动仍可能被当作零偏。没有航向锁定或角速度死区。重置按当前重力对齐，不将倾斜归零。</p><p>模型仅为坐标示意，不是产品外形。运动加速度、振动与 ≤50 Hz 抽取影响精度，不用于导航或标定。断流冻结，重连或时间戳跳变后重新对齐；新采集会话清除零偏并等待重新静置。</p></details>
+</section>
+<section id="raw-imu-panel" aria-labelledby="imu-heading" class="panel imu-panel" tabindex="0">
+  <div class="section-heading"><div><p class="eyebrow">TELEMETRY / 03</p><h2 id="imu-heading">六轴原始遥测</h2></div><span id="imu-state" role="status">等待数据</span></div>
+  <div class="imu-grid">
+    <div><h3>加速度 <small>m/s²</small></h3><dl id="accel-values"></dl><canvas id="accel-chart" role="img" aria-label="最近一秒加速度 X、Y、Z 共用坐标实时趋势，纵轴自动缩放"></canvas></div>
+    <div><h3>角速度 <small>rad/s</small></h3><dl id="gyro-values"></dl><canvas id="gyro-chart" role="img" aria-label="最近一秒角速度 X、Y、Z 共用坐标实时趋势，纵轴自动缩放"></canvas></div>
+  </div>
+  <p id="imu-details" class="details">等待最新样本</p>
+</section>
+<section id="recording-panel" class="panel" aria-labelledby="recording-heading">
+  <div class="section-heading"><div><p class="eyebrow">RECORDING / 04</p><h2 id="recording-heading">录制与保存</h2></div></div>
+  <p id="recording-state" role="status">等待实时状态 · 控制已禁用</p>
+  <form id="recording-form" aria-describedby="recording-message" novalidate>
+    <fieldset><legend>启动选项</legend><div class="recording-fields">
+        <label for="recording-format">保存格式<select id="recording-format" disabled><option value="rosbag">ROS bag</option><option id="recording-mp4-option" value="mp4" disabled>MP4 · 四路 H.264</option></select></label>
+        <label for="recording-storage">固定保存位置<select id="recording-storage" disabled><option value="runtime">运行目录 / eMMC</option><option value="tf">TF 卡</option></select></label>
+    </div><details id="recording-advanced"><summary>高级选项</summary><div class="recording-fields"><label for="recording-skip">图像隔帧<select id="recording-skip" disabled><option value="0">0 · 保存每组</option><option value="1">1 · 交替保存（仅 bag）</option></select></label><label for="recording-interval">最小丢组间隔<input id="recording-interval" type="number" min="2" max="4294967295" step="1" value="10" required disabled aria-describedby="recording-rules"></label></div><p id="recording-rules" class="note">间隔为 2–4294967295 的整数；隔帧为 1 时固定为 2。仅用于 ROS bag。</p><p id="recording-mp4-help" class="note">MP4 使用四路 H.264 视频；不支持隔帧保存。</p></details></fieldset>
+      <div class="recording-actions"><button id="recording-start" type="submit" class="primary" disabled>开始录制</button><button id="recording-stop" type="button" disabled>停止录制</button><button id="recording-refresh" type="button">查询状态</button></div>
+    <p class="recording-error" id="recording-error" role="alert" hidden></p>
+    <p id="recording-message" class="recording-message" role="status" aria-live="polite">等待设备实时录制状态。</p>
+  </form>
+  <div class="recording-truth"><dl class="recording-metrics"><div><dt>时长（设备计时）</dt><dd id="recording-duration">—</dd></div><div><dt>已写入</dt><dd id="recording-bytes">—</dd></div></dl></div>
+  <details class="recording-more"><summary>录制详情与使用说明</summary><dl class="recording-details"><div><dt>可用空间</dt><dd id="recording-free">—</dd></div><div><dt id="recording-drop-label">已丢弃组数</dt><dd id="recording-drops">—</dd></div><div><dt>最终结果</dt><dd id="recording-outcome">—</dd></div><div><dt>会话 ID</dt><dd id="recording-session">—</dd></div><div><dt>格式 / 存储</dt><dd id="recording-destination">—</dd></div><div><dt>输出路径（设备端）</dt><dd id="recording-path">—</dd></div><div><dt>完整性 / 清理</dt><dd id="recording-completion">—</dd></div><div><dt>健康状态范围</dt><dd id="recording-scope">—</dd></div></dl><p class="recording-warning">仅限可信局域网。此页面没有身份认证，能访问设备的人可启动或停止录制。请勿暴露到公网。</p><p>路径由设备分配：运行目录为可执行文件目录下的 recordings，TF 卡为 /mnt/sdcard/recordings，不接受自定义路径。</p><p>同一时刻只能运行一个 bag 或 MP4 会话。录制保存原生 IMU，预览抽取、滤波和浏览器姿态校准不改变保存数据。MP4 保存四路 H.264 视频，不是屏幕录制。</p><p>关闭网页或断网不会停止设备录制。停止后仍需排空和封装；只有设备返回最终结果才可判断完成。命令超时后请查询状态，不要盲目重复发送，也不要在停止过程中断电。</p></details>
+</section>
+</div>
+<details id="diagnostics-panel" class="panel diagnostics-panel"><summary>运行诊断 <span>数据链路 · 浏览器接收与解码</span></summary><div class="diagnostics-content"><div class="source-health"><h3>设备数据链路</h3><p id="source-status" role="status">等待设备状态</p></div><h3>各路浏览器接收</h3><div id="decoder-status" class="decoder-grid"></div><div class="diagnostic-notes"><h3>如何理解这些数据</h3><p>解码实现以浏览器返回字段为准；缺失显示 unknown。有 GPU 不保证四路硬解，请结合浏览器诊断页与操作系统 Video Decode 引擎确认。通知缺口不等于样本丢失。</p><p>页面不请求摄像头或麦克风权限。仅限可信局域网：页面无身份认证，局域网访问者可预览并控制设备录制；HTTP 不提供传输真实性保护，切勿暴露到公网。</p></div></div></details>
+</main>
+<footer><span>RoboBaton 4P · 视频 / IMU / 保存彼此独立</span><span>可信局域网 · 离线资源</span></footer>
+</body></html>

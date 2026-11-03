@@ -42,6 +42,9 @@ extern "C" {
 /* 外部 NV12 标志仅适用于 struct_size >= PRRTSP_STREAM_CONFIG_V2_1_SIZE。 */
 #define PRRTSP_STREAM_FLAG_EXTERNAL_NV12 ((uint32_t)1)
 
+/* 完整 v2.2 配置且 encoded callback 非空时可关闭所有 RTSP 资源与发送路径。 */
+#define PRRTSP_STREAM_FLAG_DISABLE_RTSP ((uint32_t)2)
+
 #define PRRTSP_CODEC_DEFAULT ((uint32_t)0)
 #define PRRTSP_CODEC_H264 ((uint32_t)1)
 #define PRRTSP_CODEC_H265 ((uint32_t)2)

@@ -8,6 +8,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/demo}"
 PACKAGE_LIB_DIR="${PROJECT_DIR}/lib"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake}"
 STRIP_TOOL="${STRIP_TOOL:-}"
+SENSOR_WEB_GO_EXECUTABLE="${SENSOR_WEB_GO_EXECUTABLE:-${GO:-}}"
 WORK_ROOT=""
 BACKUP_ACTIVE=0
 
@@ -17,9 +18,9 @@ Usage:
   scripts/package_runtime.sh [options]
 
 Behavior:
-  Build the six non-ROS consumer demos from this release repository, using the
-  prebuilt runtime libraries already present in ./lib, then publish a verified
-  runtime package to ./demo.
+  Build the six non-ROS consumer demos and the embedded sensor_web service from
+  this release repository, using prebuilt runtime libraries already in ./lib,
+  then publish a verified runtime package to ./demo.
 
   This script does not build ICM42670, SC132, or PRRTSP producer sources.
   Producer libraries and the public ICM header must already be present in this
@@ -30,6 +31,7 @@ Options:
   --output-dir <path>      Runtime package output directory, default ./demo
   --toolchain-file <path>  CMake toolchain for the consumer demos
   --strip-tool <path>      Optional strip override for staged executables
+  --go <path>              Exact Go 1.27.3 compiler (or SENSOR_WEB_GO_EXECUTABLE/GO)
   -h, --help               Show this help
 USAGE
 }
@@ -63,6 +65,11 @@ while [[ $# -gt 0 ]]; do
     --strip-tool)
       require_option_value "$1" "${2:-}"
       STRIP_TOOL="$2"
+      shift 2
+      ;;
+    --go)
+      require_option_value "$1" "${2:-}"
+      SENSOR_WEB_GO_EXECUTABLE="$2"
       shift 2
       ;;
     -h|--help)
@@ -185,9 +192,13 @@ fi
 
 # Configure only this release repository. The imported producer libraries come from ./lib.
 rm -rf "${BUILD_DIR}"
+GO_CMAKE_ARGS=()
+if [[ -n "${SENSOR_WEB_GO_EXECUTABLE}" ]]; then
+  GO_CMAKE_ARGS+=("-DSENSOR_WEB_GO_EXECUTABLE=${SENSOR_WEB_GO_EXECUTABLE}")
+fi
 cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-  -DCMAKE_BUILD_TYPE="Release"
+  -DCMAKE_BUILD_TYPE="Release" "${GO_CMAKE_ARGS[@]}"
 
 PRODUCER_GCC="$(read_configured_c_compiler)"
 if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then
@@ -218,6 +229,7 @@ for path in \
   "${BUILD_DIR}/cam_demo" \
   "${BUILD_DIR}/imu_reader_demo" \
   "${BUILD_DIR}/sensor_demo" \
+  "${BUILD_DIR}/sensor_web" \
   "${BUILD_DIR}/mosaic_rtsp_demo" \
   "${BUILD_DIR}/can_demo" \
   "${BUILD_DIR}/serial_port_demo"; do
@@ -246,6 +258,7 @@ mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/lib"
 cp "${BUILD_DIR}/cam_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/imu_reader_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
+cp "${BUILD_DIR}/sensor_web" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/can_demo" "${STAGE_DIR}/bin/"
@@ -261,6 +274,10 @@ done
 mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
 cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
+mkdir -p "${STAGE_DIR}/licenses/sensor_web"
+cp "${PROJECT_DIR}/LICENSE" "${PROJECT_DIR}/LICENSE_SCOPE.md" "${STAGE_DIR}/"
+cp "${PROJECT_DIR}/web/THIRD_PARTY_NOTICES.txt" "${PROJECT_DIR}/web/dependencies.lock.json" \
+  "${STAGE_DIR}/licenses/sensor_web/"
 
 for executable in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo can_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
@@ -298,6 +315,8 @@ done
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/can_demo" "${STAGE_DIR}/start_sensor_demo.sh"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/can_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
+chmod 755 "${STAGE_DIR}/bin/sensor_web" "${STAGE_DIR}/licenses" "${STAGE_DIR}/licenses/sensor_web"
+chmod 644 "${STAGE_DIR}/LICENSE" "${STAGE_DIR}/LICENSE_SCOPE.md" "${STAGE_DIR}/licenses/sensor_web/"*
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so.[0-9]*.[0-9]*.[0-9]*
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \

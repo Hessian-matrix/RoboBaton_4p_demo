@@ -85,7 +85,7 @@ std::size_t CountLeadingSpaces(const std::string& text) noexcept {
 
 bool IsSupportedSection(const std::string& section) noexcept {
   return section == "camera" || section == "rtsp" || section == "imu" ||
-         section == "save_data" || section == "capture";
+         section == "save_data" || section == "capture" || section == "web";
 }
 
 int ParseInt(const std::string& text, const char* name) {
@@ -189,9 +189,17 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.\n"
          << "  test_exposure_midpoint: false\n"
          << "rtsp:\n"
+         << "  enabled: false\n"
          << "  bps: " << defaults.bps << "\n"
          << "  codec: " << VideoCodecName(defaults.video_codec) << "\n"
          << "  url: " << defaults.url << "\n"
+         << "web:\n"
+         << "  enabled: true\n"
+         << "  listen_address: " << defaults.web_listen_address << "\n"
+         << "  port: " << defaults.web_port << "\n"
+         << "  imu_push_hz: " << defaults.web_imu_push_hz << "\n"
+         << "  max_video_sessions: " << defaults.web_max_video_sessions << "\n"
+         << "  max_imu_clients: " << defaults.web_max_imu_clients << "\n"
          << "imu:\n"
          << "  sample_rate_hz: " << defaults.imu_sample_rate_hz << "\n"
          << "  print_rate_hz: " << kDefaultImuPrintRateHz << "\n"
@@ -260,6 +268,20 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     options->rotate_degrees = ParseInt(value, name.c_str());
   } else if (key == "camera.test_exposure_midpoint") {
     options->test_exposure_midpoint = ParseBool(value, name.c_str());
+  } else if (key == "rtsp.enabled") {
+    options->rtsp_enabled = ParseBool(value, name.c_str());
+  } else if (key == "web.enabled") {
+    options->web_enabled = ParseBool(value, name.c_str());
+  } else if (key == "web.listen_address") {
+    options->web_listen_address = value;
+  } else if (key == "web.port") {
+    options->web_port = ParseUint32(value, name.c_str());
+  } else if (key == "web.imu_push_hz") {
+    options->web_imu_push_hz = ParseUint32(value, name.c_str());
+  } else if (key == "web.max_video_sessions") {
+    options->web_max_video_sessions = ParseUint32(value, name.c_str());
+  } else if (key == "web.max_imu_clients") {
+    options->web_max_imu_clients = ParseUint32(value, name.c_str());
   } else if (key == "rtsp.bps") {
     options->bps = ParseLongLong(value, name.c_str());
   } else if (key == "rtsp.codec") {
@@ -401,6 +423,8 @@ void LoadSensorDemoYamlConfig(Options* options, SensorDemoYamlConfigState* state
 
 Options ParseSensorDemoCommandLine(int argc, char** argv) {
   Options options;
+  options.rtsp_enabled = false;
+  options.web_enabled = true;
   SensorDemoYamlConfigState state;
   if (!HasHelpOption(argc, argv)) {
     LoadSensorDemoYamlConfig(&options, &state);

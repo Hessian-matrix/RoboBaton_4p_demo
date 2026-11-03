@@ -1,257 +1,100 @@
-# X5 SC132 四目相机、IMU、UART 与 CAN Demo
+# RoboBaton 4P non-ROS Demo
 
-英文说明：[README_EN.md](README_EN.md)
+[English](README_EN.md) · [中文使用文档](https://4p-docs.readthedocs.io/zh-cn/latest/index.html)
 
-这是 RoboBaton 4P 的 V2 non-ROS 公开 Demo 仓库，提供 X5 板端运行包、SC132 四目相机 RTSP 示例、ICM-42670-P IMU 示例、UART1/UART7 示例、SocketCAN CAN 示例、公开头文件和匹配的预编译运行库。
+面向 X5 的 SC132 四目相机、RTSP、ICM-42670-P IMU、UART 和 SocketCAN 示例仓库。接线、部署、参数、保存、API 和排障说明统一维护在公开文档仓库 [4P_doc](https://github.com/Hessian-matrix/4P_doc)。
 
-> **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
+## 仓库内容
 
-当前源码使用 `icm42670_*` / `icm42670_driver.h`，IMU ABI 3.0、SONAME `libicm42670.so.3`、real SO `libicm42670.so.3.0.0`；全部导出只使用 `ICM42670_X5_3.0`。字段名与布局不变，但 `host_timestamp_ns` 改为该包所在 SPI FIFO burst 成功完成时的 RAW 观测，经当次系统时钟桥接转换为 realtime；同 burst 可重复、FSYNC 延迟发布时保留转换后的原值，不是 IRQ 沿、样本或曝光时间，也不在发布时重新换算旧 RAW。FIFO 顺序与实测 TMST 定义身份和样本时间，INT1 仅唤醒；GPIO 通知序号缺口仅诊断，不单独证明丢样或使会话失败。软件版本、文档修订和板端验收分别识别，同一版本字符串不证明 manifest 相同。
+- `demo/`：X5 完整运行包，含 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`imu_reader_demo`、`serial_port_demo` 和 `can_demo`。
+- `src/`、`include/`、`lib/`、`config/`：示例源码、公开头文件、匹配的预编译库与默认配置。
+- `scripts/`：构建、打包与运行包校验入口。
 
-## 包含内容
+本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
-```text
-demo/       可部署到 X5 `/root/demo` 的完整运行包（含 `mosaic_rtsp_demo` 四路拼接示例）
-include/    公开 C 头文件
-lib/        与当前 Demo/头文件匹配的预编译库
-config/     `sensor_demo` 默认 YAML
-src/        Demo 示例源码（含 `mosaic_rtsp_demo.cpp` / `mosaic_nv12.*`）
-scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_demo.sh`）
-```
+## 开始使用
 
-用户通常只需要 `demo/`。不要只替换单个 ELF、单个 `.so` 或配置文件。
-
-`lib/` 和 `demo/lib/` 内每套库仅有 `libNAME.so.M.m.p` 为实体，`libNAME.so.M -> libNAME.so.M.m.p`、`libNAME.so -> libNAME.so.M` 必须是同目录相对链接（NAME 为 `icm42670`、`sc132`、`prrtsp`）。完整复制请用保留链接的 `tar`、`cp -a` 或 `rsync -a`，不要展开链接。打包与 verifier 拒绝普通文件别名、绝对/错误/断裂链接；`manifest.sha256` 校验解析后字节，v3 `runtime-provenance.json` 另绑定链接文本，旧 provenance 包需重新生成。
-
-| 库 | 实体文件 | SONAME | 符号节点 |
-|---|---|---|---|
-| ICM42670 | `libicm42670.so.3.0.0` | `libicm42670.so.3` | `ICM42670_X5_3.0` |
-| SC132 | `libsc132.so.3.0.0` | `libsc132.so.3` | `LIBSC132_3.0` |
-| PRRTSP | `libprrtsp.so.2.0.1` | `libprrtsp.so.2` | `LIBPRRTSP_2.0` |
-
-`M.m.p` 分别表示实体库修订，`M` 是 ABI major，不跟软件版本或 PCB 版本机械同步；ICM42670 与 SC132 ABI 3.0 均要求成套重建 consumer，删除旧 major 库，禁止 `.so.2 -> .so.3` 链接或旧符号别名。IMU 样本时间仍为实测 TMST→RAW→realtime，随墙钟回拨；使用 `sample_sequence` 判断顺序，不以 host 观测唯一或时间递增为条件。本设计不修复底层 GPIO/内核原因，不修改 LPWM/内核，也不保证任意负载零丢失；FIFO overflow、坏包、时钟歧义与无效 epoch 仍失败，`200µs` admission 不放宽。
-
-
-当前相机 ABI 3.0 在 `sc132_frame_info_t.exposure` 中提供逐帧冻结的 ISP 曝光观测；bag 帧元数据、MP4 `exposure.jsonl` 和 tee 索引同步保存。`status=1` 仅为估计值，不是该帧实际生效曝光或真实曝光中心；`status=0` 为不可用。字段、关联键及限制见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)。
-
-## 版本与运行包匹配
-
-本仓库、`demo/`、预编译库和公开文档按同一发布组合使用。请先确认 `VERSION`、仓库 tag 和运行包 `manifest.sha256`，不要混用不同版本的源码、头文件、动态库和运行包。
-
-板端可查询程序和运行库版本：
+先按[首次上电](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html)和[部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)准备设备及运行包，再在 X5 上执行：
 
 ```bash
 cd /root/demo
-./cam_demo --version
-./mosaic_rtsp_demo --version
 ./sensor_demo --version
-./imu_reader_demo --version
-./serial_port_demo --version
-./can_demo --version
-```
-
-各 demo 的 `--version` 会输出自身产品版本，并报告该进程实际链接的自研 SO 版本：`cam_demo` 与 `mosaic_rtsp_demo` 报告 `libsc132`/`libprrtsp`，`sensor_demo` 报告 `libicm42670`/`libsc132`/`libprrtsp`，`imu_reader_demo` 报告 `libicm42670`，用于发现程序与 SO 混装。
-
-这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)。
-
-可配置档位不是所有保存、推流、DDS 和负载组合的持续能力承诺。当前 non-ROS 60fps＋1600Hz FSYNC 的约300秒高压 console 证据只覆盖关联与速率，不证明保存图像干净解码或 ROS2 60fps；高压 CPU/eMMC bag 可按严格丢组间隔合法提前停止，不能把策略正确写成持续录制通过。LPWM 长尾、60fps RTSP 解码告警、端到端 IMU 首尾数量及新组成长测仍未完整闭合；软件已构建、板端已更新和正式发布须分别判断。统一限制见[发布与支持](https://4p-docs.readthedocs.io/zh-cn/latest/release-and-support.html)。
-
-## Demo 选择
-
-| 程序 | 用途 |
-|---|---|
-| `sensor_demo` | 四路相机、RTSP 和 IMU 联合运行；可选择 ROS1 bag 或 H.264 MP4 保存 |
-| `cam_demo` | 四路相机和 RTSP |
-| `mosaic_rtsp_demo` | 四路 NV12 拼接为一路 RTSP，默认端口 `558` |
-| `imu_reader_demo` | 独立 IMU 读取 |
-| `serial_port_demo` | UART1/UART7 串口示例；不适用于 DEBUG_UART |
-| `can_demo` | TCAN4550 的 SocketCAN 经典 CAN / CAN FD 收发示例，FD/BRS 显式开启；接口须预先配置 |
-
-## 默认运行
-
-默认运行包位于 `demo/`；部署完成后在 X5 上执行：
-
-```bash
-cd /root/demo
 ./sensor_demo
 ```
 
-只运行相机/RTSP：
+按 `Ctrl+C` 正常停止。保持 `cam-service` 运行，不同时启动多个相机应用。其他示例及完整参数见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html)。
 
-`cam_demo` 演示如何同时使用：
+运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功只表示前 2 秒未退出，仍须检查日志和页面。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-autostart)。
 
-- `libsc132.so`：启动 SC132 四目相机，并通过 frame-set callback 获取配组后的 NV12 DMA 帧
-- `libprrtsp.so`：把四路 NV12 帧送入 X5 编码器并输出 RTSP
+### 局域网视频与六轴预览
 
-六个 demo 可执行文件已经按 X5 运行环境链接。请保持 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`include/` 和 `lib/` 中的二进制库来自同一份运行包；不要混用系统目录或其他工程里的同名 `.so`，否则可能出现启动失败或运行时符号不匹配。
+当前源码的 `sensor_demo` 默认开启 Web、关闭 RTSP。同一可信局域网电脑打开 `http://<设备IP>/`，查看四路 H.264 原生视频、IMU 六轴数值及趋势；页面资源离线内嵌，无需插件。`sensor_web` 由应用启动和回收，不要单独运行。此功能尚未作为新软件版本发布，不代表全部浏览器、双机稳态或 GPU 已验收。
 
-```bash
-./cam_demo
-```
+右上角语言按钮用 `CH` / `EN` 表示切换目标：中文页面显示 `EN`，英文页面显示 `CH`；默认中文，浏览器允许本地存储时记住选择。切换覆盖静态文案、动态状态与无障碍提示，不刷新页面、不重建视频/SSE/姿态 Worker，不重置录制选项、设备录制或已接受的零偏。“在线文档 / Online Docs”按当前语言在新标签页打开对应官方文档；只有在线文档需要互联网，设备页面与切换仍使用离线内嵌资源。
 
-### Mosaic RTSP Demo
+所有功能集中在**同一首页**，无左侧页面导航或独立 hash 视图。主工作区包含四路相机、惯性姿态、六轴原始遥测和常驻的“录制与保存”四张卡片。宽度 ≥1440px 时四列并排，相机列最大、遥测列加宽至略宽于姿态列，从相机列两侧空白让出空间，四张外框等高、上下边缘对齐；1100–1439px 时相机/姿态/遥测三列并排，录制卡片在下方独占一行；768–1099px 时相机与录制各占整行，姿态和遥测左右并排；小于 768px 时全部上下堆叠。姿态校准与相对航向重置仍在姿态卡片内。
 
-四路拼接 RTSP 示例：
+浏览器视口宽度 ≥1440px 且高度 ≥680px（CSS 像素）时，桌面使用紧凑标题和四项健康摘要，四张卡片等高铺满主工作区，模型与趋势图随可用高度扩展；溢出内容在各面板内滚动。视频网格在相机列内居中。低于任一尺寸门槛的窄屏、短屏与移动端使用正常文档滚动。
 
-```bash
-./mosaic_rtsp_demo
-./mosaic_rtsp_demo --fps 40
-./mosaic_rtsp_demo --fps 50
-```
+六轴趋势固定显示最近 1 秒，无时间窗下拉选项。加速度和角速度分别成图，每张图的 X/Y/Z 共用时间轴与纵坐标；纵轴上下限随当前窗口的三轴数据统一自动调整，并标注数值刻度，单位为标题中的 m/s²、rad/s，横轴为距浏览器当前时刻的秒数。不做均值平滑或扣除重力/零偏，超过 250ms 的接收缺口断线显示；仅改变预览，不改变采样、保存或姿态。桌面面板空间不足时内部滚动。
+遥测标题下不再显示趋势说明行；图表收紧面板左侧空白，按实际刻度文字宽度预留纵坐标边距，避免固定宽空槽，同时保留完整刻度。
 
-固定 RTSP 地址 `rtsp://<x5-ip>:558/PRR`，支持 `--fps <25|30|40|50|60>`。详细参数、运行统计与边界见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-mosaic)。
 
-只运行 IMU：
+主工作区下方的“运行诊断”可在首页内展开，查看数据源状态及每路相机实际报告的解码器、帧率（fps）和丢包诊断文本；缺失字段仍为 `unknown`。
 
-```bash
-./imu_reader_demo
-```
+相机卡片只显示小字号单行“相机”标题，与分辨率/帧率/编码同排对齐，无 `CAMERAS / 01` 眉标题。四路画面取消独立标题栏与放大按钮，CAM 编号叠放在图像左上角，播放状态在右下角。双击图像放大/还原，键盘聚焦图像后可按 Enter 或空格切换；`Esc` 仅退出单路放大，不用于录制控制。网格与放大均按源比例以 `contain` 完整显示，不裁剪、不拉伸，源画面自带黑边保留；紧凑桌面按网格剩余宽高尽量放大图像。
 
-`imu_reader_demo` 在 stop 后输出一条 `IMU_RUNTIME_HEALTH final=yes`，包含会话有效性、producer/consumer 样本数、日志丢弃及最终 GPIO/FIFO/mapper/无效包计数。样本与最终摘要均为非阻塞尽力输出；缺失摘要不能作为健康通过证据。`--print-rate-hz 0` 仅关闭样本，不关闭最终摘要。
+界面相机名称为 **CAM1～CAM4**，分别对应内部 `camera_id` 0～3；API、录制文件名和数据索引不变。紧凑桌面将四路显示框按源比例放大，并缩小相机卡片左右内边距；四张外框继续等高。相机卡片底部不再显示说明文字。浏览器并排播放仍不用于四目显示同步或 FSYNC 精度验收。
 
-运行 UART1/UART7 示例：
+展开或折叠录制详情、高级选项和诊断均不导航或重新载入文档，不重建 WebRTC 连接、SSE 订阅或姿态 Worker，不重置当前选项或浏览器会话中已接受的陀螺零偏。**刷新浏览器仍会将本地选项恢复为页面默认值并清除校准**，这些状态不会持久化。姿态卡片提供校准与相对航向重置，它们只影响浏览器姿态预览；布局不新增 HTTP API、身份认证或硬件控制。
+
+录制“已写入”使用十进制 MB，达到 1 GB 后自动切换为 GB，保留两位小数（1 MB = 1,000,000 B，1 GB = 1,000,000,000 B）；只转换显示，设备字节计数和 API 不变。
 
 ```bash
-./serial_port_demo
+./sensor_demo --no-web --rtsp   # 仅传统 RTSP
+./sensor_demo --web --rtsp      # 两种输出共用每路一次编码
+./sensor_demo --no-web --no-rtsp # 关闭网络输出，保存仍独立生效
 ```
 
-接收等待中 `SIGINT`／`SIGTERM` 正常返回 `0`，并恢复原串口设置；非停止信号打断不重置接收超时，真实设备/I/O 错误仍返回失败。外部收发及硬件 TX 背压需另行验证。
+YAML 中 `web.enabled`、`rtsp.enabled` 独立；`rtsp.bps/codec` 仍是共享编码参数。Web 视频仅支持 H.264；H.265 不转码，IMU 遥测仍可用。HTTP 使用 TCP 80，WebRTC 使用 UDP/TCP 8189；只放通 HTTP 不够。端口冲突使 Web 降级，不抢占其他服务、不影响采集/保存。
 
-### CAN Demo
+网页没有身份认证，只用于可信隔离 LAN；HTTP 信令/遥测没有传输真实性保护，不要直接暴露到公网或不可信网络。硬解由浏览器、系统和驱动决定，缺少诊断字段显示 `unknown`，有 GPU 不等于四路硬解。页面并排播放不证明四路显示同步或相机/IMU 同步。
 
-先由 BSP 正确注册并配置 CAN 网络接口；`can_demo` 不访问 SPI 寄存器、不修改设备树、GPIO、bitrate 或接口状态。默认收发经典 CAN（`0..8` 字节），支持标准/扩展数据帧发送及数据帧/远程帧接收。`--fd` 开启 FD 发送或经典/FD 混合接收，要求接口已启用 FD（MTU `72`）；`--brs` 仅在 `--mode tx --fd` 下开启数据段速率切换。FD 发送长度为 `0..8、12、16、20、24、32、48、64` 字节，其他长度拒绝，不隐式补零；FD 不支持远程帧。
+首页常驻的“录制与保存”卡片只有一份表单，默认显示格式、固定存储位置、开始/停止/查询、设备状态、设备计时时长和已写入字节数。默认折叠的原生“高级选项”详情包含图像隔帧与最小丢组间隔；另一默认折叠的“录制详情与使用说明”包含可用空间、丢弃计数、最终结果、会话 ID、实际格式/存储、输出路径、完整性/清理、健康范围及使用边界。实际错误、命令结果不确定和停止排空/封装提示始终位于折叠区外。隐藏的高级值无效时，先自动展开高级选项，再显示浏览器校验提示。沿用原有校验、实时状态/能力检查、命令锁定及设备确认/查询；状态不可用或过期、命令待确认或结果不确定、设备不允许开始时不能开始录制。
 
-```bash
-cd /root/demo
-./can_demo --help
-# 接收：默认 can0，Ctrl-C 退出；也可指定有限计数与空闲超时
-./can_demo --interface can0 --mode rx --count 10 --timeout-ms 5000
-# 发送 10 个标准帧，ID 按十六进制，数据不带分隔符
-./can_demo --interface can0 --mode tx --id 123 --data 0102030405060708 --count 10 --interval-ms 100
-# 29-bit 扩展帧；默认只发送一次
-./can_demo --interface can0 --mode tx --extended --id 1ABCDE --data AABB
-# 接口已按对端仲裁段/数据段速率配置为 FD 后，混合接收经典和 FD 帧
-./can_demo --interface can0 --mode rx --fd --count 10 --timeout-ms 5000
-# 16 字节 FD；省略 --brs 则不切换数据段速率
-./can_demo --interface can0 --mode tx --fd --brs --id 123 --data 000102030405060708090A0B0C0D0E0F
-```
+在录制卡片中选择格式和固定存储后开始；需要调整隔帧或最小丢组间隔时展开“高级选项”。点击“停止录制”后等待设备排空/封装及最终结果；只有 `published_complete`、`data_complete=true` 和 `cleanup_complete=true` 才表示完整发布。相机、原生 IMU 和预览继续运行，可连续多次录制。网页关闭/断网不停止录制；重新打开页面查询真实状态，命令超时后不盲目重发。运行目录为实际 ELF 目录下的 `recordings`（标准包 `/root/demo/bin/recordings`），TF 为已挂载的 `/mnt/sdcard/recordings`，不接受任意路径。bag/MP4 互斥，MP4 要求四路 H.264。存储、API 与原生数据合同不变；启动参数及 YAML 自动保存保留，也可网页停止，保存不使用网页降频/姿态滤波数据，动态 MP4 健康仅覆盖 `callback_window`。页面无认证，能够访问设备的人可开始/停止写盘。完整合同见[数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
 
-无参数默认持续接收；TX 默认发送一个 `123#0102030405060708`，`--count 0` 持续运行。退出码 `0` 为完成或正常中断，`1` 为接口/I/O/接收超时失败，`2` 为参数错误。`tx_queued` 仅表示内核接受；本机 SocketCAN 回环不证明外部收发。接口配置、接线与双节点验证见 [CAN 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-can)。单独构建用 `TOOLCHAIN_FILE="$TOOLCHAIN_FILE" scripts/build_can_demo.sh`，完整生成 `demo/` 用 `scripts/package_runtime.sh`。
+页面另提供客户端姿态预览：浏览器 Web Worker 用 ≤50Hz 的姿态专用六轴输入融合四元数，动画板体显示 Roll/Pitch/相对 Yaw；设备端不计算姿态或零偏。设备仅在降频前对每个原生样本执行四级一阶低通，单级极点为 `min(10Hz, 遥测上限×0.2, 原生采样率×0.2)`；默认 800→50Hz 时低频群延迟约 64ms。SSE 新增 `attitude_accel_mps2` / `attitude_gyro_rps`，原始六轴数值/趋势字段、原生采样、保存与公共 ABI 不变。世界 +Z 向上，按当前重力初始化；原始和滤波加速度均在重力带内才修正倾角，带外仅陀螺积分。
 
-FD 输出为 `ID##<flags><data>`，flags 的 bit 0 为 BRS、bit 1 为 ESI，例如 `tx 123##1000102030405060708090A0B0C0D0E0F`。经典帧输出不变，`--extended` 只选择 29-bit ID，不代表 FD。应用支持 FD 不等于当前 BSP 已通过实板完整性验收；受影响 BSP 的长 FD 载荷可能损坏，必须先修复底层问题并在第二个物理节点逐字节核对载荷。
+首次打开页面或进入新数据源会话后，让**实际设备完全静止**。Worker 会在约 **3 秒**低运动、重力一致的连续遥测窗口后自动初始化三轴陀螺零偏，无需先按按钮；检查最小样本数、连续时间戳、重力/角速度幅值、加速度与陀螺方差，以及窗口前后段的加速度与陀螺均值变化。检测到运动、强振动、数据稀疏或时间缺口会重置候选窗口，检测到运动期间不学习。
 
-首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)。
+姿态积分与零偏均值使用降频前滤波后的输入；静置质量检查仍使用原始六轴，不能用滤波掩盖强振动。时间不递增、序号重置或超过 100ms 原生样本缺口会重新播种滤波器，无效输入使姿态字段不可用；不外推缺失样本。
 
-## 开机自启动
+已有零偏后，只有完整约 3 秒静置窗口的**平均残余角速度向量模长 ≤0.002 rad/s（约 0.11°/s）**时，才保守地自动更新。更新用 **6 秒时间常数**的指数跟踪缓慢跟随零偏变化；接受自动估计不重置航向、不使姿态跳变。状态区提示自动静置估计的等待/采集进度及已估计/跟踪状态；这些状态表示检查结果，不是设备确实静止或绝对航向准确的证明。
 
-`sensor_demo` 的开机自启动由运行包顶层脚本 `start_sensor_demo.sh` 管理：
+已知零偏后的自动跟踪还检查原始角速度在约 1 秒子窗口及末尾未满窗口的平均残余，避免降频前低通的延迟掩盖末尾刚开始的转动；噪声过大时延后更新，而非冻结航向。无效六轴、姿态输入或时间字段会丢弃未完成的自动窗口并中断手动校准，同一会话已接受的零偏保留。
 
-```bash
-cd /root/demo
-./start_sensor_demo.sh            # 前台启动 sensor_demo（等效 ./sensor_demo）
-./start_sensor_demo.sh enable     # 安装开机自启动（需要 root）
-./start_sensor_demo.sh disable    # 取消开机自启动（需要 root）
-./start_sensor_demo.sh status     # 查看自启动与运行状态
-```
+“静置校准零偏”按钮仍可手动重估：先让设备完全静止，点击后继续保持约 **3 秒**，等待页面报告结果。运动、不稳定、振动或数据稀疏可使校准被拒绝，失败不覆盖此前已接受的零偏；请静置并等待遥测稳定后重试。温度变化后可先静置等待自动跟踪，或显式重新校准。
 
-开机自启动通过板端 `/userdata/startup.sh` 实现（系统 `S99auto_startup` 在 `/userdata` 挂载后执行）；脚本只追加/删除自己带标记的块，不影响其它应用写入的内容。镜像内 Wi-Fi 命令 `wifi_setup` 使用独立 `/etc/init.d/S99wifi_setup` 与 `/userdata/wifi/autostart.enabled`，不占用该共享文件。自启动使用包内默认配置，直接修改 `config/sensor_config.yaml` 即可调整，无需重新执行 `enable`。
+所有四元数积分都先扣除已接受的三轴零偏；**没有 Yaw 静止冻结、硬角速度死区或仅作用于显示的阻尼**。“重置相对航向”重新对齐当前重力而非把倾斜归零，在同一应用会话内保留已接受的零偏。超过 500ms 无有效姿态时冻结模型；重连或时间戳不递增/间隔超过 250ms 后重新对齐。时间不连续会取消尚未完成的候选窗口/手动校准，同一数据源会话内保留已接受的零偏；新数据源会话或刷新页面会清除零偏，之后静置约 3 秒可自动重新估计。
 
-曝光中点测试可在 `config/sensor_config.yaml` 的 `camera` 段设置 `test_exposure_midpoint: true`，默认 `false`；重启 `sensor_demo` 后生效。显式 YAML 覆盖 `SC132_TEST_EXPOSURE_MIDPOINT`，省略该键时才沿用环境变量。图像时间戳（包括 ROS1 bag 图像 `header.stamp`）使用触发时间加半曝光时长的估算值，不改变 IMU 或 bag record time；曝光不可用则停止采集。需重建应用及支持此开关的 `libsc132.so`，旧预编译包不自动支持；这不是已校准的真实曝光中点。详见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html#test-exposure-midpoint)。
+六轴数据无法完全区分零偏与匀速慢转：自动跟踪可能吸收低于上述门限的缓慢残余转动，首次估计或手动校准同样必须确保设备真实静止，不能声称完美运动检测或任意慢转都能保留。校准后 ≥0.005 rad/s（约 0.29°/s）的真实转动仍应可测，不应被当作零偏消除。没有外部航向参考，Yaw 仅为相对航向，不可观测且仍会漂移；不提供绝对或无漂移航向，不用于导航，也不代替完整传感器标定。运动加速度、振动、剩余偏置与遥测抽取均影响预览精度。
 
-## 调试串口免密开关
+部署此更新须重新构建 `sensor_demo`、包含内嵌页面/Worker 的 `sensor_web` helper 和完整运行包，成套替换后正常重启应用；仅刷新浏览器不会更新正在运行的内嵌代码。这些说明不代表已完成板端部署或验收。
 
-已集成对应镜像功能时，root 使用 `uart-autologin status|enable|disable` 管理 DEBUG_UART（ttyS0）登录。全新 userdata 默认免密进入 root，关闭后下次登录恢复普通用户名/密码认证；选择持久化到 `/userdata/uart-autologin/state`，不修改只读 rootfs，不注销已有会话，不影响 SSH 或 UART1/UART7。能接触调试串口的人在启用时可直接获得 root，仅适用于可信物理环境。源码入口为 `scripts/env_setup/uart-autologin.sh` 与 `uart-autologin-login.sh`；仅复制脚本到 Demo 不会更改 getty，须由镜像维护者集成唯一控制台入口。
+这里的部署仅指经授权在用户设备上更新本地运行包，不是新软件版本发布，也不扩大现有验收范围。
 
-## 保存数据
+H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部分 Windows 硬解端四路彩色竖条。更新时必须整包替换并重启应用；只刷新网页不会更新已运行的编码器。解码帧数增长、零丢包也不能证明像素正确，需检查实际画面。此修复不要求关闭浏览器硬件加速，也不等于全部 GPU 兼容性验收。
 
-`sensor_demo` 默认不自动保存；默认保存格式字段为 MP4，默认路径为 `/root/demo/save_mp4/`。需要启用保存时显式选择一种模式：
+源码构建额外需要固定 Go `1.27.3`，预先配置 module 缓存，再设置 `SENSOR_WEB_GO_EXECUTABLE`；构建不自动下载或切换工具链。完整运行包内已包含 ARM64 `bin/sensor_web` 和第三方许可证，板端无需 Go。
 
-```bash
-# ROS1 bag v2.0
-./sensor_demo --record-bag /data/run.bag
+## 文档入口
 
-# H.264 MP4 session
-./sensor_demo --record-mp4-dir /data/mp4_session
-```
-
-ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只适用于 ROS1 bag。完整输出文件、停止顺序、完整性判定、partial/recovery 和离线转换见 [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
-
-ROS1 bag 默认采用严格丢组间隔：`--record-drop-min-interval 10`（YAML：`save_data.drop_min_interval`）。过载时只淘汰已编码、未被 writer 领取的完整相机组；按 recorder 收到 frame-set 的连续序号选择与所有已丢组至少相距 10 组的候选，不用可能跳号的 producer `group_id` 计算间隔。没有合法旧组时仅可丢满足同一间隔的当前组；仍无法满足则显式停止，排空已接收数据，发布 `*.partial.bag` 并以非零退出，不放宽间隔继续丢。该保证不覆盖采集源、硬件或 IMU 丢样，也不是持续 30 fps 的吞吐保证。主动隔组保存需同时设 `--record-frame-skip 1 --record-drop-min-interval 2`（YAML：`skip: true`、`drop_min_interval: 2`）。
-
-回读 `/cameraN/frame_metadata`（`N=0..3`）的 `source_group_order` 核对各相机保留组集合；`group_id` 保留 producer 原始身份。`/robobaton/session_config` 记录 `drop_policy_min_group_interval`；`/robobaton/session_status` 记录 `drop_policy_stopped`、`drop_policy_stop_group_order`、`drop_policy_dropped_groups`、`drop_policy_min_observed_interval` 和停止原因。策略停止时，终止组序号是已完成录制范围的排他上界，不作为又一次合法丢组。
-
-当前 MP4 session 始终创建 `exposure.jsonl` 和 `fsync.jsonl`，后者仅在 FSYNC 启用后有记录。曝光 sidecar 是输入帧观测，可能多于编码保存帧；按相机与微秒量化组触发时间对照 CSV，不按行号或源帧号直接索引 MP4。默认 `--imu-sample-drop-policy allow-counted` 可继续计数丢样；bag complete 不单独保证 producer 零丢样，MP4 complete 还检查最终 producer 健康和样本计数。完整数据集必须回读实际载荷，不能只看退出码或 MP4 能否播放。
-
-## 从源码构建
-
-本仓库在 Ubuntu 22.04 x86_64 开发机交叉编译，X5 板端运行生成的运行包。构建前准备匹配的 `./include`、`./lib`、`x5_4cam_cross_toolchain_20261009` 工具包和主机 CMake；下载发布状态与主机安装步骤见下方源码编译页。
-
-```bash
-export X5_TOOLCHAIN_ROOT="/path/to/x5_4cam_cross_toolchain_20261009"
-source "$X5_TOOLCHAIN_ROOT/setup_4cam_cross_env.sh"
-cmake -S . -B build_x5 \
-  -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
-cmake --build build_x5 --parallel 4
-```
-
-维护者刷新完整运行包时使用：
-
-```bash
-scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
-python3 scripts/verify_runtime_package.py demo
-```
-
-打包支持独立克隆仓库，校验源提交、文件哈希及完整运行包。自定义 `--build-dir` 必须位于源码仓库内；切换工具包后使用新的构建目录。
-
-完整工具链、依赖、构建边界和运行包验证见 [公开 Demo 源码编译](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)。
-
-## 部署
-
-板端目标目录为 `/root/demo`。部署必须遵循：
-
-```text
-唯一临时目录
-→ 完整 manifest 校验
-→ 检查旧应用退出
-→ 备份旧目录
-→ 原子切换
-→ help/smoke 验证
-→ 失败恢复最近备份
-```
-
-不要使用“先删除 `/root/demo`，再上传新包”的方式，也不要在 `cam-service` 停止时进行相机测试。完整命令见 [部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)。
-
-## 支持边界摘要
-
-- 相机输出为 NV12，默认 `1280x1088`，可选 VSE 硬件整幅缩放画布 `640x480`、`720x480`、`1280x720`；RTSP 默认 H.264、H.265 可选，path 为 `/PRR`，四路默认端口为 `554..557`。
-- 相机公开支持 `25/30/40/50/60fps`，默认 `30fps`；`rotate=180` 只支持 `30fps`。
-- IMU 原生支持 `25/50/100/200/400/800/1600Hz`，默认 `800Hz`，使用 sensor-timestamp FIFO；旧 `500/1000/2000Hz` 明确拒绝，不会自动重采样。
-- 所有相机采集入口仅支持 VIN LPWM 硬件触发；相机与 IMU FSYNC 共用 LPWM IO，INT1 为 `34120000.gpio` offset `8`、仅唤醒 FIFO 排空。相机硬件触发沿、IMU 实测 TMST 样本及 burst 完成 host 观测使用 `CLOCK_REALTIME`，CLI/保存原样保留；host 可重复、FSYNC 延迟保留原值。bag record time 独立读取 realtime；系统校时允许回拨，内部超时仍用单调时钟。相机需要 X5 `/dev/mem` 只读访问；捕获/有界映射缺失即停止，不用到帧时间兜底。同域不提供曝光同步、TF 或标定。
-- `sensor_demo --fsync --sample-rate-hz 1600` 或 YAML `imu.fsync_enabled: true` 显式开启触发—样本关联（默认关闭，仅 `800/1600Hz`）；结果输出 stdout、bag `/robobaton/fsync` 或 MP4 `fsync.jsonl`。只接受 `status=1`，缺失/歧义显式报告；不改变采样相位，不承诺曝光同步或零丢失。
-- IMU consumer 使用 `SCHED_RR/3`，采集 owner 使用 `SCHED_FIFO/20`，相机 RAW observer 使用 `SCHED_FIFO/60`、继承允许 CPU 集合并每轮休眠 `50µs`，需实时调度权限。IMU 不再使用独立 INT1 时钟 observer 或包/沿身份匹配；GPIO 通知序号缺口仅诊断、不单独失败。跨优先级队列使用优先级继承锁；应用不自动修改 IRQ/debug 或实时配额，重构不修复底层 GPIO/kernel 根因。压测须核对 stop 后最终 `IMU_RUNTIME_HEALTH` 与实际载荷，不能将计数丢弃宣称为零丢失。
-- UART1/UART7 使用 `3.3V`，DEBUG_UART 使用 `1.8V`；V2 UART7 5pin 有独立 IO 默认作 PPS 输入，无需复用 RX/TX。完整 pinout、供电脚限值与热插拔边界以正式 V2 硬件资料为准；确认线序和电平后断电接线，不承诺热插拔。
-- 相机运行依赖 X5 板端 `cam-service`；本仓库不是通用主机运行包。
-
-完整相机、IMU、UART、时间戳、帧率和数据语义见 [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)、[non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html) 和 [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)。
-
-## 故障排查
-
-遇到启动、动态库、RTSP、IMU 或 UART 问题时，请保留 `VERSION`、manifest 校验结果、执行命令、退出码和必要日志，不要提交真实 IP、凭据或内部路径。排查入口：[故障排查](https://4p-docs.readthedocs.io/zh-cn/latest/troubleshooting.html)。
-
-## 公开文档索引
-
-- [产品介绍](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/Product_Introduction.html)
-- [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)
-- [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html)
-- [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)
-- [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html)
-- [部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)
-- [公开 Demo 源码编译](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)
+- [源码编译与运行包校验](https://4p-docs.readthedocs.io/zh-cn/latest/development/open-source-build.html)
 - [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)
-- [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)
-- [API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html)
+- [数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html) · [API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html)
 - [硬件连接与安全](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/hardware-and-safety.html)
 - [故障排查](https://4p-docs.readthedocs.io/zh-cn/latest/troubleshooting.html)
-- [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)
+- [版本、已知限制与支持](https://4p-docs.readthedocs.io/zh-cn/latest/release-and-support.html)
 
-许可证和第三方组件说明以本仓库的 `LICENSE` 及发布说明为准。
+许可证及第三方组件说明见本仓库 [LICENSE](LICENSE) 和公开发布说明。

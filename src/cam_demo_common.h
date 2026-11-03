@@ -79,6 +79,14 @@ struct Options {
   VideoCodec video_codec = VideoCodec::kH264;
   std::string url = "/PRR";
   int rtsp_base_port = kDefaultRtspBasePort;
+  // Shared defaults preserve cam_demo; sensor_demo selects its own defaults before YAML.
+  bool rtsp_enabled = true;
+  bool web_enabled = false;
+  std::string web_listen_address = "0.0.0.0";
+  uint32_t web_port = 80U;
+  uint32_t web_imu_push_hz = 50U;
+  uint32_t web_max_video_sessions = 8U;
+  uint32_t web_max_imu_clients = 2U;
   int rotate_degrees = kDefaultRotateDegrees;
   bool diagnostics = false;
   int diagnostic_interval_ms = kDefaultDiagnosticIntervalMs;

@@ -1235,7 +1235,6 @@ bool SensorBagRecorder::DropIncomingGroupLocked(uint64_t source_order,
   }
   drop_policy_stopped_.store(true, std::memory_order_release);
   stopping_.store(true, std::memory_order_release);
-  g_stop_requested.store(true, std::memory_order_release);
   queue_condition_.notify_all();
   return false;
 }
@@ -2144,7 +2143,6 @@ void SensorBagRecorder::SetFatalError(const std::string& message) noexcept {
     if (!fatal_error_.load(std::memory_order_relaxed)) {
       error_message_ = message;
       fatal_error_.store(true, std::memory_order_release);
-      g_stop_requested.store(true, std::memory_order_release);
     }
   }
   encoded_lock.unlock();
