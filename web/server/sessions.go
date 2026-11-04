@@ -84,7 +84,10 @@ func (v *videoSession) enqueue(a *accessUnit) {
 		go v.close()
 		return
 	}
-	if len(v.queue) >= 4 || v.bytes+len(a.data) > 4*1024*1024 || time.Since(a.arrived) > maxAge {
+	// A paced IDR can occupy the sender for almost maxAge. Retain the
+	// dependent frames arriving in that window, still bounded by bytes/age.
+	queueLimit := max(4, int((maxAge*time.Duration(v.hub.config.FPS)+time.Second-1)/time.Second))
+	if len(v.queue) >= queueLimit || v.bytes+len(a.data) > 4*1024*1024 || time.Since(a.arrived) > maxAge {
 		for _, old := range v.queue {
 			old.release()
 		}

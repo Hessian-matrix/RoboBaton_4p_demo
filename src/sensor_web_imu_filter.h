@@ -21,15 +21,18 @@ class PreviewImuFilter {
   bool Observe(const icm42670_sample_t& sample) noexcept {
     const std::array<double, 6> input{sample.accel_mps2[0], sample.accel_mps2[1],
         sample.accel_mps2[2], sample.gyro_rps[0], sample.gyro_rps[1], sample.gyro_rps[2]};
-    if (sample.struct_size != sizeof(sample) || sample.sample_timestamp_ns == 0 ||
+    const uint64_t now = sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST
+        ? sample.sample_raw_ns : sample.sample_monotonic_ns;
+    if (sample.struct_size != sizeof(sample) || now == 0 ||
+        (sample.timestamp_mode != ICM42670_TIMESTAMP_MODE_HOST &&
+         sample.timestamp_mode != ICM42670_TIMESTAMP_MODE_TMST) ||
         !std::all_of(input.begin(), input.end(), [](double v) { return std::isfinite(v); })) {
       timestamp_ = 0;
       stages_.back().fill(std::numeric_limits<double>::quiet_NaN());
       return false;
     }
-    const uint64_t now = sample.sample_timestamp_ns;
-    if (timestamp_ == 0 || sample.sample_sequence <= sequence_ || now <= timestamp_ ||
-        now - timestamp_ > 100000000ULL) {
+    if (timestamp_ == 0 || generation_ != sample.session_generation || mode_ != sample.timestamp_mode ||
+        sample.sample_sequence <= sequence_ || now <= timestamp_ || now - timestamp_ > 100000000ULL) {
       for (auto& stage : stages_) stage = input;
     } else {
       const double step = angular_rate_ * (static_cast<double>(now - timestamp_) * 1e-9);
@@ -43,6 +46,7 @@ class PreviewImuFilter {
     }
     timestamp_ = now;
     sequence_ = sample.sample_sequence;
+    generation_ = sample.session_generation; mode_ = sample.timestamp_mode;
     return true;
   }
 
@@ -54,6 +58,7 @@ class PreviewImuFilter {
   double angular_rate_;
   uint64_t timestamp_ = 0;
   uint64_t sequence_ = 0;
+  uint32_t generation_ = 0, mode_ = ICM42670_TIMESTAMP_MODE_HOST;
   std::array<std::array<double, 6>, 4> stages_{};
 };
 }  // namespace robobaton_demo::sensor_web

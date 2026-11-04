@@ -90,7 +90,13 @@ typedef struct sc132_frame_set {
 
 /* Frame-set reserved metadata, ABI 2.1: RAW low/high words, uncertainty ns,
  * acquisition generation, and validity magic. Public timestamps stay realtime.
- * RAW is the earliest hardware trigger; uncertainty includes group skew.
+ * Default observer RAW is the earliest mapped hardware trigger; uncertainty
+ * includes group skew. SC132_TIMESTAMP_PATH=official instead reports
+ * the same-frame RAW IRQ timestamp minus AON tv - trig_tv. Its physical error
+ * is unbounded: uncertainty is UINT32_MAX and timing validity is zero (not
+ * SC132_GROUP_TIMING_MAGIC). Bounded FIFO FSYNC association is unsupported.
+ * SC132_TIMESTAMP_PATH is read once at startup: observer (default) or official.
+ * Invalid values fail startup. Official never starts the SIF MMIO observer.
  */
 #define SC132_GROUP_RAW_LO 0U
 #define SC132_GROUP_RAW_HI 1U
@@ -101,9 +107,11 @@ typedef struct sc132_frame_set {
 
 /*
  * DMA 帧只允许只读访问；以下合同明确时间域、借用引用和跨回调保留规则。
- * timestamp_ns 单位为 ns，属于 CLOCK_REALTIME 系统时间。VIN LPWM 硬件触发捕获
- * 经有界 VSYNC 寄存器交叉采样映射至 RAW，再按帧组统一桥接 realtime；不是收到帧或 IRQ 时刻。
- * 运行中跟随系统校时，允许回拨；缺少捕获或有效映射时停止，不使用到帧时间兜底。
+ * timestamp_ns 单位为 ns，属于 CLOCK_REALTIME 系统时间。默认 observer 路径将 VIN LPWM
+ * 捕获经有界 VSYNC 寄存器交叉采样映射至 RAW，再按帧组统一桥接 realtime。
+ * SC132_TIMESTAMP_PATH=official 使用同一 out_img.info 的 RAW IRQ timestamps 减去 AON
+ * tv - trig_tv；这是物理误差未知的估计，不授予有界 FSYNC timing validity。
+ * 两路径都跟随系统校时，允许回拨；元数据或映射无效时停止，不使用到帧时间兜底。
  * SC132_TRIGGER_MODE 仅接受 vin_lpwm；同域不表示已建立 IMU FSYNC 与曝光的硬件关联。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
  * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback

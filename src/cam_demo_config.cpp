@@ -47,6 +47,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
             << "  --frame-timeout-ms <ms> Frame-set pending timeout, default 100\n"
             << "  --trigger-mode <vin_lpwm> SC132 hardware trigger, default "
             << kDefaultSc132TriggerMode << "\n";
+  std::cout << "  --camera-timestamp-path <observer|official> Startup camera timestamp path, default observer\n";
   if (include_imu_options) {
     std::cout << "  --web/--no-web   Enable/disable HTTP, WebRTC and IMU preview (default on)\n"
               << "  --rtsp/--no-rtsp Enable/disable independent RTSP output (default off)\n"
@@ -54,14 +55,15 @@ void PrintUsage(const char* program, bool include_imu_options) {
               << "  --web-listen <IPv4> HTTP and ICE bind address, default 0.0.0.0\n";
     std::cout << "  " << SensorDemoYamlConfigRelativePath()
               << " YAML config is loaded before CLI options; missing file is created with defaults\n";
+    std::cout << "  YAML camera.auto_exposure: true|false; camera.exposure_time_us: positive microseconds (manual only); restart required\n";
     std::cout << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
               << kDefaultImuSampleRateHz << "\n";
 
-    std::cout << "  --imu-sample-drop-policy <allow-counted|strict> IMU timing sample-drop policy, default allow-counted\n";
+    std::cout << "  --imu-sample-drop-policy <allow-counted|strict> Invalid six-axis payload policy, default allow-counted\n";
+    std::cout << "  --imu-timestamp-mode <host|tmst> Kernel IIO timestamp mode, default host\n";
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
     std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
-    std::cout << "  --fsync Capture shared LPWM rising edges and publish trigger/sample associations (800/1600 Hz)\n";
     std::cout << "  --record-bag <absolute-path> Write one ROS1 bag while sensor_demo runs\n";
     std::cout << "  --record-mp4-dir <absolute-directory> Store RTSP H.264 plus exact timestamp indexes and IMU CSV\n";
     std::cout << "  --record-frame-skip <0|1> With --record-bag, 0 saves every frame-set, 1 saves alternate frame-sets; default 0\n";
@@ -162,6 +164,12 @@ uint32_t ParseImuSampleDropPolicy(const std::string& text) {
   }
   throw std::invalid_argument(
       "--imu-sample-drop-policy must be allow-counted or strict");
+}
+
+uint32_t ParseImuTimestampMode(const std::string& text) {
+  if (text == "host") return ICM42670_TIMESTAMP_MODE_HOST;
+  if (text == "tmst") return ICM42670_TIMESTAMP_MODE_TMST;
+  throw std::invalid_argument("--imu-timestamp-mode must be host or tmst");
 }
 
 // 将 sensor_demo 的启动顺序文本收敛为内部强类型枚举。
@@ -345,9 +353,6 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
       options.video_codec != VideoCodec::kH264) {
     throw std::invalid_argument("MP4 recording requires --codec h264");
   }
-  if (options.fsync_enabled && options.imu_sample_rate_hz < 800U) {
-    throw std::invalid_argument("--fsync requires 800 or 1600 Hz");
-  }
   if (options.imu_print_rate_hz > options.imu_sample_rate_hz) {
     throw std::invalid_argument("--print-rate-hz must not exceed --sample-rate-hz");
   }
@@ -357,6 +362,13 @@ void ValidateOptions(const Options& options, bool record_frame_skip_set) {
   }
   if (options.trigger_mode != "vin_lpwm") {
     throw std::invalid_argument("--trigger-mode must be vin_lpwm");
+  }
+  if (options.camera_timestamp_path != "observer" && options.camera_timestamp_path != "official") {
+    throw std::invalid_argument("--camera-timestamp-path must be observer or official");
+  }
+  if (options.imu_timestamp_mode != ICM42670_TIMESTAMP_MODE_HOST &&
+      options.imu_timestamp_mode != ICM42670_TIMESTAMP_MODE_TMST) {
+    throw std::invalid_argument("--imu-timestamp-mode must be host or tmst");
   }
   if (!options.capture_directory.empty() && options.capture_directory.front() != '/') {
     throw std::invalid_argument("--capture-dir/capture.save_path path must be absolute");
@@ -438,6 +450,10 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       options.web_port = ParseUint32(RequireValue(argc, argv, &i, "--web-port"), "--web-port");
     } else if (accept_imu_options && arg == "--web-listen") {
       options.web_listen_address = RequireValue(argc, argv, &i, "--web-listen");
+    } else if (arg == "--camera-timestamp-path") {
+      options.camera_timestamp_path = RequireValue(argc, argv, &i, "--camera-timestamp-path");
+    } else if (accept_imu_options && arg == "--imu-timestamp-mode") {
+      options.imu_timestamp_mode = ParseImuTimestampMode(RequireValue(argc, argv, &i, "--imu-timestamp-mode"));
     } else if (accept_imu_options && arg == "--sample-rate-hz") {
       options.imu_sample_rate_hz =
           ParseUint32(RequireValue(argc, argv, &i, "--sample-rate-hz"), "--sample-rate-hz");
@@ -454,8 +470,6 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       sensor_config_state.imu_print_rate_was_set = true;
     } else if (accept_imu_options && arg == "--print-metrics") {
       options.imu_print_metrics = true;
-    } else if (accept_imu_options && arg == "--fsync") {
-      options.fsync_enabled = true;
     } else if (accept_imu_options && arg == "--record-bag") {
       if (cli_parse_state.record_mp4_set) {
         throw std::invalid_argument("--record-bag and --record-mp4-dir are mutually exclusive");
@@ -524,10 +538,16 @@ Options ParseSensorDemoCommandLineWithConfig(int argc, char** argv, Options opti
   return ParseCommandLineImpl(argc, argv, true, std::move(options), sensor_config_state);
 }
 
-// 功能：把触发模式写入 libsc132 使用的环境变量。
-// 输入：options.trigger_mode，只接受 vin_lpwm。
-// 副作用：设置进程内环境变量 SC132_TRIGGER_MODE；触发线路由 libsc132 的板级绑定决定。
+// Configure the startup-only camera timestamp path and trigger ownership.
+// Both selectors are written before libsc132 starts; capture does not hot-swap them.
 void ConfigureSc132TriggerMode(const Options& options) {
+  if (options.camera_timestamp_path != "observer" && options.camera_timestamp_path != "official") {
+    throw std::invalid_argument("camera_timestamp_path must be observer or official");
+  }
+  if (setenv("SC132_TIMESTAMP_PATH", options.camera_timestamp_path.c_str(), 1) != 0) {
+    throw std::runtime_error("set SC132_TIMESTAMP_PATH failed");
+  }
+  std::cout << "SC132_TIMESTAMP_PATH=" << options.camera_timestamp_path << " (startup only)\n";
   if (setenv(kSc132TriggerModeEnv, options.trigger_mode.c_str(), 1) != 0) {
     throw std::runtime_error("set SC132_TRIGGER_MODE failed");
   }

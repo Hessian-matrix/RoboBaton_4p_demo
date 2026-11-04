@@ -1,0 +1,13 @@
+# License scope
+
+Unless otherwise stated, the source code, scripts, configuration files, and documentation authored in this repository are licensed under the Apache License 2.0 in `LICENSE`.
+
+Precompiled vendor shared libraries under `lib/` and copies of those libraries in packaged runtime directories are excluded from the Apache License 2.0. They are distributed only for use with RoboBaton 4P hardware and its supported system software. They may not be redistributed separately, reverse engineered, or ported to unauthorized hardware, except where applicable law requires otherwise.
+
+The embedded `sensor_web` service includes the Go standard library and third-party Go modules under their own licenses, not the repository's Apache-2.0 grant. `web/dependencies.lock.json` identifies the exact Go 1.27.3 toolchain, all 32 selected modules, module content/go.mod checksums, license-file hashes, and which 22 modules contribute runtime packages. `web/THIRD_PARTY_NOTICES.txt` retains upstream license/notice/patent texts and source-file copyright attributions, including upstream test/tool dependencies for complete graph traceability. These cover MIT, BSD, ISC, Apache-2.0, and CC0 material; Pion's top-level MIT license is not a license for the whole graph.
+
+The notice texts are copied from the exact module archives authenticated by the Go checksum database and from the Go 1.27.3 distribution. Archive URLs and available upstream commit metadata are recorded in the lock. Per-file REUSE declarations and additional license texts are retained, including Pion's BSD-derived utilities, Go's vendored standard-library dependencies, and the YAML modules' MIT/Apache notices. No third-party source or license text is modified.
+
+Runtime packages and CMake installs include `LICENSE`, this scope statement, and `licenses/sensor_web/{THIRD_PARTY_NOTICES.txt,dependencies.lock.json}`. The service executable contains its browser assets; no external asset tree, MediaMTX, compiler, or dependency installer is delivered. Builds use an explicitly installed exact compiler, `GOTOOLCHAIN=local`, and an already provisioned module cache; no runtime downloads are required.
+
+The package verifier reads the service's generated Go build information and linked application-version/source-digest strings directly from its AArch64 ELF. The source digest covers `VERSION`, the Web build script, and recursive Web source/assets/lock/notices (excluding output binaries/caches). Keep the service's Go ELF symbols intact; unlike the six C++ demos it must not be stripped. This binds stale-asset detection to the binary rather than trusting a sidecar JSON declaration.

@@ -9,6 +9,7 @@
 
 #include "cam_demo_common.h"
 #include "prrtsp_v2.h"
+#include "imu_realtime.h"
 
 namespace robobaton_demo {
 
@@ -39,23 +40,13 @@ struct H264Mp4RecorderStats {
 struct H264Mp4SourceHealth {
   uint64_t samples = 0U;
   uint64_t invalid_samples = 0U;
-  uint64_t invalid_packet_drops = 0U;
+  icm42670_runtime_health_t producer = ICM42670_RUNTIME_HEALTH_INIT;
   uint64_t timestamp_duplicates = 0U;
   uint64_t timestamp_regressions = 0U;
   uint64_t sequence_gaps = 0U;
   uint64_t sequence_duplicates = 0U;
   uint64_t sequence_regressions = 0U;
-  uint32_t gpio_event_gap_count = 0U;
-  uint32_t fifo_overflow_count = 0U;
-  uint64_t timing_sample_drops = 0U;
-  uint32_t max_timestamp_uncertainty_us = 0U;
-  uint32_t max_consecutive_drops = 0U;
-  uint32_t uncertainty_over_200_drops = 0U;
-  uint32_t producer_session_generation = 0U;
-  uint64_t producer_published_samples = 0U;
-  bool producer_final_health_valid = false;
-  bool mapper_counter_valid = false;
-  // Callback-window evidence excludes losses outside the admitted first/last sample.
+  // Dynamic recordings certify callback continuity, not the producer STOP cohort.
   bool callback_window_valid = false;
 };
 
@@ -82,7 +73,6 @@ struct H264Mp4FinishResult {
   }
 };
 
-struct FsyncAssociationRecord;
 // Optional sidecar that stores the already encoded RTSP H.264 stream without re-encoding.
 class H264Mp4Recorder final {
  public:
@@ -96,8 +86,7 @@ class H264Mp4Recorder final {
   // Dynamic sessions ignore only pre-first-IDR VCLs, retaining standalone SPS/PPS.
   void ObserveEncodedFrame(int camera_id, const prrtsp_encoded_frame_v2& frame,
                            bool skip_leading_inter_frames = false) noexcept;
-  void ObserveImu(const icm42670_sample_t& sample) noexcept;
-  void ObserveFsync(const FsyncAssociationRecord& record) noexcept;
+  void ObserveImu(const OutputImuSample& sample) noexcept;
   void ObserveFrameSet(const sc132_frame_set_t& set) noexcept;
   void SetSourceHealth(const H264Mp4SourceHealth& health) noexcept;
   H264Mp4FinishResult Finish(bool session_success) noexcept;

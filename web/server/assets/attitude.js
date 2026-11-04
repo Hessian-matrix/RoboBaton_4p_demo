@@ -64,10 +64,11 @@ class AttitudeView {
   }
   sample(message) {
     if (!this.worker) return;
-    if (this.session !== message.session_id) { this.session = message.session_id; this.reset(); }
+    const sourceSession = `${message.session_id}:${message.source_generation}:${message.timestamp_mode}`;
+    if (this.session !== sourceSession) { this.session = sourceSession; this.reset(); }
     if (this.at && performance.now()-this.at > 500 && this.result) this.reset();
-    const sample = {type:'sample', epoch:this.epoch, session_id:message.session_id,
-      sample_sequence:message.sample_sequence, timestamp_ns:message.sample_timestamp_ns,
+    const sample = {type:'sample', epoch:this.epoch, session_id:sourceSession,
+      sample_sequence:message.sample_sequence, timestamp_ns:message.timestamp_mode === 'tmst' ? message.sample_raw_ns : message.sample_monotonic_ns,
       accel_mps2:message.accel_mps2, gyro_rps:message.gyro_rps,
       attitude_accel_mps2:message.attitude_accel_mps2, attitude_gyro_rps:message.attitude_gyro_rps};
     // One sample in flight plus one replaceable latest sample bounds worker lag.

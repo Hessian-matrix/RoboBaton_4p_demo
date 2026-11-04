@@ -5,11 +5,11 @@
 #include <string>
 #include "cam_demo_common.h"
 #include "prrtsp_v2.h"
+#include "imu_realtime.h"
 
 namespace robobaton_demo {
 class SensorBagRecorder;
 class H264Mp4Recorder;
-struct FsyncAssociationRecord;
 
 struct RecordingCommand {
   uint32_t action = 0;
@@ -36,8 +36,7 @@ class SensorRecording final {
   std::string StatusJson() const;
   bool Saving() const noexcept;
   void ObserveFrameSet(const sc132_frame_set_t& set) noexcept;
-  void ObserveImu(const icm42670_sample_t& sample) noexcept;
-  void ObserveHardwareFsync(const icm42670_fsync_event_t& event) noexcept;
+  void ObserveImu(const OutputImuSample& sample) noexcept;
   void ObserveEncoded(int id, const prrtsp_encoded_frame_v2& frame) noexcept;
   // Called after camera consumers and IMU are quiescent, before SC blocking stop.
   void Shutdown(bool source_success, const icm42670_runtime_health_t* health = nullptr) noexcept;

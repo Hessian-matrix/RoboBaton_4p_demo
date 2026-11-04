@@ -3,6 +3,7 @@
 #include <memory>
 #include "cam_demo_common.h"
 #include "prrtsp_v2.h"
+#include "imu_realtime.h"
 
 namespace robobaton_demo {
 class MediaChannels;
@@ -20,7 +21,7 @@ class SensorWebRuntime final {
   void BeginShutdown() noexcept;
   void Stop() noexcept;
   void ObserveEncoded(int camera_id, const prrtsp_encoded_frame_v2& frame) noexcept;
-  void ObserveImu(const icm42670_sample_t& sample, uint64_t arrival_ns) noexcept;
+  void ObserveImu(const OutputImuSample& sample, uint64_t arrival_ns) noexcept;
   void PublishStatus(bool capture_running, bool encoding_running, bool saving,
                      bool source_failed, bool rtsp_degraded) noexcept;
   static void EncodedObserver(int camera_id, const prrtsp_encoded_frame_v2& frame,

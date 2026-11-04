@@ -30,8 +30,13 @@ std::string StageError(int camera_id, const char* stage, int result) {
   return stream.str();
 }
 
+bool HasVendorFrameIndexApp9(const uint8_t* data, size_t size) noexcept {
+  return size >= 8U && data[0] == 0xFFU && data[1] == 0xD8U &&
+         data[2] == 0xFFU && data[3] == 0xE9U && data[4] == 0U && data[5] == 4U;
+}
+
 bool TryResolveJpegPayloadLength(const uint8_t* data, size_t driver_size,
-                                 size_t capacity, size_t* payload) {
+                                 size_t capacity, size_t minimum_end, size_t* payload) {
   if (driver_size == 0U) {
     throw std::runtime_error("hardware JPEG malformed output: missing payload size");
   }
@@ -42,16 +47,32 @@ bool TryResolveJpegPayloadLength(const uint8_t* data, size_t driver_size,
       (driver_size >= 2U && data[1] != 0xD8U)) {
     throw std::runtime_error("hardware JPEG malformed output: missing SOI");
   }
-  if (driver_size < 4U) {
-    return false;
+  if (driver_size >= minimum_end && data[driver_size - 2U] == 0xFFU &&
+      data[driver_size - 1U] == 0xD9U) {
+    *payload = driver_size;
+    return true;
   }
-  // 部分 X5 Media Codec 固件把 vstream_buf.size 填成输出缓冲容量；真实 JPEG
-  // 负载以最后一个 EOI 标记结束，避免把尾部填充写入 bag。
-  for (size_t candidate = driver_size; candidate >= 4U; --candidate) {
-    if (data[candidate - 2U] == 0xFFU && data[candidate - 1U] == 0xD9U) {
-      *payload = candidate;
+  // 从尾部按块搜索，保留最后一个 EOI；memchr 跳过容量尾部填充。
+  // minimum_end 限定尚未检查的字节，包含前一分片末尾与新分片的交界。
+  constexpr size_t kScanBlockSize = 64U * 1024U;
+  size_t block_end = driver_size;
+  while (block_end >= minimum_end) {
+    const size_t block_size = std::min(kScanBlockSize, block_end - minimum_end + 1U);
+    const uint8_t* cursor = data + block_end - block_size;
+    const uint8_t* const end = data + block_end;
+    size_t last_eoi = 0U;
+    while (cursor < end) {
+      const auto* marker = static_cast<const uint8_t*>(
+          std::memchr(cursor, 0xD9, static_cast<size_t>(end - cursor)));
+      if (marker == nullptr) break;
+      if (marker[-1] == 0xFFU) last_eoi = static_cast<size_t>(marker - data) + 1U;
+      cursor = marker + 1;
+    }
+    if (last_eoi != 0U) {
+      *payload = last_eoi;
       return true;
     }
+    block_end -= block_size;
   }
   return false;
 }
@@ -67,9 +88,7 @@ void AppendJpegSlice(const uint8_t* data, size_t size, size_t jpeg_start,
     *prefix_checked = true;
     // X5 JPU 在 SOI 后写入长度 4 的 APP9，内容仅为私有 16-bit frameIdx。
     // 该字段不参与解码或公开时间合同；省略它，不更改编码表、扫描数据或其他 APP。
-    if (prefix[0] == 0xFFU && prefix[1] == 0xD8U &&
-        prefix[2] == 0xFFU && prefix[3] == 0xE9U &&
-        prefix[4] == 0U && prefix[5] == 4U) {
+    if (HasVendorFrameIndexApp9(prefix.data(), prefix.size())) {
       payload->resize(jpeg_start);
       payload->insert(payload->end(), prefix.begin(), prefix.begin() + 2);
       data += prefix.size() - buffered;
@@ -243,6 +262,15 @@ struct X5JpegEncoder::Impl {
     slot->public_slot.uv_capacity = slot->graph.size[1];
     slot->public_slot.y_fd = slot->graph.fd[0];
     slot->public_slot.uv_fd = slot->graph.fd[1];
+    const uint64_t y_address = reinterpret_cast<uint64_t>(slot->public_slot.y_data);
+    const uint64_t uv_address = reinterpret_cast<uint64_t>(slot->public_slot.uv_data);
+    slot->public_slot.contiguous_planes = slot->graph.is_contig != 0 &&
+        slot->graph.plane_cnt == 2 && uv_address >= y_address &&
+        uv_address - y_address == slot->public_slot.y_capacity &&
+        slot->public_slot.uv_phys >= slot->public_slot.y_phys &&
+        slot->public_slot.uv_phys - slot->public_slot.y_phys == slot->public_slot.y_capacity &&
+        slot->public_slot.uv_capacity <=
+            std::numeric_limits<size_t>::max() - slot->public_slot.y_capacity;
     slot->public_slot.submitted_to_hardware = false;
     if (slot->public_slot.y_data == nullptr || slot->public_slot.uv_data == nullptr ||
         slot->public_slot.y_phys == 0U || slot->public_slot.uv_phys == 0U ||
@@ -462,6 +490,23 @@ X5JpegNv12CopyResult X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame,
                 frame.height, frame.stride, slot->stride, contiguous_rows, &copy_result);
   CopyNv12Plane(static_cast<const uint8_t*>(frame.uv_data), slot->uv_data, frame.width,
                 frame.height / 2U, frame.stride, slot->stride, contiguous_rows, &copy_result);
+  return copy_result;
+}
+
+void X5JpegEncoder::FlushSlotForDevice(const X5JpegInputSlot* slot) {
+  if (slot == nullptr) {
+    throw std::runtime_error("hardware JPEG missing staging slot");
+  }
+  // Only one SDK allocation with adjacent Y/UV mappings permits a combined DMA sync.
+  // Plane descriptors may differ even when they refer to that same allocation.
+  if (slot->contiguous_planes) {
+    const int result = hb_mem_flush_buf_with_vaddr(
+        reinterpret_cast<uint64_t>(slot->y_data), slot->y_capacity + slot->uv_capacity);
+    if (result != 0) {
+      throw std::runtime_error(StageError(slot->camera_id, "flush_nv12", result));
+    }
+    return;
+  }
   int result = hb_mem_flush_buf_with_vaddr(
       reinterpret_cast<uint64_t>(slot->y_data), slot->y_capacity);
   if (result != 0) {
@@ -472,7 +517,6 @@ X5JpegNv12CopyResult X5JpegEncoder::CopyNv12ToSlot(const QueuedFrame& frame,
   if (result != 0) {
     throw std::runtime_error(StageError(slot->camera_id, "flush_uv", result));
   }
-  return copy_result;
 }
 
 
@@ -550,12 +594,29 @@ void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
       if (output.vstream_buf.vir_ptr == nullptr) {
         throw std::runtime_error("hardware JPEG malformed output: missing SOI");
       }
-      AppendJpegSlice(output.vstream_buf.vir_ptr, output_size, jpeg_start,
-                      &prefix_checked, payload);
+      const uint8_t* const output_data = output.vstream_buf.vir_ptr;
       size_t payload_size = 0U;
-      const bool complete = TryResolveJpegPayloadLength(
-          payload->data() + jpeg_start, payload->size() - jpeg_start,
-          impl_->bitstream_capacity, &payload_size);
+      bool complete = false;
+      if (output_count == 0U) {
+        // 完整首输出先定位 EOI，再拷贝有效 JPEG；私有 APP9 内的字节不作为 EOI。
+        const size_t minimum_end = HasVendorFrameIndexApp9(output_data, output_size)
+                                       ? 10U : 4U;
+        complete = TryResolveJpegPayloadLength(output_data, output_size,
+            impl_->bitstream_capacity, minimum_end, &payload_size);
+      }
+      const bool prefix_was_checked = prefix_checked;
+      AppendJpegSlice(output_data, complete ? payload_size : output_size, jpeg_start,
+                      &prefix_checked, payload);
+      if (complete) {
+        payload_size = payload->size() - jpeg_start;
+      } else if (output_count != 0U) {
+        // APP9 尚未判定时最多缓存 7 字节；移除后从头检查，其余只查新增部分。
+        const size_t minimum_end = prefix_was_checked
+            ? std::max(size_t{4U}, current_jpeg_size + 1U) : 4U;
+        complete = TryResolveJpegPayloadLength(
+            payload->data() + jpeg_start, payload->size() - jpeg_start,
+            impl_->bitstream_capacity, minimum_end, &payload_size);
+      }
       const bool last_slice = IsLastJpegOutputSlice(info);
       if (!complete && last_slice) {
         throw std::runtime_error("hardware JPEG malformed output: missing EOI");

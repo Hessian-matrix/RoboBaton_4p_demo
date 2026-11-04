@@ -52,9 +52,9 @@ add_custom_target(sensor_web ALL
   VERBATIM
 )
 
-set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0")
+set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5.0.0")
 if(NOT EXISTS "${ICM42670_SO}")
-  message(FATAL_ERROR "Missing ${ICM42670_SO}. Build and synchronize the ABI 3 producer and its relative library links into this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${ICM42670_SO}. Build and synchronize the ABI 5 producer and its relative library links into this demo's lib/ directory.")
 endif()
 
 set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0")
@@ -299,8 +299,8 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/web/THIRD_PARTY_NOTICES.txt"
         DESTINATION licenses/sensor_web)
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.3"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3"

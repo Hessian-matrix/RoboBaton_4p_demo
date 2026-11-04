@@ -267,28 +267,41 @@ class SensorWebRuntime::Impl {
     q.head.store(head+1, std::memory_order_release);
   }
 
-  void Imu(const icm42670_sample_t& sample, uint64_t now) noexcept {
+  void Imu(const OutputImuSample& mapped, uint64_t now) noexcept {
+    const auto& sample = mapped.native;
     if (!accepting.load(std::memory_order_acquire) || sample.struct_size != sizeof(sample)) return;
     // Observe every native sample, including while no browser subscribes. Only
     // serialization is decimated; raw telemetry and saved samples stay intact.
     (void)imu_filter.Observe(sample);
     if (!(demand.load() & 0x10U) || now-last_imu_ns < 1000000000ULL/options.web_imu_push_hz) return;
     last_imu_ns = now;
-    std::array<uint8_t, 176> message{};
+    std::array<uint8_t, 256> message{};
     Header(message.data(), kImuMagic, message.size(), generation);
     Put64(message.data()+16, sample.sample_sequence);
-    Put64(message.data()+24, sample.sample_timestamp_ns); Put64(message.data()+32, sample.host_timestamp_ns);
+    Put64(message.data()+24, mapped.realtime_ns); Put64(message.data()+32, sample.observation_monotonic_ns);
     PutDouble(message.data()+40, sample.temperature_c);
     for (size_t i=0; i<3; ++i) {
       PutDouble(message.data()+48+8*i, sample.accel_mps2[i]);
       PutDouble(message.data()+72+8*i, sample.gyro_rps[i]);
     }
     for (size_t i=0; i<6; ++i) PutDouble(message.data()+128+8*i, imu_filter.Values()[i]);
-    Put32(message.data()+96, sample.timestamp_uncertainty_us);
-    Put32(message.data()+100, sample.gpio_event_gap_count);
-    Put32(message.data()+104, sample.fifo_overflow_count);
-    Put32(message.data()+108, sample.mapper_failure_count);
+    Put32(message.data()+96, sample.timestamp_uncertainty_ns);
+    Put32(message.data()+100, sample.session_generation);
+    Put32(message.data()+104, sample.burst_flags);
+    Put32(message.data()+108, sample.timestamp_mode);
     Put64(message.data()+112, imu_drops.load());
+    Put64(message.data()+120, sample.evidence_id);
+    Put64(message.data()+176, sample.sample_monotonic_ns);
+    Put64(message.data()+184, sample.sample_raw_ns);
+    Put64(message.data()+192, sample.burst_complete_raw_ns);
+    Put64(message.data()+200, sample.estimated_period_ns);
+    Put64(message.data()+208, mapped.bridge_monotonic_ns);
+    Put64(message.data()+216, mapped.bridge_raw_ns);
+    Put64(message.data()+224, mapped.bridge_realtime_ns);
+    Put64(message.data()+232, mapped.bridge_uncertainty_ns);
+    Put32(message.data()+240, sample.timestamp_source);
+    Put32(message.data()+244, sample.packet_flags);
+    Put32(message.data()+248, sample.fifo_tmst);
     if (send(imu[0], message.data(), message.size(), MSG_DONTWAIT | MSG_NOSIGNAL) != static_cast<ssize_t>(message.size())) imu_drops.fetch_add(1);
   }
 
@@ -332,7 +345,7 @@ void SensorWebRuntime::SetRecording(SensorRecording* recording) noexcept { recor
 void SensorWebRuntime::BeginShutdown() noexcept { if (impl_) impl_->BeginShutdown(); }
 void SensorWebRuntime::Stop() noexcept { if (impl_) { impl_->Stop(); impl_.reset(); } }
 void SensorWebRuntime::ObserveEncoded(int id, const prrtsp_encoded_frame_v2& frame) noexcept { if (impl_) impl_->Encoded(id, frame); }
-void SensorWebRuntime::ObserveImu(const icm42670_sample_t& sample, uint64_t arrival) noexcept { if (impl_) impl_->Imu(sample, arrival); }
+void SensorWebRuntime::ObserveImu(const OutputImuSample& sample, uint64_t arrival) noexcept { if (impl_) impl_->Imu(sample, arrival); }
 void SensorWebRuntime::PublishStatus(bool capture, bool encoding, bool saving, bool failed, bool rtsp_degraded) noexcept {
   if (impl_) impl_->status_bits.store((capture?1U:0U) | (encoding?2U:0U) | (saving?4U:0U) | (failed?8U:0U) | (rtsp_degraded?16U:0U));
 }

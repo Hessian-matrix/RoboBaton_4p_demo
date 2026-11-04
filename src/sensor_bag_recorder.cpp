@@ -315,6 +315,8 @@ std::string SessionConfigJson(const Options& options) {
          << "\"width\":" << OutputWidth(options) << ','
          << "\"height\":" << OutputHeight(options) << ','
          << "\"camera_fps\":" << options.fps << ','
+         << "\"auto_exposure\":" << (options.auto_exposure ? "true" : "false") << ','
+         << "\"exposure_time_us\":" << options.exposure_time_us << ','
          << "\"record_frame_skip\":" << options.record_frame_skip << ','
          << "\"drop_policy_min_group_interval\":" << options.record_drop_min_interval << ','
          << "\"image_persistence_fps\":"
@@ -322,6 +324,8 @@ std::string SessionConfigJson(const Options& options) {
          << "\"jpeg_quality\":80,"
          << "\"imu_sample_rate_hz\":" << options.imu_sample_rate_hz << ','
          << "\"trigger_mode\":\"" << JsonEscape(options.trigger_mode) << "\","
+         << "\"camera_timestamp_path\":\"" << JsonEscape(options.camera_timestamp_path) << "\","
+         << "\"imu_timestamp_mode\":\"" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host") << "\","
          << "\"camera_timestamp_domain\":\""
          << TimestampDomainName(Sc132OutputTimestampDomain(options)) << "\","
          << "\"imu_timestamp_domain\":\""
@@ -453,7 +457,7 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
   }
   encoded_queue_count_ = 0U;
   encoded_input_closed_ = false;
-  imu_queue_.assign(kImuQueueCapacity, icm42670_sample_t{});
+  imu_queue_.assign(kImuQueueCapacity, OutputImuSample{});
   imu_queue_head_ = 0U;
   imu_queue_count_ = 0U;
   frame_queue_at_capacity_ = QueueAtCapacityTracker{};
@@ -486,7 +490,7 @@ void SensorBagRecorder::Start(const Options& options, const std::string& bag_pat
     imu_connection_ = writer_.AddConnection("/imu/data", "sensor_msgs/Imu",
                                             "6a62c6daae103f4ff57a132d6f95cec2",
                                             kImuDefinition);
-    fsync_connection_ = writer_.AddConnection("/robobaton/fsync", "std_msgs/String",
+    imu_timing_connection_ = writer_.AddConnection("/robobaton/imu/timing", "std_msgs/String",
         "992ce8a1687cec8c8bd883ec73ca41d1", kStringDefinition);
     session_config_connection_ = writer_.AddConnection(
         "/robobaton/session_config", "std_msgs/String",
@@ -799,7 +803,7 @@ void SensorBagRecorder::ObserveFrameSet(const sc132_frame_set_t& frame_set) {
   }
 }
 
-void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
+void SensorBagRecorder::ObserveImu(const OutputImuSample& sample) {
   if (!enabled_) {
     return;
   }
@@ -807,7 +811,7 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
     throw std::runtime_error(ErrorMessage());
   }
 
-  if (sample.struct_size != sizeof(sample)) {
+  if (sample.native.struct_size != sizeof(sample.native) || sample.realtime_ns == 0U) {
     SetFatalError("invalid IMU sample for bag recorder");
     throw std::runtime_error("invalid IMU sample for bag recorder");
   }
@@ -841,20 +845,6 @@ void SensorBagRecorder::ObserveImu(const icm42670_sample_t& sample) {
   }
 }
 
-void SensorBagRecorder::ObserveFsync(const FsyncAssociationRecord& record) {
-  if (!enabled_) return;
-  bool full = false;
-  {
-    std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
-    full = fsync_count_ == fsync_queue_.size();
-    if (!full) fsync_queue_[(fsync_head_ + fsync_count_++) % fsync_queue_.size()] = record;
-  }
-  if (full) {
-    SetFatalError("FSYNC bag queue full");
-    throw std::runtime_error("FSYNC bag queue full");
-  }
-  NotifyWriterOne(&writer_wakeup_mutex_, &writer_condition_, &writer_wakeup_generation_);
-}
 
 SensorBagFinishResult SensorBagRecorder::Finish(bool session_success) noexcept {
   if (!enabled_ || finished_) {
@@ -1419,7 +1409,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
   ApplyRecorderWorkerPriority(kRecorderWriterNice);
   std::vector<uint8_t> imu_payload;
   imu_payload.reserve(320U);
-  std::array<icm42670_sample_t, kWriterImuDrainBatch> imu_batch{};
+  std::array<OutputImuSample, kWriterImuDrainBatch> imu_batch{};
   std::vector<PendingEncodedWrite> pending_images;
   pending_images.reserve(kWriterImagePrefetchLimit);
   size_t pending_image_head = 0U;
@@ -1480,7 +1470,7 @@ void SensorBagRecorder::WriterEntry() noexcept {
       return false;
     }
   };
-  const auto write_imu_sample = [&](const icm42670_sample_t& sample) -> bool {
+  const auto write_imu_sample = [&](const OutputImuSample& sample) -> bool {
     try {
       WriteImuSample(sample, &imu_payload);
       image_burst_count = 0U;
@@ -1520,18 +1510,6 @@ void SensorBagRecorder::WriterEntry() noexcept {
     return imu_queue_count_;
   };
   while (!HasFatalError()) {
-    for (;;) {
-      FsyncAssociationRecord record;
-      {
-        std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
-        if (!fsync_count_) break;
-        record = fsync_queue_[fsync_head_]; fsync_head_ = (fsync_head_ + 1) % fsync_queue_.size(); --fsync_count_;
-      }
-      try {
-        char json[1024]; FormatFsyncAssociation(record, json, sizeof(json));
-        writer_.WriteMessage(fsync_connection_, RecordDataStamp(), MakeStringPayload(json));
-      } catch (const std::exception& error) { SetFatalError(error.what()); break; }
-    }
     if (pending_image_count() == 0U) {
       {
         std::unique_lock<RealtimeMutex> wake_lock(writer_wakeup_mutex_);
@@ -1743,7 +1721,7 @@ void SensorBagRecorder::ReleaseEncodedFrameJob(EncodedFrameJob* encoded) noexcep
   }
 }
 
-size_t SensorBagRecorder::PopImuBatch(icm42670_sample_t* samples,
+size_t SensorBagRecorder::PopImuBatch(OutputImuSample* samples,
                                       size_t max_samples) noexcept {
   if (samples == nullptr || max_samples == 0U) {
     return 0U;
@@ -1769,7 +1747,6 @@ bool SensorBagRecorder::WriterInputReady() noexcept {
   if (HasFatalError()) {
     return true;
   }
-  { std::lock_guard<RealtimeMutex> lock(fsync_mutex_); if (fsync_count_) return true; }
   {
     std::lock_guard<RealtimeMutex> lock(encoded_mutex_);
     if (!encoded_slots_.empty()) {
@@ -1804,8 +1781,7 @@ bool SensorBagRecorder::WriterInputsClosed() noexcept {
     std::lock_guard<RealtimeMutex> lock(imu_queue_mutex_);
     imu_empty = imu_queue_count_ == 0U;
   }
-  std::lock_guard<RealtimeMutex> lock(fsync_mutex_);
-  return encoded_closed && encoded_empty && imu_empty && !fsync_count_;
+  return encoded_closed && encoded_empty && imu_empty;
 }
 
 bool SensorBagRecorder::HasClosedEncodedOrderGap() noexcept {
@@ -1844,6 +1820,7 @@ SensorBagRecorder::EncodedFrameJob SensorBagRecorder::EncodeFrame(SensorBagFrame
   const X5JpegNv12CopyResult copy_result =
       jpeg_encoder_.CopyNv12ToSlot(job->raw_frame, job->jpeg_slot);
   job->raw_frame.Reset();
+  jpeg_encoder_.FlushSlotForDevice(job->jpeg_slot);
   ObserveCopyTiming(SteadyClockNowNs() - copy_start_ns, copy_result);
 
   const RosbagTime sensor_stamp = RosbagTimeFromNs(job->camera_timestamp_ns);
@@ -1956,14 +1933,15 @@ void SensorBagRecorder::WriteEncodedFrameToBag(const EncodedFrameJob& encoded,
   }
   ObserveWriterTiming(order_wait_ns, 0U, writer_hold_ns, true);
 }
-void SensorBagRecorder::WriteImuSample(const icm42670_sample_t& sample,
+void SensorBagRecorder::WriteImuSample(const OutputImuSample& output,
                                        std::vector<uint8_t>* payload) {
   if (payload == nullptr) {
     throw std::runtime_error("missing IMU payload buffer");
   }
+  const auto& sample = output.native;
   payload->clear();
   AppendHeader(payload, SequenceToRosSeq(sample.sample_sequence),
-               RosbagTimeFromNs(sample.sample_timestamp_ns), "robobaton_imu_link");
+               RosbagTimeFromNs(output.realtime_ns), "robobaton_imu_link");
   AppendF64(payload, 0.0);
   AppendF64(payload, 0.0);
   AppendF64(payload, 0.0);
@@ -1988,6 +1966,9 @@ void SensorBagRecorder::WriteImuSample(const icm42670_sample_t& sample,
   const RosbagTime record_stamp = RecordDataStamp();
   EnsureSessionConfigWritten(record_stamp);
   writer_.WriteMessage(imu_connection_, record_stamp, *payload);
+  char timing[1536];
+  FormatImuTiming(output, timing, sizeof(timing));
+  writer_.WriteMessage(imu_timing_connection_, record_stamp, MakeStringPayload(timing));
   const uint64_t writer_hold_ns = SteadyClockNowNs() - writer_hold_start_ns;
   {
     std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);

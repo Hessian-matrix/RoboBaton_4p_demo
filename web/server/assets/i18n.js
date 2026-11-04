@@ -115,7 +115,7 @@ const i18n = (() => {
     '实时遥测': 'Live telemetry',
     '数据过期 / 等待新样本': 'Stale / waiting for new samples',
     '异常': 'Invalid',
-    '{rate} Hz 原生 / ≤{limit} Hz 预览 · sequence {sequence} · 温度 {temperature} °C · 通知缺口 {gaps}（不等于样本丢失）': '{rate} Hz native / ≤{limit} Hz preview · sequence {sequence} · Temperature {temperature} °C · Notification gaps {gaps} (not sample loss)',
+    '{rate} Hz 原生 / ≤{limit} Hz 预览 · sequence {sequence} · 温度 {temperature} °C · 时钟 {mode} · burst {evidence}': '{rate} Hz native / ≤{limit} Hz preview · sequence {sequence} · Temperature {temperature} °C · Clock {mode} · Burst {evidence}',
     '设备状态不可用': 'Device status unavailable',
     '设备已连接': 'Device connected',
     '采集 {capture} · 编码 {encoding} · 保存 {saving} · RTSP {rtsp} · IMU {telemetry}': 'Capture {capture} · Encoding {encoding} · Saving {saving} · RTSP {rtsp} · IMU {telemetry}',

@@ -17,7 +17,7 @@ import (
 
 const (
 	videoMagic   = 0x53575631
-	imuMagic     = 0x53574931
+	imuMagic     = 0x53574932
 	controlMagic = 0x53574331
 	statusMagic  = 0x53575331
 	maxAU        = 2 * 1024 * 1024

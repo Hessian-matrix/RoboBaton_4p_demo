@@ -1,5 +1,4 @@
 #include "cam_demo_common.h"
-#include "realtime_mutex.h"
 
 #include <limits.h>
 #include <signal.h>
@@ -19,7 +18,6 @@
 #include <cstdio>
 #include <exception>
 #include <iostream>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -43,80 +41,46 @@ std::atomic<uint32_t> g_idle_wait_count{0U};
 
 
 struct IcmCallbackContext {
-  static constexpr std::size_t kPendingCapacity = 64U;
-
-  std::atomic<bool> accepting{true};
+  static constexpr uint64_t kPendingCapacity = 4096U;
+  std::array<icm42670_sample_t, kPendingCapacity> pending_samples{};
+  std::atomic<uint64_t> written{0U}, read{0U};
   std::atomic<bool> callback_failed{false};
   std::atomic<const char*> failure_reason{nullptr};
-  std::atomic<uint32_t> emitted{0U};
-  RealtimeMutex pending_mutex;
-  // 固定容量 FIFO 保持 burst 顺序并避免 callback 路径动态分配。
-  std::array<icm42670_sample_t, kPendingCapacity> pending_samples{};
-  std::size_t pending_head = 0U;
-  std::size_t pending_size = 0U;
-  ImuSampleObserver observer = nullptr;
-  void* observer_user = nullptr;
-  void (*fsync_observer)(const icm42670_fsync_event_t&, void*) = nullptr;
-  void* fsync_user = nullptr;
-  std::array<icm42670_fsync_event_t, kPendingCapacity> pending_events{};
-  size_t event_head = 0, event_count = 0;
+  uint64_t emitted = 0U;
 
   void Fail(const char* reason) noexcept {
     const char* expected = nullptr;
     failure_reason.compare_exchange_strong(expected, reason, std::memory_order_acq_rel);
     callback_failed.store(true, std::memory_order_release);
-    accepting.store(false, std::memory_order_release);
+  }
+
+  bool Pop(icm42670_sample_t& sample) noexcept {
+    const uint64_t index = read.load(std::memory_order_relaxed);
+    if (index == written.load(std::memory_order_acquire)) return false;
+    sample = pending_samples[index % kPendingCapacity];
+    read.store(index + 1U, std::memory_order_release);
+    return true;
   }
 };
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "IMU adapter requires lock-free queue indices");
 
-// callback 只发布数据或首错；stop/destroy 由 lifecycle owner 执行。
+// Serial producer publishes fixed slots; only the consumer invokes observers.
 void IcmCallback(const icm42670_sample_t* sample, void* user) noexcept {
   auto* context = static_cast<IcmCallbackContext*>(user);
-  if (context == nullptr || !context->accepting.load(std::memory_order_acquire)) {
+  if (context == nullptr || context->callback_failed.load(std::memory_order_acquire)) return;
+  if (sample == nullptr || sample->struct_size != sizeof(*sample)) {
+    context->Fail("invalid_sample");
     return;
   }
-  try {
-    if (sample == nullptr || sample->struct_size != sizeof(*sample)) {
-      // 无效输入直接关闭 admission，避免在 producer 线程分配异常对象。
-      context->Fail("invalid_sample");
-      return;
-    }
-    {
-      std::lock_guard<RealtimeMutex> lock(context->pending_mutex);
-      // 在同一锁域复核 admission 并 enqueue。
-      if (!context->accepting.load(std::memory_order_acquire)) {
-        return;
-      }
-      if (context->pending_size == IcmCallbackContext::kPendingCapacity) {
-        // 容量耗尽不能覆盖或丢弃旧样本：关闭 admission，让 owner 返回非零。
-        context->Fail("sample_queue_full");
-        return;
-      }
-      const std::size_t tail =
-          (context->pending_head + context->pending_size) %
-          IcmCallbackContext::kPendingCapacity;
-      context->pending_samples[tail] = *sample;
-      ++context->pending_size;
-    }
-  } catch (...) {
-    context->Fail("sample_callback_exception");
+  const uint64_t index = context->written.load(std::memory_order_relaxed);
+  if (index - context->read.load(std::memory_order_acquire) ==
+      IcmCallbackContext::kPendingCapacity) {
+    context->Fail("sample_queue_full");
+    return;
   }
-}
-
-void IcmFsyncCallback(const icm42670_fsync_event_t* event, void* user) noexcept {
-  auto* context = static_cast<IcmCallbackContext*>(user);
-  if (!context->accepting.load(std::memory_order_acquire)) return;
-  try {
-    std::lock_guard<RealtimeMutex> lock(context->pending_mutex);
-    if (!context->accepting.load(std::memory_order_acquire)) return;
-    if (!event || event->struct_size != sizeof(*event)) {
-      context->Fail("invalid_fsync_event"); return;
-    }
-    if (context->event_count == context->pending_events.size()) {
-      context->Fail("fsync_queue_full"); return;
-    }
-    context->pending_events[(context->event_head + context->event_count++) % context->pending_events.size()] = *event;
-  } catch (...) { context->Fail("fsync_callback_exception"); }
+  context->pending_samples[index % IcmCallbackContext::kPendingCapacity] = *sample;
+  context->written.store(index + 1U, std::memory_order_release);
 }
 
 }  // namespace
@@ -137,13 +101,13 @@ std::size_t ImuPendingCapacityForTest() {
 
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
                    void* observer_user) {
-  if (options.sample_rate_hz == 0U) {
-    return 1;
+  if (options.final_health != nullptr) {
+    *options.final_health = ICM42670_RUNTIME_HEALTH_INIT;
   }
+  if (options.sample_rate_hz == 0U) return 1;
 
 #ifndef RELEASE008_TESTING
-  // The 64-sample adapter allows 40ms at 1600Hz; normal-priority CPU load must
-  // not starve its drain owner. Acquisition and GPIO IRQ threads remain above it.
+  // The consumer drains below the library acquisition priority, including STOP.
   const sched_param scheduling{3};
   if (sched_setscheduler(0, SCHED_RR, &scheduling) != 0) {
     std::cerr << "fatal: schedule IMU consumer: " << std::strerror(errno) << "\n";
@@ -153,188 +117,102 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   icm42670_config_t config = ICM42670_CONFIG_INIT;
   config.sample_rate_hz = options.sample_rate_hz;
   config.fifo_watermark_samples = 1U;
-  config.read_mode = ICM42670_READ_MODE_SENSOR_TIMESTAMP_FIFO;
-  // reserved[0] carries the sample-drop policy in the fixed config layout.
-  config.reserved[ICM42670_CONFIG_SAMPLE_DROP_POLICY_INDEX] = options.sample_drop_policy;
-  config.reserved[ICM42670_CONFIG_FSYNC_ENABLE_INDEX] = options.fsync_observer ? 1U : 0U;
+  config.sample_drop_policy = options.sample_drop_policy;
+  config.timestamp_mode = options.timestamp_mode;
 
-  if (options.final_health != nullptr) {
-    *options.final_health = ICM42670_RUNTIME_HEALTH_INIT;
-  }
   IcmCallbackContext context;
-  context.observer = observer;
-  context.observer_user = observer_user;
-  context.fsync_observer = options.fsync_observer; context.fsync_user = options.fsync_user;
   icm42670_handle_t* handle = nullptr;
-
-  int result = icm42670_create(&config, &handle);
-  if (result != ICM42670_STATUS_OK || handle == nullptr) {
-    if (handle != nullptr) {
-      icm42670_destroy(handle);
-    }
+  const int create_result = icm42670_create(&config, &handle);
+  if (create_result != ICM42670_STATUS_OK || handle == nullptr) {
+    if (handle != nullptr) icm42670_destroy(handle);
     return 1;
   }
-
-  result = icm42670_set_callback(handle, IcmCallback, &context);
-  if (result != ICM42670_STATUS_OK) {
-    context.accepting.store(false, std::memory_order_release);
-    icm42670_destroy(handle);
-    return 1;
-  }
-  if (options.fsync_observer && icm42670_set_fsync_callback(handle, IcmFsyncCallback, &context) != ICM42670_STATUS_OK) {
-    icm42670_destroy(handle); return 1;
-  }
-
-  result = icm42670_start(handle);
-  if (result != ICM42670_STATUS_OK) {
-    context.accepting.store(false, std::memory_order_release);
-    // start 失败后仍由 create owner 销毁非空 handle。
+  if (icm42670_set_callback(handle, IcmCallback, &context) != ICM42670_STATUS_OK) {
     icm42670_destroy(handle);
     return 1;
   }
 
-  bool count_reached = false;
-  const auto emit_sample = [&](const icm42670_sample_t& sample) noexcept {
-    try {
-      // observer在owner线程运行，producer callback不执行阻塞I/O。
-      if (context.observer != nullptr) {
-        context.observer(sample, context.observer_user);
-      }
-      context.emitted.fetch_add(1U, std::memory_order_acq_rel);
-      return true;
-    } catch (const std::exception& error) {
-      std::cerr << "IMU sample observer failed: " << error.what() << '\n';
-      context.Fail("sample_observer_exception");
-      return false;
-    } catch (...) {
-      context.Fail("sample_observer_exception");
-      return false;
-    }
-  };
-
-  const auto drain_events = [&]() {
-    for (;;) {
-      icm42670_fsync_event_t event{};
-      {
-        std::lock_guard<RealtimeMutex> lock(context.pending_mutex);
-        if (!context.event_count) break;
-        event = context.pending_events[context.event_head];
-        context.event_head = (context.event_head + 1) % context.pending_events.size(); --context.event_count;
-      }
-      context.fsync_observer(event, context.fsync_user);
-    }
-  };
-  while (g_imu_signal_stop == 0 &&
-         (options.stop_requested == nullptr ||
-          !options.stop_requested->load(std::memory_order_acquire)) &&
-         !context.callback_failed.load(std::memory_order_acquire)) {
-    icm42670_sample_t sample{};
-    bool has_sample = false;
-    {
-      std::lock_guard<RealtimeMutex> lock(context.pending_mutex);
-      if (context.pending_size != 0U) {
-        // 按 FIFO 取最老样本，并在解锁后执行 observer。
-        sample = context.pending_samples[context.pending_head];
-        context.pending_head =
-            (context.pending_head + 1U) % IcmCallbackContext::kPendingCapacity;
-        --context.pending_size;
-        has_sample = true;
-      }
-    }
-    // 队列有积压时立即继续 drain，仅空队列进入短等待。
-    if (has_sample) {
-      try { drain_events(); }
-      catch (const std::exception& error) {
-        std::cerr << "IMU FSYNC observer failed: " << error.what() << '\n';
-        context.Fail("fsync_observer_exception"); break;
-      } catch (...) { context.Fail("fsync_observer_exception"); break; }
-      if (!emit_sample(sample)) {
-        break;
-      }
-      if (options.count != 0U &&
-          context.emitted.load(std::memory_order_acquire) >= options.count) {
-        count_reached = true;
-        break;
-      }
-      continue;
-    }
-    const bool owner_stop_requested =
-        g_imu_signal_stop != 0 ||
+  const int start_result = icm42670_start(handle);
+  bool owner_failed = start_result != ICM42670_STATUS_OK;
+  const auto owner_stop_requested = [&]() {
+    return g_imu_signal_stop != 0 ||
         (options.stop_requested != nullptr &&
          options.stop_requested->load(std::memory_order_acquire));
-    if (!owner_stop_requested && icm42670_is_running(handle) == 0) {
-      // producer 在未达 count 且未收到 owner 停止请求前退出，只能在空队列边界确认已 drain 后 fail-closed。
-      context.Fail("producer_stopped");
+  };
+  const auto emit_sample = [&](const icm42670_sample_t& sample) noexcept {
+    try {
+      if (observer != nullptr) observer(sample, observer_user);
+      ++context.emitted;
+    } catch (...) {
+      context.Fail("sample_observer_exception");
+    }
+  };
+
+  while (!owner_failed && !owner_stop_requested() &&
+         !context.callback_failed.load(std::memory_order_acquire)) {
+    icm42670_sample_t sample{};
+    if (context.Pop(sample)) {
+      emit_sample(sample);
+      // Count requests STOP, not an admission cutoff: the final cohort may exceed it.
+      if (options.count != 0U && context.emitted >= options.count) break;
+      continue;
+    }
+    if (icm42670_is_running(handle) == 0) {
+      owner_failed = true;
       break;
     }
 #ifdef RELEASE008_TESTING
-    // 测试计数只位于空队列分支，用于验证积压期间不等待。
     g_idle_wait_count.fetch_add(1U, std::memory_order_relaxed);
 #endif
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 
-  const bool owner_stop_requested =
-      g_imu_signal_stop != 0 ||
-      (options.stop_requested != nullptr &&
-       options.stop_requested->load(std::memory_order_acquire));
-  const bool drain_after_stop =
-      owner_stop_requested && !count_reached &&
-      !context.callback_failed.load(std::memory_order_acquire);
-  const auto close_admission = [&]() noexcept {
-    std::lock_guard<RealtimeMutex> lock(context.pending_mutex);
-    context.accepting.store(false, std::memory_order_release);
-  };
-
-  // Count/failure paths preserve the prior semantics: close callback admission before stop.
-  // Owner/signal stop keeps admission open until blocking stop joins the producer, then drains
-  // every sample that had already entered the adapter FIFO.
-  if (!drain_after_stop) {
-    close_admission();
-  }
-  const int stop_result = icm42670_stop(handle);
-  if (drain_after_stop) {
-    close_admission();
-  }
-  if (drain_after_stop && stop_result == ICM42670_STATUS_OK &&
-      !context.callback_failed.load(std::memory_order_acquire)) {
-    while (true) {
+  int stop_result = ICM42670_STATUS_INTERNAL_ERROR;
+  std::atomic<bool> stopped{false};
+  try {
+    // STOP can publish more than one queue's worth: drain while it joins the producer.
+    std::thread stop_owner([&]() {
+      stop_result = icm42670_stop(handle);
+      stopped.store(true, std::memory_order_release);
+    });
+    for (;;) {
       icm42670_sample_t sample{};
-      {
-        std::lock_guard<RealtimeMutex> lock(context.pending_mutex);
-        if (context.pending_size == 0U) {
-          break;
-        }
-        sample = context.pending_samples[context.pending_head];
-        context.pending_head =
-            (context.pending_head + 1U) % IcmCallbackContext::kPendingCapacity;
-        --context.pending_size;
+      if (context.Pop(sample)) {
+        emit_sample(sample);
+        continue;
       }
-      if (!emit_sample(sample)) {
-        break;
-      }
+      if (stopped.load(std::memory_order_acquire)) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    stop_owner.join();
+  } catch (...) {
+    owner_failed = true;
+    stop_result = icm42670_stop(handle);
   }
-  try { drain_events(); }
-  catch (const std::exception& error) {
-    std::cerr << "IMU FSYNC observer failed: " << error.what() << '\n';
-    context.Fail("fsync_observer_exception");
-  } catch (...) { context.Fail("fsync_observer_exception"); }
-  int health_result = ICM42670_STATUS_OK;
-  if (options.final_health != nullptr) {
-    health_result = stop_result == ICM42670_STATUS_OK
-                        ? icm42670_get_runtime_health(handle, options.final_health)
-                        : ICM42670_STATUS_INVALID_STATE;
-  }
-  const bool failed = context.callback_failed.load(std::memory_order_acquire) ||
-                      stop_result != ICM42670_STATUS_OK ||
-                      health_result != ICM42670_STATUS_OK;
+  // Drain even after fatal STOP. The admitted prefix remains owned by the adapter.
+  icm42670_sample_t sample{};
+  while (context.Pop(sample)) emit_sample(sample);
+
+  icm42670_runtime_health_t health = ICM42670_RUNTIME_HEALTH_INIT;
+  const int health_result = icm42670_get_runtime_health(handle, &health);
+  if (options.final_health != nullptr) *options.final_health = health;
+  const bool terminal_failed = health_result != ICM42670_STATUS_OK ||
+      health.session_generation == 0U || health.transport_complete == 0U ||
+      health.fatal_reason != 0U || health.fatal_errno != 0U ||
+      health.quiesce_errno != 0U || health.fifo_overflow_count != 0U ||
+      health.scan_push_failure_count != 0U || health.evidence_full_count != 0U ||
+      health.records_consumed != health.records_acked ||
+      health.published_samples != context.emitted ||
+      (options.sample_drop_policy == ICM42670_SAMPLE_DROP_POLICY_STRICT &&
+       health.invalid_payload_count != 0U);
+  const bool failed = owner_failed || terminal_failed ||
+      context.callback_failed.load(std::memory_order_acquire) ||
+      stop_result != ICM42670_STATUS_OK;
   if (failed) {
     const char* reason = context.failure_reason.load(std::memory_order_acquire);
     std::cerr << "IMU_CONSUMER_FAILURE reason=" << (reason ? reason : "producer_lifecycle")
-              << " emitted=" << context.emitted.load(std::memory_order_acquire)
-              << " pending_samples=" << context.pending_size
-              << " pending_events=" << context.event_count
+              << " emitted=" << context.emitted
+              << " admitted=" << context.written.load(std::memory_order_acquire)
               << " stop_status=" << stop_result << " health_status=" << health_result << '\n';
   }
   icm42670_destroy(handle);
@@ -352,78 +230,100 @@ uint32_t ImuPrintEverySamples(uint32_t sample_rate_hz, uint32_t print_rate_hz) {
 
 void PrintImuSample(const icm42670_sample_t& sample, void* user) {
   auto* state = static_cast<ImuPrintState*>(user);
-  if (state == nullptr) {
-    return;
+  if (state == nullptr) return;
+  const uint64_t previous_ns = state->last_sample_monotonic_ns;
+  if (state->observed_samples == 0U) {
+    state->first_sample_monotonic_ns = sample.sample_monotonic_ns;
+  } else if (sample.sample_sequence <= state->last_sequence) {
+    ++state->sequence_regression_count;
+  } else {
+    state->sequence_gap_count += sample.sample_sequence - state->last_sequence - 1U;
   }
+  state->last_sample_monotonic_ns = sample.sample_monotonic_ns;
+  state->last_sequence = sample.sample_sequence;
   ++state->observed_samples;
-  if (state->print_every_samples == 0U) {
-    return;
+  if (sample.timestamp_source == ICM42670_TIMESTAMP_SOURCE_IRQ) ++state->irq_samples;
+  if (sample.timestamp_source == ICM42670_TIMESTAMP_SOURCE_SERVICE) ++state->service_samples;
+
+  // RAW endpoints measure acquisition independently of the MONOTONIC estimate.
+  // Update the first burst's endpoint through its last sample, not its first.
+  if ((sample.burst_flags & ICM42670_BURST_OK) != 0U &&
+      (sample.burst_flags & ICM42670_BURST_STOP_TAIL) == 0U) {
+    if (state->ordinary_bursts == 0U) {
+      state->first_burst_raw_ns = sample.burst_complete_raw_ns;
+      state->burst_generation = sample.session_generation;
+    }
+    if (state->ordinary_bursts == 0U || sample.evidence_id != state->last_evidence_id ||
+        sample.session_generation != state->burst_generation) {
+      ++state->ordinary_bursts;
+    }
+    if (state->ordinary_bursts == 1U) {
+      state->first_burst_last_sequence = sample.sample_sequence;
+    }
+    state->last_evidence_id = sample.evidence_id;
+    state->burst_generation = sample.session_generation;
+    state->last_burst_raw_ns = sample.burst_complete_raw_ns;
+    state->last_burst_last_sequence = sample.sample_sequence;
   }
-  // 仅在固定抽样点尝试输出；输出端失效后仍完整消费样本。
-  if (state->observed_samples != 1U &&
-      (state->observed_samples - 1U) % state->print_every_samples != 0U) {
-    return;
-  }
+  if (state->print_every_samples == 0U ||
+      (state->observed_samples != 1U &&
+       (state->observed_samples - 1U) % state->print_every_samples != 0U)) return;
   if (!state->output_available) {
     ++state->dropped_output_lines;
     return;
   }
 
-  const uint64_t timestamp_ns = sample.sample_timestamp_ns;
   const double accel_norm =
       std::sqrt(sample.accel_mps2[0] * sample.accel_mps2[0] +
                 sample.accel_mps2[1] * sample.accel_mps2[1] +
                 sample.accel_mps2[2] * sample.accel_mps2[2]);
-
-  // 每条终端记录保持在 PIPE_BUF 内，并通过一次 write 写出完整多行块；
-  // 慢 sink 或关闭的输出端只影响日志记录，不阻塞采集 owner。
-  std::array<char, PIPE_BUF> line;
-  const unsigned long long ts_ns = static_cast<unsigned long long>(timestamp_ns);
+  std::array<char, PIPE_BUF> line{};
   std::size_t line_length = 0U;
   const auto append_to_line = [&](const char* format, auto... args) -> bool {
     const std::size_t remaining = line.size() - line_length;
-    const int appended = std::snprintf(line.data() + line_length, remaining, format,
-                                       args...);
-    if (appended < 0 || static_cast<std::size_t>(appended) >= remaining) {
-      return false;
-    }
+    const int appended = std::snprintf(line.data() + line_length, remaining, format, args...);
+    if (appended < 0 || static_cast<std::size_t>(appended) >= remaining) return false;
     line_length += static_cast<std::size_t>(appended);
     return true;
   };
-
-  // 必选 data 段先写入；metrics 诊断段只在 CLI 开关打开时追加，最终分割符始终追加。
   bool formatted = append_to_line(
       "*******************************IMU*******************************\n"
       "imu data:\n"
       "sample_seq=%llu\n"
-      "ts_ns=%llu\n"
+      "sample_monotonic_ns=%llu\n"
+      "timestamp_mode=%s fifo_tmst=%u sample_raw_ns=%llu timestamp_uncertainty_ns=%u\n"
       "temp_c=%.6f accel_norm_mps2=%.6f\n"
       "accel_mps2=[%.6f, %.6f, %.6f]\n"
       "gyro_rps  =[%.6f, %.6f, %.6f]\n",
-      static_cast<unsigned long long>(sample.sample_sequence), ts_ns,
+      static_cast<unsigned long long>(sample.sample_sequence),
+      static_cast<unsigned long long>(sample.sample_monotonic_ns),
+      sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host", sample.fifo_tmst,
+      static_cast<unsigned long long>(sample.sample_raw_ns), sample.timestamp_uncertainty_ns,
       sample.temperature_c, accel_norm,
       sample.accel_mps2[0], sample.accel_mps2[1], sample.accel_mps2[2],
       sample.gyro_rps[0], sample.gyro_rps[1], sample.gyro_rps[2]);
   if (formatted && state->print_metrics) {
-    const unsigned long long host_ns =
-        static_cast<unsigned long long>(sample.host_timestamp_ns);
-    const double dt_ms = state->last_timestamp_ns == 0U
-                             ? 0.0
-                             : (timestamp_ns >= state->last_timestamp_ns
-                                    ? static_cast<double>(timestamp_ns - state->last_timestamp_ns)
-                                    : -static_cast<double>(state->last_timestamp_ns - timestamp_ns)) /
-                                   1000000.0;
-    const double host_ts_gap_ms = host_ns >= ts_ns
-                                      ? static_cast<double>(host_ns - ts_ns) / 1000000.0
-                                      : -static_cast<double>(ts_ns - host_ns) / 1000000.0;
+    const double dt_ms = state->observed_samples < 2U ? 0.0 :
+        (sample.sample_monotonic_ns >= previous_ns
+             ? static_cast<double>(sample.sample_monotonic_ns - previous_ns)
+             : -static_cast<double>(previous_ns - sample.sample_monotonic_ns)) / 1e6;
+    const double observation_minus_sample_us =
+        (sample.observation_monotonic_ns >= sample.sample_monotonic_ns
+             ? static_cast<double>(sample.observation_monotonic_ns - sample.sample_monotonic_ns)
+             : -static_cast<double>(sample.sample_monotonic_ns - sample.observation_monotonic_ns)) / 1e3;
     formatted = append_to_line(
         "metrics:\n"
-        "host_ts_ns=%llu\n"
-        "host_ts_gap_ms=%.6f dt_ms=%.6f uncertainty_us=%u\n"
-        "gpio_gap_count=%u fifo_overflow_count=%u mapper_failure_count=%u\n",
-        host_ns, host_ts_gap_ms, dt_ms,
-        sample.timestamp_uncertainty_us, sample.gpio_event_gap_count,
-        sample.fifo_overflow_count, sample.mapper_failure_count);
+        "session_generation=%u evidence_id=%llu timestamp_source=%s packet_flags=%u burst_flags=%u\n"
+        "observation_monotonic_ns=%llu burst_complete_raw_ns=%llu estimated_period_ns=%llu\n"
+        "observation_minus_sample_us=%.6f sample_monotonic_dt_ms=%.6f\n",
+        sample.session_generation, static_cast<unsigned long long>(sample.evidence_id),
+        sample.timestamp_source == ICM42670_TIMESTAMP_SOURCE_IRQ ? "IRQ" :
+            sample.timestamp_source == ICM42670_TIMESTAMP_SOURCE_SERVICE ? "SERVICE" : "unknown",
+        sample.packet_flags, sample.burst_flags,
+        static_cast<unsigned long long>(sample.observation_monotonic_ns),
+        static_cast<unsigned long long>(sample.burst_complete_raw_ns),
+        static_cast<unsigned long long>(sample.estimated_period_ns),
+        observation_minus_sample_us, dt_ms);
   }
   formatted = formatted && append_to_line(
       "%s", "*****************************************************************\n");
@@ -431,16 +331,10 @@ void PrintImuSample(const icm42670_sample_t& sample, void* user) {
     ++state->dropped_output_lines;
     return;
   }
-
   const ssize_t written = ::write(state->output_fd, line.data(), line_length);
-  if (written >= 0 && static_cast<std::size_t>(written) == line_length) {
-    state->last_timestamp_ns = timestamp_ns;
-    return;
-  }
-
-  // 慢 sink 或信号中断只丢当前日志，owner 绝不重试；
-  // partial write 与 EPIPE/永久 fd 错误均关闭后续日志，避免连续产生截断行。
+  if (written >= 0 && static_cast<std::size_t>(written) == line_length) return;
   ++state->dropped_output_lines;
+  // Slow or closed sinks lose only logs. Never retry on the consumption path.
   if (written >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
     state->output_available = false;
   }
@@ -503,6 +397,18 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
     } else if (argument == "--count") {
       options.count =
           ParseUint32Argument(RequireValue(argc, argv, &index, "--count"), "--count");
+    } else if (argument == "--sample-drop-policy") {
+      const std::string policy = RequireValue(argc, argv, &index, "--sample-drop-policy");
+      if (policy != "strict" && policy != "allow-counted") {
+        throw std::invalid_argument("--sample-drop-policy must be allow-counted or strict");
+      }
+      options.sample_drop_policy = policy == "strict"
+          ? ICM42670_SAMPLE_DROP_POLICY_STRICT : ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+    } else if (argument == "--imu-timestamp-mode") {
+      const auto mode = RequireValue(argc, argv, &index, "--imu-timestamp-mode");
+      if (mode != "host" && mode != "tmst")
+        throw std::invalid_argument("--imu-timestamp-mode must be host or tmst");
+      options.timestamp_mode = mode == "tmst" ? ICM42670_TIMESTAMP_MODE_TMST : ICM42670_TIMESTAMP_MODE_HOST;
     } else if (argument == "--print-rate-hz") {
       requested_print_rate_hz =
           ParseUint32Argument(RequireValue(argc, argv, &index, "--print-rate-hz"),
@@ -514,7 +420,9 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       std::cout << "Usage: imu_reader_demo [options]:\n"
                 << "  --sample-rate-hz <25|50|100|200|400|800|1600> IMU sample rate, default "
                 << robobaton_demo::kDefaultImuSampleRateHz << "\n"
-                << "  --count N Number of IMU samples to consume before exit, default 0 (run until signal)\n"
+                << "  --count N Request STOP after N consumed samples, then drain the complete cohort; 0 runs until signal\n"
+                << "  --sample-drop-policy <allow-counted|strict> Invalid six-axis payload policy, default allow-counted\n"
+                << "  --imu-timestamp-mode <host|tmst> Kernel IIO timestamp mode, default host\n"
                 << "  --print-rate-hz HZ Terminal sample output rate, default min(sample-rate-hz, 10); 0 disables samples, not final health\n"
                 << "  --print-metrics Include metrics diagnostics section in each output record, default off\n";
       std::exit(0);
@@ -552,9 +460,9 @@ int main(int argc, char** argv) {
     uint32_t print_rate_hz = 0U;
     bool print_metrics = false;
     ImuConsumerOptions options = ParseCommandLine(argc, argv, &print_rate_hz, &print_metrics);
+    std::cout << "imu_timestamp_mode=" << (options.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host") << "\n";
     icm42670_runtime_health_t final_health = ICM42670_RUNTIME_HEALTH_INIT;
     options.final_health = &final_health;
-    robobaton_demo::PrintTimeBase(std::cout);
     robobaton_demo::ImuPrintState state;
     state.print_every_samples =
         robobaton_demo::ImuPrintEverySamples(options.sample_rate_hz, print_rate_hz);
@@ -565,24 +473,63 @@ int main(int argc, char** argv) {
     {
       ScopedNonblockingFd output_mode(state.output_fd);
       state.output_available = output_mode.active();
+      constexpr char time_base[] =
+          "TIME_BASE domain=monotonic sample_time=kernel_host_estimate "
+          "observation_clock=monotonic burst_complete_clock=monotonic_raw "
+          "clock_domains_not_interchangeable=yes\n";
+      if (output_mode.active()) {
+        const ssize_t written = ::write(state.output_fd, time_base, sizeof(time_base) - 1U);
+        static_cast<void>(written);
+      }
       result = robobaton_demo::RunIcmConsumer(options, robobaton_demo::PrintImuSample,
                                              &state);
-      std::array<char, 1024> summary{};
+      const double timestamp_hz = state.observed_samples > 1U &&
+          state.last_sample_monotonic_ns > state.first_sample_monotonic_ns
+          ? static_cast<double>(state.observed_samples - 1U) * 1e9 /
+              static_cast<double>(state.last_sample_monotonic_ns - state.first_sample_monotonic_ns)
+          : 0.0;
+      const bool acquisition_valid = state.ordinary_bursts > 1U &&
+          state.last_burst_raw_ns > state.first_burst_raw_ns &&
+          state.last_burst_last_sequence > state.first_burst_last_sequence;
+      const double acquisition_hz = acquisition_valid
+          ? static_cast<double>(state.last_burst_last_sequence - state.first_burst_last_sequence) * 1e9 /
+              static_cast<double>(state.last_burst_raw_ns - state.first_burst_raw_ns)
+          : 0.0;
+      std::array<char, PIPE_BUF> summary{};
       const int size = std::snprintf(summary.data(), summary.size(),
-          "IMU_RUNTIME_HEALTH final=yes health_valid=%s session_generation=%llu "
+          "IMU_TIMING_SUMMARY samples=%llu set_odr_hz=%u timestamp_hz=%.6f "
+          "acquisition_hz=%.6f acquisition_valid=%s acquisition_endpoints=ordinary_bursts_monotonic_raw "
+          "ordinary_bursts=%llu sequence_gap_count=%llu sequence_regression_count=%llu "
+          "irq_samples=%llu service_samples=%llu\n"
+          "IMU_RUNTIME_HEALTH final=yes health_valid=%s session_generation=%u "
           "published_samples=%llu observed_samples=%llu output_dropped=%llu "
-          "invalid_packet_drop_count=%u gpio_event_gap_count=%u fifo_overflow_count=%u "
-          "mapper_failure_count=%u uncertainty_over_200_drop_count=%u "
-          "max_consecutive_timing_drop_count=%u\n",
-          final_health.session_generation != 0U ? "yes" : "no",
-          static_cast<unsigned long long>(final_health.session_generation),
+          "consumed_scans=%llu records_consumed=%llu records_acked=%llu last_packet_sequence=%llu "
+          "irq_wakeup_count=%llu timer_service_count=%llu fatal_reason=%u fatal_errno=%u "
+          "fifo_overflow_count=%u invalid_payload_count=%u scan_push_failure_count=%u "
+          "evidence_full_count=%u timestamp_service_burst_count=%u tail_packet_count=%u "
+          "unknown_hardware_tail=%u quiesce_errno=%u transport_complete=%u result=%d\n",
+          static_cast<unsigned long long>(state.observed_samples), options.sample_rate_hz,
+          timestamp_hz, acquisition_hz, acquisition_valid ? "yes" : "no",
+          static_cast<unsigned long long>(state.ordinary_bursts),
+          static_cast<unsigned long long>(state.sequence_gap_count),
+          static_cast<unsigned long long>(state.sequence_regression_count),
+          static_cast<unsigned long long>(state.irq_samples),
+          static_cast<unsigned long long>(state.service_samples),
+          final_health.session_generation != 0U ? "yes" : "no", final_health.session_generation,
           static_cast<unsigned long long>(final_health.published_samples),
           static_cast<unsigned long long>(state.observed_samples),
           static_cast<unsigned long long>(state.dropped_output_lines),
-          final_health.invalid_packet_drop_count, final_health.gpio_event_gap_count,
-          final_health.fifo_overflow_count, final_health.mapper_failure_count,
-          final_health.uncertainty_over_200_drop_count,
-          final_health.max_consecutive_timing_drop_count);
+          static_cast<unsigned long long>(final_health.consumed_scans),
+          static_cast<unsigned long long>(final_health.records_consumed),
+          static_cast<unsigned long long>(final_health.records_acked),
+          static_cast<unsigned long long>(final_health.last_packet_sequence),
+          static_cast<unsigned long long>(final_health.irq_wakeup_count),
+          static_cast<unsigned long long>(final_health.timer_service_count),
+          final_health.fatal_reason, final_health.fatal_errno, final_health.fifo_overflow_count,
+          final_health.invalid_payload_count, final_health.scan_push_failure_count,
+          final_health.evidence_full_count, final_health.timestamp_service_burst_count,
+          final_health.tail_packet_count, final_health.unknown_hardware_tail,
+          final_health.quiesce_errno, final_health.transport_complete, result);
       // Final evidence follows the same best-effort, nonblocking sink contract as samples.
       if (output_mode.active() && size > 0 && static_cast<std::size_t>(size) < summary.size()) {
         if (::write(state.output_fd, summary.data(), static_cast<std::size_t>(size)) != size) {

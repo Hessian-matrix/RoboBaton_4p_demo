@@ -40,14 +40,14 @@ func (h *telemetryHub) state() string {
 	return "flowing"
 }
 func (h *telemetryHub) readLoop(c *net.UnixConn) {
-	buffer := make([]byte, 177)
+	buffer := make([]byte, 257)
 	for {
 		n, _, flags, _, err := c.ReadMsgUnix(buffer, nil)
 		if err != nil {
 			return
 		}
 		b := buffer[:n]
-		if n != 176 || flags&syscall.MSG_TRUNC != 0 || !validHeader(b, imuMagic, 176, h.config.Generation) {
+		if n != 256 || flags&syscall.MSG_TRUNC != 0 || !validHeader(b, imuMagic, 256, h.config.Generation) {
 			continue
 		}
 		h.mu.Lock()
@@ -66,7 +66,35 @@ func (h *telemetryHub) readLoop(c *net.UnixConn) {
 			attitudeAccel[i] = finite(math.Float64frombits(be.Uint64(b[128+8*i:])))
 			attitudeGyro[i] = finite(math.Float64frombits(be.Uint64(b[152+8*i:])))
 		}
-		message := map[string]any{"schema_version": 1, "session_id": strconv.FormatUint(h.config.Generation, 10), "sample_sequence": strconv.FormatUint(be.Uint64(b[16:]), 10), "sample_timestamp_ns": strconv.FormatUint(be.Uint64(b[24:]), 10), "host_timestamp_ns": strconv.FormatUint(be.Uint64(b[32:]), 10), "temperature_c": finite(math.Float64frombits(be.Uint64(b[40:]))), "accel_mps2": accel, "gyro_rps": gyro, "source_rate_hz": h.config.SourceRate, "telemetry_limit_hz": h.config.TelemetryHz, "timestamp_uncertainty_us": be.Uint32(b[96:]), "source_counters": map[string]uint32{"gpio_event_gap_count": be.Uint32(b[100:]), "fifo_overflow_count": be.Uint32(b[104:]), "mapper_failure_count": be.Uint32(b[108:])}, "telemetry_counters": map[string]string{"ipc_send_drops": strconv.FormatUint(be.Uint64(b[112:]), 10)}}
+		mode := "host"
+		var uncertainty any
+		if be.Uint32(b[108:]) == 1 {
+			mode = "tmst"
+			uncertainty = be.Uint32(b[96:])
+		}
+		message := map[string]any{
+			"schema_version": 2, "session_id": strconv.FormatUint(h.config.Generation, 10),
+			"sample_sequence": strconv.FormatUint(be.Uint64(b[16:]), 10),
+			"sample_realtime_ns": strconv.FormatUint(be.Uint64(b[24:]), 10),
+			"observation_monotonic_ns": strconv.FormatUint(be.Uint64(b[32:]), 10),
+			"temperature_c": finite(math.Float64frombits(be.Uint64(b[40:]))),
+			"accel_mps2": accel, "gyro_rps": gyro,
+			"source_rate_hz": h.config.SourceRate, "telemetry_limit_hz": h.config.TelemetryHz,
+			"timestamp_uncertainty_ns": uncertainty, "timestamp_mode": mode,
+			"source_generation": be.Uint32(b[100:]), "burst_flags": be.Uint32(b[104:]),
+			"evidence_id": strconv.FormatUint(be.Uint64(b[120:]), 10),
+			"telemetry_counters": map[string]string{"ipc_send_drops": strconv.FormatUint(be.Uint64(b[112:]), 10)},
+			"sample_monotonic_ns": strconv.FormatUint(be.Uint64(b[176:]), 10),
+			"sample_raw_ns": strconv.FormatUint(be.Uint64(b[184:]), 10),
+			"burst_complete_raw_ns": strconv.FormatUint(be.Uint64(b[192:]), 10),
+			"estimated_period_ns": strconv.FormatUint(be.Uint64(b[200:]), 10),
+			"bridge_monotonic_ns": strconv.FormatUint(be.Uint64(b[208:]), 10),
+			"bridge_raw_ns": strconv.FormatUint(be.Uint64(b[216:]), 10),
+			"bridge_realtime_ns": strconv.FormatUint(be.Uint64(b[224:]), 10),
+			"bridge_uncertainty_ns": strconv.FormatUint(be.Uint64(b[232:]), 10),
+			"timestamp_source": be.Uint32(b[240:]), "packet_flags": be.Uint32(b[244:]),
+			"fifo_tmst": be.Uint32(b[248:]),
+		}
 		message["attitude_accel_mps2"] = attitudeAccel
 		message["attitude_gyro_rps"] = attitudeGyro
 		body, e := json.Marshal(message)

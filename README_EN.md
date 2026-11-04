@@ -10,6 +10,8 @@ X5 examples for SC132 four-camera capture, RTSP, ICM-42670-P IMU, UART, and Sock
 - `src/`, `include/`, `lib/`, `config/`: example sources, public headers, matching prebuilt libraries, and default configuration.
 - `scripts/`: build, packaging, and runtime verification entry points.
 
+Current IMU capture uses kernel IIO V3 / public ABI 5.0: real file `libicm42670.so.5.0.0`, SONAME `libicm42670.so.5`, and nine exports under `ICM42670_X5_5.0`. `host` retains the `CLOCK_MONOTONIC` host estimate; `tmst` additionally maps sensor TMST to `CLOCK_MONOTONIC_RAW`. Both preserve native host time and all burst evidence. Saved output explicitly bridges the selected native clock to realtime per burst, retaining the bridge bracket half-width without certifying physical sampling or exposure synchronization accuracy. The matching V3 kernel module must already bind the device; V2 is incompatible even in host mode. No userspace SPI, FSYNC, or automatic fallback is provided. Rebuild every consumer with matching headers/libraries, without cross-major links. Software, documentation, ABI, and release status remain independent.
+
 This repository builds user-side examples, not the underlying runtime libraries. Keep sources, headers, libraries, and configuration matched. Deploy the complete runtime package, preserving symbolic links; do not replace individual `.so` files.
 
 ## Getting Started
@@ -19,10 +21,15 @@ Prepare the device and runtime package using [First Power-On](https://4p-doc-en.
 ```bash
 cd /root/demo
 ./sensor_demo --version
+
 ./sensor_demo
 ```
 
 Press `Ctrl+C` to stop normally. Keep `cam-service` running and do not run multiple camera applications concurrently. See [non-ROS Demo Usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html) for other examples and complete parameters.
+
+The final default is HO: camera `observer` + IMU `host`, with IMU at `800Hz`. The other three startup combinations remain for comparison: top-level YAML `camera_timestamp_path: observer|official` and `imu_timestamp_mode: host|tmst`, overridden by CLI `--camera-timestamp-path` / `--imu-timestamp-mode`. Stop normally and restart after changing them; there is no hot switching or failure fallback. Camera observer's `500µs` and IMU tmst's `200µs` are separate computational admission limits; official has unknown physical error. Default YAML retains Web on, RTSP off, and auto exposure on. See [non-ROS Usage](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html) for explicit manual exposure and the full contract.
+
+The runtime also supports `./start_sensor_demo.sh stop` for a graceful stop, `./start_sensor_demo.sh restart` for background startup using package YAML after a successful stop, and `./start_sensor_demo.sh status` for package process/autostart status. Stop waits for recording and Web-child cleanup, with a default 1800-second timeout configurable through `SENSOR_DEMO_STOP_TIMEOUT_S`; timeout fails without force-killing or launching a second instance. Background output defaults to `/userdata/sensor_demo_autostart.log`. Restart success means only that the process did not exit within 2 seconds; inspect logs and the page. Management requires Linux pidfds and Python ≥3.10, does not change boot-autostart registration, and does not operate `cam-service`. See [Stop, Restart, and Boot Autostart](https://4p-doc-en.readthedocs.io/en/latest/usage/non-ros-demo.html#non-ros-autostart).
 
 ### LAN Video and Six-Axis Preview
 

@@ -10,6 +10,8 @@
 - `src/`、`include/`、`lib/`、`config/`：示例源码、公开头文件、匹配的预编译库与默认配置。
 - `scripts/`：构建、打包与运行包校验入口。
 
+当前 IMU 使用内核 IIO V3／公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V3 内核模块预先绑定；旧 V2 即使 host 模式也不兼容。无用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
+
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
 ## 开始使用
@@ -19,10 +21,13 @@
 ```bash
 cd /root/demo
 ./sensor_demo --version
+
 ./sensor_demo
 ```
 
 按 `Ctrl+C` 正常停止。保持 `cam-service` 运行，不同时启动多个相机应用。其他示例及完整参数见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html)。
+
+最终默认 HO：相机 `observer` + IMU `host`，IMU 默认 `800Hz`。另外三种启动组合保留比较：YAML 顶层 `camera_timestamp_path: observer|official`、`imu_timestamp_mode: host|tmst`，CLI `--camera-timestamp-path`／`--imu-timestamp-mode` 可覆盖；修改后正常停止并重启，无热切换或失败回退。相机 observer 的 `500µs` 与 IMU tmst 的 `200µs` 是各自计算准入边界，official 物理误差未知。默认 YAML 保留 Web 开、RTSP 关、自动曝光开启；显式手动曝光配置与完整合同见 [non-ROS 使用](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html)。
 
 运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功只表示前 2 秒未退出，仍须检查日志和页面。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-autostart)。
 

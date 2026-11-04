@@ -1,5 +1,8 @@
 # sensor_demo YAML config. Command-line options override this file.
 # width/height: 1280x1088 (default), 640x480, 720x480, or 1280x720 (either axis).
+# Startup-only selectors; both IMU modes use the same kernel IIO capture.
+camera_timestamp_path: observer
+imu_timestamp_mode: host
 camera:
   width: 1280
   height: 1088
@@ -7,15 +10,25 @@ camera:
   rotate: 0
   # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.
   test_exposure_midpoint: false
+  # Manual mode fixes all gains at 1x; exposure time is ignored in auto mode.
+  auto_exposure: true
+  exposure_time_us: 2000
 rtsp:
+  enabled: false
   bps: 4000
   codec: h264
   url: /PRR
+web:
+  enabled: true
+  listen_address: 0.0.0.0
+  port: 80
+  imu_push_hz: 50
+  max_video_sessions: 8
+  max_imu_clients: 2
 imu:
-  sample_rate_hz: 1600
+  sample_rate_hz: 800
   print_rate_hz: 10
   print_metrics: false
-  fsync_enabled: false
 
 save_data:
   save: false

@@ -1,7 +1,6 @@
 #include "sensor_recording.h"
 #include "sensor_bag_recorder.h"
 #include "h264_mp4_recorder.h"
-#include "fsync_association.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -76,9 +75,8 @@ class SensorRecording::Impl {
   H264Mp4Recorder* mp4 = nullptr;
   std::unique_ptr<SensorBagRecorder> owned_bag;
   std::unique_ptr<H264Mp4Recorder> owned_mp4;
-  std::unique_ptr<FsyncAssociation> association;
   H264Mp4SourceHealth health;
-  icm42670_sample_t first{}, last{};
+  icm42670_sample_t last{};
   bool have_sample = false, admission_failed = false, adopted = false;
   bool stop_at_group = false, group_closed = false;
   uint64_t encoded_timestamp = 0;
@@ -86,14 +84,8 @@ class SensorRecording::Impl {
   std::condition_variable_any encoded_progress;
   icm42670_runtime_health_t final_health = ICM42670_RUNTIME_HEALTH_INIT;
 
-  static void FsyncSink(const FsyncAssociationRecord& record, void* user) {
-    auto& self = *static_cast<Impl*>(user);
-    if (self.bag) self.bag->ObserveFsync(record);
-    if (self.mp4) self.mp4->ObserveFsync(record);
-  }
-  void PrepareAssociation() {
-    association = options.fsync_enabled ? std::make_unique<FsyncAssociation>(FsyncSink, this) : nullptr;
-    health = {}; health.mapper_counter_valid = true;
+  void PrepareRecording() {
+    health = {};
     have_sample = false; admission_failed = false;
     stop_at_group = group_closed = false;
     encoded_timestamp = 0; encoded_mask = 0;
@@ -101,7 +93,7 @@ class SensorRecording::Impl {
   void Adopt(SensorBagRecorder* input_bag, H264Mp4Recorder* input_mp4, const std::string& input_path) {
     const uint64_t next_id = NewId();
     std::lock_guard<RealtimeMutex> gate(admission);
-    PrepareAssociation();
+    PrepareRecording();
     bag = input_bag; mp4 = input_mp4; adopted = true;
     std::lock_guard<std::mutex> lock(state_mutex);
     id = next_id; path = input_path; format = mp4 ? "mp4" : "rosbag";
@@ -178,7 +170,7 @@ class SensorRecording::Impl {
     }
     {
       std::lock_guard<RealtimeMutex> gate(admission);
-      PrepareAssociation();
+      PrepareRecording();
       owned_bag = std::move(next_bag); owned_mp4 = std::move(next_mp4);
       bag = owned_bag.get(); mp4 = owned_mp4.get(); adopted = false;
       saving.store(true, std::memory_order_release);
@@ -189,22 +181,31 @@ class SensorRecording::Impl {
     error.clear(); outcome.clear(); complete = false; cleanup = true;
     bytes = dropped = dropped_frames = 0; started_ms = NowMs(); ended_ms = 0;
   }
-  void ObserveImu(const icm42670_sample_t& sample) noexcept {
+  void ObserveImu(const OutputImuSample& mapped) noexcept {
     std::lock_guard<RealtimeMutex> gate(admission);
     if (!saving.load(std::memory_order_acquire)) return;
-    if (sample.struct_size != sizeof(sample)) { ++health.invalid_samples; return; }
-    if (!have_sample) { first = sample; have_sample = true; }
-    else {
-      if (sample.sample_sequence <= last.sample_sequence) ++health.sequence_regressions;
-      else health.sequence_gaps += sample.sample_sequence - last.sample_sequence - 1;
-      if (sample.mapper_failure_count < last.mapper_failure_count ||
-          sample.fifo_overflow_count < last.fifo_overflow_count ||
-          sample.gpio_event_gap_count < last.gpio_event_gap_count) health.mapper_counter_valid = false;
+    const auto& sample = mapped.native;
+    if (sample.struct_size != sizeof(sample) || !sample.session_generation ||
+        !sample.evidence_id || !sample.sample_monotonic_ns || !mapped.realtime_ns ||
+        (sample.timestamp_mode != ICM42670_TIMESTAMP_MODE_HOST &&
+         sample.timestamp_mode != ICM42670_TIMESTAMP_MODE_TMST) ||
+        (sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST && !sample.sample_raw_ns)) {
+      ++health.invalid_samples; return;
     }
-    ++health.samples;
-    health.max_timestamp_uncertainty_us = std::max(health.max_timestamp_uncertainty_us, sample.timestamp_uncertainty_us);
-    last = sample;
-    try { if (bag) bag->ObserveImu(sample); if (mp4) mp4->ObserveImu(sample); }
+    if (have_sample) {
+      if (sample.session_generation != last.session_generation ||
+          sample.timestamp_mode != last.timestamp_mode) ++health.invalid_samples;
+      if (sample.sample_sequence == last.sample_sequence) ++health.sequence_duplicates;
+      else if (sample.sample_sequence < last.sample_sequence) ++health.sequence_regressions;
+      else health.sequence_gaps += sample.sample_sequence - last.sample_sequence - 1;
+      const bool raw = sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST;
+      const auto now = raw ? sample.sample_raw_ns : sample.sample_monotonic_ns;
+      const auto previous = raw ? last.sample_raw_ns : last.sample_monotonic_ns;
+      if (now == previous) ++health.timestamp_duplicates;
+      else if (now < previous) ++health.timestamp_regressions;
+    }
+    have_sample = true; ++health.samples; last = sample;
+    try { if (bag) bag->ObserveImu(mapped); if (mp4) mp4->ObserveImu(mapped); }
     catch (...) { admission_failed = true; }
   }
   void Stop(bool success) noexcept {
@@ -221,29 +222,18 @@ class SensorRecording::Impl {
         stop_at_group = true;
         encoded_progress.wait_for(gate, std::chrono::milliseconds(250), [this] { return group_closed; });
       }
-      // Flush only this recording's association history; the application keeps running.
-      try { if (association) association->Finish(); } catch (...) { admission_failed = true; }
       saving.store(false, std::memory_order_release);
       finished_bag = bag; finished_mp4 = mp4;
       if (finished_mp4) {
-        health.callback_window_valid = have_sample;
-        health.fifo_overflow_count = last.fifo_overflow_count - first.fifo_overflow_count;
-        health.gpio_event_gap_count = last.gpio_event_gap_count - first.gpio_event_gap_count;
-        health.timing_sample_drops = last.mapper_failure_count - first.mapper_failure_count;
-        if (adopted && final.session_generation) {
-          health.callback_window_valid = false;
-          health.producer_final_health_valid = true;
-          health.producer_session_generation = final.session_generation;
-          health.producer_published_samples = final.published_samples;
-          health.invalid_packet_drops = final.invalid_packet_drop_count;
-          health.fifo_overflow_count = final.fifo_overflow_count;
-          health.timing_sample_drops = final.mapper_failure_count;
-          health.uncertainty_over_200_drops = final.uncertainty_over_200_drop_count;
-        }
+        health.callback_window_valid = !adopted && have_sample;
+        if (adopted) health.producer = final;
         finished_mp4->SetSourceHealth(health);
       }
-      success = success && !admission_failed;
-      bag = nullptr; mp4 = nullptr; association.reset();
+      success = success && !admission_failed && have_sample && health.invalid_samples == 0 &&
+          health.sequence_gaps == 0 && health.sequence_duplicates == 0 &&
+          health.sequence_regressions == 0 && health.timestamp_duplicates == 0 &&
+          health.timestamp_regressions == 0;
+      bag = nullptr; mp4 = nullptr;
     }
     std::string result_path, result_error, result_outcome;
     bool data_complete = false, cleanup_complete = true;
@@ -338,20 +328,14 @@ void SensorRecording::SetSourceReady() noexcept { std::lock_guard<std::mutex> lo
 void SensorRecording::Submit(const RecordingCommand& command) { impl_->Submit(command); }
 std::string SensorRecording::StatusJson() const { return impl_->Json(); }
 bool SensorRecording::Saving() const noexcept { return impl_->saving.load(std::memory_order_acquire); }
-void SensorRecording::ObserveImu(const icm42670_sample_t& sample) noexcept { impl_->ObserveImu(sample); }
+void SensorRecording::ObserveImu(const OutputImuSample& sample) noexcept { impl_->ObserveImu(sample); }
 void SensorRecording::ObserveFrameSet(const sc132_frame_set_t& set) noexcept {
   std::lock_guard<RealtimeMutex> gate(impl_->admission);
   if (!impl_->saving.load()) return;
   try {
-    if (impl_->association) impl_->association->ObserveGroup(set);
     if (impl_->bag) (void)impl_->bag->TryAcceptFrameSet(set);
     if (impl_->mp4) impl_->mp4->ObserveFrameSet(set);
   } catch (...) { impl_->admission_failed = true; }
-}
-void SensorRecording::ObserveHardwareFsync(const icm42670_fsync_event_t& event) noexcept {
-  std::lock_guard<RealtimeMutex> gate(impl_->admission);
-  try { if (impl_->association) impl_->association->ObserveEvent(event); }
-  catch (...) { impl_->admission_failed = true; }
 }
 void SensorRecording::ObserveEncoded(int id, const prrtsp_encoded_frame_v2& frame) noexcept {
   std::lock_guard<RealtimeMutex> gate(impl_->admission);

@@ -31,23 +31,23 @@ WEB_PACKAGE_COPIES = {
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
     "bin/mosaic_rtsp_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42670_X5_3.0"},
-    "bin/sensor_demo": {"ICM42670_X5_3.0",
+    "bin/imu_reader_demo": {"ICM42670_X5_5.0"},
+    "bin/sensor_demo": {"ICM42670_X5_5.0",
                         "LIBSC132_3.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42670.so.3.0.0": {"ICM42670_X5_3.0"},
+    "lib/libicm42670.so.5.0.0": {"ICM42670_X5_5.0"},
     "lib/libsc132.so.3.0.0": {"LIBSC132_3.0"},
     "lib/libprrtsp.so.2.0.1": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42670.so.3.0.0": "libicm42670.so.3",
+    "lib/libicm42670.so.5.0.0": "libicm42670.so.5",
     "lib/libsc132.so.3.0.0": "libsc132.so.3",
     "lib/libprrtsp.so.2.0.1": "libprrtsp.so.2",
 }
 EXPECTED_LIBRARY_LINKS = {
-    "lib/libicm42670.so.3": "libicm42670.so.3.0.0",
-    "lib/libicm42670.so": "libicm42670.so.3",
+    "lib/libicm42670.so.5": "libicm42670.so.5.0.0",
+    "lib/libicm42670.so": "libicm42670.so.5",
     "lib/libsc132.so.3": "libsc132.so.3.0.0",
     "lib/libsc132.so": "libsc132.so.3",
     "lib/libprrtsp.so.2": "libprrtsp.so.2.0.1",
@@ -59,15 +59,15 @@ EXPECTED_SCRIPT_COPIES = {
     "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
-    "bin/imu_reader_demo": {"libicm42670.so.3", "libm.so.6", "libc.so.6"},
-    "bin/sensor_demo": {"libicm42670.so.3", "libsc132.so.3", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
+    "bin/imu_reader_demo": {"libicm42670.so.5", "libm.so.6", "libc.so.6"},
+    "bin/sensor_demo": {"libicm42670.so.5", "libsc132.so.3", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
     "bin/cam_demo": {"libsc132.so.3", "libprrtsp.so.2", "libc.so.6"},
     "bin/mosaic_rtsp_demo": {"libsc132.so.3", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
     "bin/serial_port_demo": {"libc.so.6"},
     "bin/can_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42670.so.3.0.0": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42670.so.5.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libsc132.so.3.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.1": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
@@ -836,7 +836,7 @@ def verify_package(
             )
 
     version_getters = {
-        "lib/libicm42670.so.3.0.0": "icm42670_get_version",
+        "lib/libicm42670.so.5.0.0": "icm42670_get_version",
         "lib/libsc132.so.3.0.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.1": "prrtsp_get_version",
     }

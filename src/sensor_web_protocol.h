@@ -6,7 +6,7 @@
 
 namespace robobaton_demo::sensor_web {
 constexpr uint32_t kVideoMagic = 0x53575631U;
-constexpr uint32_t kImuMagic = 0x53574931U;
+constexpr uint32_t kImuMagic = 0x53574932U;
 constexpr uint32_t kControlMagic = 0x53574331U;
 constexpr uint32_t kStatusMagic = 0x53575331U;
 constexpr uint32_t kRecordingCommandMagic = 0x53575231U;

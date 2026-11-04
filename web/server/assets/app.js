@@ -119,7 +119,7 @@ function setupValues(id) {
 }
 const IMU_CHART_WINDOW_MS = 1000;
 function imuMessage(message) {
-  if (message.schema_version !== 1 || !Array.isArray(message.accel_mps2) || !Array.isArray(message.gyro_rps)) return;
+  if (message.schema_version !== 2 || !Array.isArray(message.accel_mps2) || !Array.isArray(message.gyro_rps)) return;
   if (state.session !== message.session_id) { state.session = message.session_id; state.points = []; state.sequence = null; }
   let sequence; try { sequence = BigInt(message.sample_sequence); } catch { return; }
   if (state.sequence !== null && sequence <= state.sequence) return;
@@ -188,7 +188,7 @@ function render(now) {
     lastDraw = now; const fresh = state.lastIMU > 0 && now - state.lastIMU < 500; $('imu-state').classList.toggle('stale', !fresh);
     text($('imu-state'), fresh ? '实时遥测' : '数据过期 / 等待新样本');
     if (state.latest) { const sample = state.latest; for (const [id, values] of [['accel-values', sample.accel_mps2], ['gyro-values', sample.gyro_rps]]) [...$(id).querySelectorAll('dd')].forEach((node, i) => text(node, Number.isFinite(values[i]) ? values[i].toFixed(3) : '异常'));
-      text($('imu-details'), '{rate} Hz 原生 / ≤{limit} Hz 预览 · sequence {sequence} · 温度 {temperature} °C · 通知缺口 {gaps}（不等于样本丢失）', { rate: sample.source_rate_hz, limit: sample.telemetry_limit_hz, sequence: sample.sample_sequence, temperature: Number.isFinite(sample.temperature_c) ? sample.temperature_c.toFixed(1) : '异常', gaps: sample.source_counters.gpio_event_gap_count });
+      text($('imu-details'), '{rate} Hz 原生 / ≤{limit} Hz 预览 · sequence {sequence} · 温度 {temperature} °C · 时钟 {mode} · burst {evidence}', { rate: sample.source_rate_hz, limit: sample.telemetry_limit_hz, sequence: sample.sample_sequence, temperature: Number.isFinite(sample.temperature_c) ? sample.temperature_c.toFixed(1) : '异常', mode: sample.timestamp_mode, evidence: sample.evidence_id });
     }
     drawChart('accel-chart', 'accel', now); drawChart('gyro-chart', 'gyro', now);
   }
