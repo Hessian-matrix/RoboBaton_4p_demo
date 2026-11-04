@@ -32,7 +32,8 @@ constexpr uint8_t kOpConnection = 0x07U;
 constexpr uint32_t kIndexVersion = 1U;
 constexpr uint32_t kChunkInfoVersion = 1U;
 constexpr uint64_t kNanosecondsPerSecond = 1000000000ULL;
-constexpr size_t kOutputBufferBytes = 8U * 1024U * 1024U;
+// Keep synchronous storage bursts short so the writer can resume IMU draining.
+constexpr size_t kOutputBufferBytes = 256U * 1024U;
 constexpr uint64_t kMaxChunkAgeNs = 1ULL * kNanosecondsPerSecond;
 constexpr uint64_t kLatencyFirstBucketNs = 1000U;
 constexpr uint64_t kStatsPublishRecordInterval = 256U;

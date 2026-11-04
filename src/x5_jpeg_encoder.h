@@ -33,6 +33,7 @@ struct X5JpegInputSlot {
   size_t uv_capacity = 0U;
   int y_fd = -1;
   int uv_fd = -1;
+  bool contiguous_planes = false;
   bool submitted_to_hardware = false;
 };
 
@@ -65,7 +66,9 @@ class X5JpegEncoder final {
   void NotifySlotWaiters() noexcept;
   void ReleaseSlot(X5JpegInputSlot* slot) noexcept;
   void QuarantineSlot(X5JpegInputSlot* slot) noexcept;
+  // Copy only touches staging memory; flush it after releasing the source reference.
   X5JpegNv12CopyResult CopyNv12ToSlot(const QueuedFrame& frame, X5JpegInputSlot* slot);
+  void FlushSlotForDevice(const X5JpegInputSlot* slot);
   void Encode(const X5JpegEncodeRequest& request, std::vector<uint8_t>* jpeg);
   // 将 JPEG 直接追加到已有 ROS payload，返回本次追加的 JPEG 有效字节数。
   void EncodeAppend(const X5JpegEncodeRequest& request, std::vector<uint8_t>* payload,

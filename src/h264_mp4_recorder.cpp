@@ -1,5 +1,5 @@
-#include "fsync_association.h"
 #include "h264_mp4_recorder.h"
+#include "realtime_mutex.h"
 
 #include <fcntl.h>
 #include <linux/fs.h>
@@ -47,7 +47,6 @@ constexpr uint32_t kFfmpegRemuxBaseTimeoutMs = 30000U;
 constexpr uint32_t kFfmpegRemuxMaxTimeoutMs = 300000U;
 constexpr uint64_t kFfmpegRemuxMinimumBytesPerSecond = 5U * 1024U * 1024U;
 constexpr uint32_t kFfmpegTerminateGraceMs = 2000U;
-constexpr uint32_t kMaxCompleteImuTimestampUncertaintyUs = 200U;
 constexpr const char* kSessionSchema = "robobaton_h264_mp4_session_v1";
 constexpr const char* kReceiptSchema =
     "robobaton_h264_mp4_publication_receipt_v1";
@@ -350,7 +349,7 @@ bool FsyncDirectory(const fs::path& path, std::string* error) {
 }
 
 void WriteImuHeader(std::ostream& output) {
-  output << "timestamp_ns,sequence,frame_id,orientation_x,orientation_y,orientation_z,"
+  output << "sample_realtime_ns,sequence,frame_id,orientation_x,orientation_y,orientation_z,"
             "orientation_w";
   for (int index = 0; index < 9; ++index) output << ",orientation_covariance_" << index;
   output << ",angular_velocity_x,angular_velocity_y,angular_velocity_z";
@@ -361,13 +360,17 @@ void WriteImuHeader(std::ostream& output) {
   for (int index = 0; index < 9; ++index) {
     output << ",linear_acceleration_covariance_" << index;
   }
-  output << ",timestamp_uncertainty_us,gpio_event_gap_count,fifo_overflow_count,"
-            "mapper_failure_count";
+  output << ",sample_monotonic_ns,session_generation,evidence_id,burst_flags,burst_complete_raw_ns,"
+            "observation_monotonic_ns,estimated_period_ns,timestamp_source,packet_flags,"
+            "bridge_monotonic_ns,bridge_realtime_ns,bridge_uncertainty_ns,temperature_c,"
+            "raw_temperature,raw_accel_x,raw_accel_y,raw_accel_z,raw_gyro_x,raw_gyro_y,raw_gyro_z,"
+            "timestamp_mode,fifo_tmst,sample_raw_ns,timestamp_uncertainty_ns,bridge_clock,bridge_raw_ns";
   output << '\n';
 }
 
-void WriteImuRow(std::ostream& output, const icm42670_sample_t& sample) {
-  output << sample.sample_timestamp_ns << ',' << sample.sample_sequence
+void WriteImuRow(std::ostream& output, const OutputImuSample& mapped) {
+  const auto& sample = mapped.native;
+  output << mapped.realtime_ns << ',' << sample.sample_sequence
          << ",imu_link,0.000000000000000,0.000000000000000,0.000000000000000,"
             "1.000000000000000";
   output << ",-1.000000000000000";
@@ -379,9 +382,18 @@ void WriteImuRow(std::ostream& output, const icm42670_sample_t& sample) {
   output << ',' << sample.accel_mps2[0] << ',' << sample.accel_mps2[1] << ','
          << sample.accel_mps2[2];
   for (int index = 0; index < 9; ++index) output << ",0.000000000000000";
-  output << ',' << sample.timestamp_uncertainty_us << ','
-         << sample.gpio_event_gap_count << ',' << sample.fifo_overflow_count << ','
-         << sample.mapper_failure_count;
+  output << ',' << sample.sample_monotonic_ns << ',' << sample.session_generation << ','
+         << sample.evidence_id << ',' << sample.burst_flags << ',' << sample.burst_complete_raw_ns << ','
+         << sample.observation_monotonic_ns << ',' << sample.estimated_period_ns << ','
+         << sample.timestamp_source << ',' << sample.packet_flags << ',' << mapped.bridge_monotonic_ns << ','
+         << mapped.bridge_realtime_ns << ',' << mapped.bridge_uncertainty_ns << ',' << sample.temperature_c
+         << ',' << sample.raw.temperature;
+  for (auto value : sample.raw.accel) output << ',' << value;
+  for (auto value : sample.raw.gyro) output << ',' << value;
+  output << ',' << (sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host")
+         << ',' << sample.fifo_tmst << ',' << sample.sample_raw_ns << ',' << sample.timestamp_uncertainty_ns
+         << ',' << (sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "CLOCK_MONOTONIC_RAW" : "CLOCK_MONOTONIC")
+         << ',' << mapped.bridge_raw_ns;
   output << '\n';
 }
 
@@ -687,10 +699,8 @@ class H264Mp4Recorder::Impl {
             << "frame_index,timestamp_ns,key_frame,encoded_bytes\n";
       }
       imu_file_.open(staging_path_ / "imu.csv", std::ios::trunc);
-      fsync_file_.open(staging_path_ / "fsync.jsonl", std::ios::trunc);
       exposure_file_.open(staging_path_ / "exposure.jsonl", std::ios::trunc);
       if (!exposure_file_) throw std::runtime_error("open exposure sidecar failed");
-      if (!fsync_file_) throw std::runtime_error("open FSYNC sidecar failed");
       if (!imu_file_) {
         throw std::runtime_error("open H264 MP4 IMU CSV failed");
       }
@@ -818,13 +828,6 @@ class H264Mp4Recorder::Impl {
     condition_.notify_one();
   }
 
-  void ObserveFsync(const FsyncAssociationRecord& record) noexcept {
-    std::lock_guard<RealtimeMutex> lock(mutex_);
-    if (!started_ || stopping_) return;
-    if (fsync_count_ == fsync_queue_.size()) { SetFatalLocked("FSYNC MP4 queue full"); return; }
-    fsync_queue_[(fsync_head_ + fsync_count_++) % fsync_queue_.size()] = record;
-    condition_.notify_one();
-  }
   void ObserveFrameSet(const sc132_frame_set_t& set) noexcept {
     std::lock_guard<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_) return;
@@ -843,11 +846,12 @@ class H264Mp4Recorder::Impl {
     }
     condition_.notify_one();
   }
-  void ObserveImu(const icm42670_sample_t& sample) noexcept {
+  void ObserveImu(const OutputImuSample& mapped) noexcept {
+    const auto& sample = mapped.native;
     std::unique_lock<RealtimeMutex> lock(mutex_);
     if (!started_ || stopping_) return;
-    if (sample.struct_size < sizeof(icm42670_sample_t) ||
-        sample.sample_timestamp_ns == 0U ||
+    if (sample.struct_size != sizeof(icm42670_sample_t) || mapped.realtime_ns == 0U ||
+        sample.sample_monotonic_ns == 0U ||
         (last_imu_sequence_ != 0U && sample.sample_sequence <= last_imu_sequence_)) {
       ++stats_.imu_samples_dropped;
       return;
@@ -858,7 +862,7 @@ class H264Mp4Recorder::Impl {
       return;
     }
     try {
-      imu_queue_.push_back(sample);
+      imu_queue_.push_back(mapped);
     } catch (...) {
       ++stats_.imu_samples_dropped;
       SetFatalLocked("copy IMU sample failed");
@@ -941,23 +945,19 @@ class H264Mp4Recorder::Impl {
         camera_counts_complete = false;
       }
     }
-    const bool source_health_complete = source_health_set &&
-        source_health.samples > 0U &&
-        source_health.samples == stats.imu_samples_admitted &&
-        source_health.invalid_samples == 0U &&
-        source_health.invalid_packet_drops == 0U &&
-        source_health.sequence_gaps == 0U &&
-        source_health.sequence_duplicates == 0U &&
+    const auto& producer = source_health.producer;
+    const bool source_health_complete = source_health_set && source_health.samples > 0U &&
+        source_health.samples == stats.imu_samples_admitted && source_health.invalid_samples == 0U &&
+        source_health.timestamp_duplicates == 0U && source_health.timestamp_regressions == 0U &&
+        source_health.sequence_gaps == 0U && source_health.sequence_duplicates == 0U &&
         source_health.sequence_regressions == 0U &&
-        source_health.fifo_overflow_count == 0U &&
-        source_health.timing_sample_drops == 0U &&
-        source_health.uncertainty_over_200_drops == 0U &&
-        source_health.producer_final_health_valid &&
-        source_health.producer_session_generation != 0U &&
-        source_health.producer_published_samples == source_health.samples &&
-        source_health.max_timestamp_uncertainty_us <=
-            kMaxCompleteImuTimestampUncertaintyUs &&
-        source_health.mapper_counter_valid;
+        producer.struct_size == sizeof(producer) && producer.session_generation != 0U &&
+        producer.published_samples == source_health.samples && producer.transport_complete == 1U &&
+        producer.consumed_scans == producer.published_samples &&
+        producer.records_consumed == producer.records_acked && producer.fatal_reason == 0U &&
+        producer.fifo_overflow_count == 0U && producer.invalid_payload_count == 0U &&
+        producer.scan_push_failure_count == 0U && producer.evidence_full_count == 0U &&
+        producer.quiesce_errno == 0U;
     const bool data_complete = session_success && remux_ok && fatal_error.empty() &&
         camera_counts_complete && source_health_complete &&
         stats.encoded_frames_dropped == 0U && stats.imu_samples_dropped == 0U &&
@@ -1265,9 +1265,8 @@ class H264Mp4Recorder::Impl {
   void WorkerEntry() noexcept {
     while (true) {
       EncodedJob frame;
-      std::array<icm42670_sample_t, kImuWriteBatch> imu_batch{};
+      std::array<OutputImuSample, kImuWriteBatch> imu_batch{};
       size_t imu_count = 0U;
-      FsyncAssociationRecord association; bool have_association = false;
       ExposureRecord exposure{}; bool have_exposure = false;
       bool have_frame = false;
       {
@@ -1275,7 +1274,7 @@ class H264Mp4Recorder::Impl {
         condition_.wait(lock, [this] {
           return stopping_ || !error_.empty() ||
                  (!writer_paused_ &&
-                  (!encoded_queue_.empty() || !imu_queue_.empty() || fsync_count_ || exposure_count_));
+                  (!encoded_queue_.empty() || !imu_queue_.empty() || exposure_count_));
         });
         if (!error_.empty()) {
           DropQueuedFramesLocked();
@@ -1294,21 +1293,12 @@ class H264Mp4Recorder::Impl {
           imu_batch[imu_count++] = imu_queue_.front();
           imu_queue_.pop_front();
         }
-        if (fsync_count_) {
-          association = fsync_queue_[fsync_head_]; fsync_head_ = (fsync_head_ + 1) % fsync_queue_.size();
-          --fsync_count_; have_association = true;
-        }
         if (exposure_count_) {
           exposure = exposure_queue_[exposure_head_];
           exposure_head_ = (exposure_head_ + 1) % exposure_queue_.size();
           --exposure_count_; have_exposure = true;
         }
-        if (!have_frame && imu_count == 0U && !have_association && !have_exposure && stopping_) break;
-      }
-      if (have_association) {
-        try { char json[1024]; FormatFsyncAssociation(association,json,sizeof(json)); fsync_file_ << json << '\n'; }
-        catch (...) { std::lock_guard<RealtimeMutex> lock(mutex_); SetFatalLocked("format FSYNC sidecar failed"); }
-        if (!fsync_file_) { std::lock_guard<RealtimeMutex> lock(mutex_); SetFatalLocked("write FSYNC sidecar failed"); }
+        if (!have_frame && imu_count == 0U && !have_exposure && stopping_) break;
       }
       if (have_exposure) {
         const auto& e = exposure.exposure;
@@ -1384,7 +1374,6 @@ class H264Mp4Recorder::Impl {
       imu_file_.close();
       success = static_cast<bool>(imu_file_) && success;
     }
-    if (fsync_file_.is_open()) success = FlushAndClose(&fsync_file_) && success;
     if (exposure_file_.is_open()) success = FlushAndClose(&exposure_file_) && success;
 #ifdef RELEASE008_TESTING
     success = !fail_output_close_ && success;
@@ -1534,8 +1523,8 @@ class H264Mp4Recorder::Impl {
              << "  \"imu_source_samples\": " << source_health.samples << ",\n"
              << "  \"imu_source_invalid_samples\": "
              << source_health.invalid_samples << ",\n"
-             << "  \"imu_source_invalid_packet_drops\": "
-             << source_health.invalid_packet_drops << ",\n"
+             << "  \"imu_source_invalid_payload_count\": "
+             << source_health.producer.invalid_payload_count << ",\n"
              << "  \"imu_source_timestamp_duplicates\": "
              << source_health.timestamp_duplicates << ",\n"
              << "  \"imu_source_timestamp_regressions\": "
@@ -1546,26 +1535,20 @@ class H264Mp4Recorder::Impl {
              << source_health.sequence_duplicates << ",\n"
              << "  \"imu_source_sequence_regressions\": "
              << source_health.sequence_regressions << ",\n"
-             << "  \"imu_source_gpio_event_gap_count\": "
-             << source_health.gpio_event_gap_count << ",\n"
-             << "  \"imu_source_fifo_overflow_count\": "
-             << source_health.fifo_overflow_count << ",\n"
-             << "  \"imu_source_timing_sample_drops\": "
-             << source_health.timing_sample_drops << ",\n"
-             << "  \"imu_source_max_timestamp_uncertainty_us\": "
-             << source_health.max_timestamp_uncertainty_us << ",\n"
-             << "  \"imu_source_max_consecutive_drops\": "
-             << source_health.max_consecutive_drops << ",\n"
-             << "  \"imu_source_uncertainty_over_200_drops\": "
-             << source_health.uncertainty_over_200_drops << ",\n"
-             << "  \"imu_source_producer_session_generation\": "
-             << source_health.producer_session_generation << ",\n"
-             << "  \"imu_source_producer_published_samples\": "
-             << source_health.producer_published_samples << ",\n"
-             << "  \"imu_source_producer_final_health_valid\": "
-             << (source_health.producer_final_health_valid ? "true" : "false") << ",\n"
-             << "  \"imu_source_mapper_counter_valid\": "
-             << (source_health.mapper_counter_valid ? "true" : "false") << ",\n"
+             << "  \"imu_source_fifo_overflow_count\": " << source_health.producer.fifo_overflow_count << ",\n"
+             << "  \"imu_source_producer_session_generation\": " << source_health.producer.session_generation << ",\n"
+             << "  \"imu_source_producer_published_samples\": " << source_health.producer.published_samples << ",\n"
+             << "  \"imu_source_consumed_scans\": " << source_health.producer.consumed_scans << ",\n"
+             << "  \"imu_source_records_consumed\": " << source_health.producer.records_consumed << ",\n"
+             << "  \"imu_source_records_acked\": " << source_health.producer.records_acked << ",\n"
+             << "  \"imu_source_fatal_reason\": " << source_health.producer.fatal_reason << ",\n"
+             << "  \"imu_source_fatal_errno\": " << source_health.producer.fatal_errno << ",\n"
+             << "  \"imu_source_scan_push_failure_count\": " << source_health.producer.scan_push_failure_count << ",\n"
+             << "  \"imu_source_evidence_full_count\": " << source_health.producer.evidence_full_count << ",\n"
+             << "  \"imu_source_tail_packet_count\": " << source_health.producer.tail_packet_count << ",\n"
+             << "  \"imu_source_unknown_hardware_tail\": " << source_health.producer.unknown_hardware_tail << ",\n"
+             << "  \"imu_source_quiesce_errno\": " << source_health.producer.quiesce_errno << ",\n"
+             << "  \"imu_source_transport_complete\": " << (source_health.producer.transport_complete ? "true" : "false") << ",\n"
              << "  \"error\": \"" << JsonEscape(preliminary.error) << "\"\n"
              << "}\n";
       bool closed = FlushAndClose(&output);
@@ -1812,13 +1795,12 @@ class H264Mp4Recorder::Impl {
   RealtimeCondition condition_;
   std::thread worker_;
   std::deque<EncodedJob> encoded_queue_;
-  std::deque<icm42670_sample_t> imu_queue_;
+  std::deque<OutputImuSample> imu_queue_;
   std::array<std::ofstream, kMaxChannels> raw_files_;
   std::array<std::ofstream, kMaxChannels> timestamp_files_;
   std::array<std::vector<uint8_t>, kMaxChannels> cached_sps_;
   std::array<std::vector<uint8_t>, kMaxChannels> cached_pps_;
   std::ofstream imu_file_;
-  std::ofstream fsync_file_;
   struct ExposureRecord {
     uint32_t camera_id = 0, raw_frame_id = 0, frame_id = 0;
     uint64_t group_id = 0, group_timestamp_ns = 0, camera_timestamp_ns = 0;
@@ -1827,8 +1809,6 @@ class H264Mp4Recorder::Impl {
   std::ofstream exposure_file_;
   std::array<ExposureRecord, 1024> exposure_queue_{};
   size_t exposure_head_ = 0, exposure_count_ = 0;
-  std::array<FsyncAssociationRecord, 256> fsync_queue_{};
-  size_t fsync_head_ = 0, fsync_count_ = 0;
   std::array<bool, kMaxChannels> resync_required_{};
   std::array<uint64_t, kMaxChannels> first_timestamp_by_camera_{};
   std::array<uint64_t, kMaxChannels> written_by_camera_{};
@@ -1891,11 +1871,8 @@ void H264Mp4Recorder::ObserveEncodedFrame(
   if (enabled()) impl_->ObserveEncodedFrame(camera_id, frame);
 }
 
-void H264Mp4Recorder::ObserveImu(const icm42670_sample_t& sample) noexcept {
+void H264Mp4Recorder::ObserveImu(const OutputImuSample& sample) noexcept {
   if (enabled()) impl_->ObserveImu(sample);
-}
-void H264Mp4Recorder::ObserveFsync(const FsyncAssociationRecord& record) noexcept {
-  if (enabled()) impl_->ObserveFsync(record);
 }
 void H264Mp4Recorder::ObserveFrameSet(const sc132_frame_set_t& set) noexcept {
   if (enabled()) impl_->ObserveFrameSet(set);

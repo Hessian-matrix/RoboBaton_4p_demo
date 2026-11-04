@@ -86,14 +86,17 @@ struct Options {
   uint64_t frame_set_max_skew_ns = kDefaultFrameSetMaxSkewNs;
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
+  std::string camera_timestamp_path = "observer";
+  uint32_t imu_timestamp_mode = ICM42670_TIMESTAMP_MODE_HOST;
   // Unset preserves the library's environment setting; explicit YAML overrides it.
   std::optional<bool> test_exposure_midpoint;
+  bool auto_exposure = true;
+  uint32_t exposure_time_us = 2000U;
   uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t imu_sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
-  bool fsync_enabled = false;
   uint32_t record_frame_skip = 0U;
   uint32_t record_drop_min_interval = 10U;
   std::string record_bag_path;
@@ -149,11 +152,10 @@ struct QueuedFrame {
 struct ImuConsumerOptions {
   uint32_t sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
+  uint32_t timestamp_mode = ICM42670_TIMESTAMP_MODE_HOST;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
   icm42670_runtime_health_t* final_health = nullptr;
-  void (*fsync_observer)(const icm42670_fsync_event_t&, void*) = nullptr;
-  void* fsync_user = nullptr;
 };
 
 #ifdef RELEASE008_TESTING
@@ -164,7 +166,7 @@ std::size_t ImuPendingCapacityForTest();
 
 using ImuSampleObserver = void (*)(const icm42670_sample_t& sample, void* user);
 
-// adapter 独占 ICM C handle，并在 callback trampoline 截断 observer 异常。
+// adapter 独占 ICM C handle；observer 在消费线程执行，STOP 期间继续接收并排空。
 int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer,
                    void* observer_user);
 
@@ -205,7 +207,20 @@ class ScopedNonblockingFd final {
 struct ImuPrintState {
   uint32_t print_every_samples = 1U;
   uint64_t observed_samples = 0U;
-  uint64_t last_timestamp_ns = 0U;
+  uint64_t first_sample_monotonic_ns = 0U;
+  uint64_t last_sample_monotonic_ns = 0U;
+  uint64_t last_sequence = 0U;
+  uint64_t sequence_gap_count = 0U;
+  uint64_t sequence_regression_count = 0U;
+  uint64_t irq_samples = 0U;
+  uint64_t service_samples = 0U;
+  uint64_t ordinary_bursts = 0U;
+  uint64_t last_evidence_id = 0U;
+  uint64_t first_burst_raw_ns = 0U;
+  uint64_t last_burst_raw_ns = 0U;
+  uint64_t first_burst_last_sequence = 0U;
+  uint64_t last_burst_last_sequence = 0U;
+  uint32_t burst_generation = 0U;
   int output_fd = STDOUT_FILENO;
   bool output_available = true;
   bool print_metrics = false;

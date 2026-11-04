@@ -14,7 +14,7 @@
 #include "cam_demo_common.h"
 #include "rosbag_v2_writer.h"
 #include "x5_jpeg_encoder.h"
-#include "fsync_association.h"
+#include "imu_realtime.h"
 
 namespace robobaton_demo {
 
@@ -158,8 +158,7 @@ class SensorBagRecorder final {
   void ObserveFrame(const QueuedFrame& frame);
 #endif
   void ObserveFrameSet(const sc132_frame_set_t& frame_set);
-  void ObserveImu(const icm42670_sample_t& sample);
-  void ObserveFsync(const FsyncAssociationRecord& record);
+  void ObserveImu(const OutputImuSample& sample);
   SensorBagFinishResult Finish(bool session_success) noexcept;
   void Abort() noexcept;
 
@@ -230,7 +229,7 @@ class SensorBagRecorder final {
   bool PopFrame(int camera_id, SensorBagFrameJob* job) noexcept;
   bool PopNextEncodedFrame(EncodedFrameJob* encoded, uint64_t* order_wait_ns) noexcept;
   bool RetireHeadEvictedEncodedOrdersLocked() noexcept;
-  size_t PopImuBatch(icm42670_sample_t* samples, size_t max_samples) noexcept;
+  size_t PopImuBatch(OutputImuSample* samples, size_t max_samples) noexcept;
   bool WriterInputReady() noexcept;
   bool WriterInputsClosed() noexcept;
   bool HasClosedEncodedOrderGap() noexcept;
@@ -240,7 +239,7 @@ class SensorBagRecorder final {
   void ReleaseEncodedFrameJob(EncodedFrameJob* encoded) noexcept;
   void PublishEncodedFrame(EncodedFrameJob encoded);
   void WriteEncodedFrameToBag(const EncodedFrameJob& encoded, uint64_t order_wait_ns);
-  void WriteImuSample(const icm42670_sample_t& sample, std::vector<uint8_t>* payload);
+  void WriteImuSample(const OutputImuSample& sample, std::vector<uint8_t>* payload);
   void ObserveCopyTiming(uint64_t copy_ns,
                          const X5JpegNv12CopyResult& copy_result) noexcept;
   void ObserveJpegTiming(uint64_t encode_ns) noexcept;
@@ -276,10 +275,7 @@ class SensorBagRecorder final {
   uint32_t FrameMetadataConnection(int camera_id) const;
 
   RosbagV2Writer writer_;
-  RealtimeMutex fsync_mutex_;
-  std::array<FsyncAssociationRecord, 256> fsync_queue_{};
-  size_t fsync_head_ = 0, fsync_count_ = 0;
-  uint32_t fsync_connection_ = 0;
+  uint32_t imu_timing_connection_ = 0;
   X5JpegEncoder jpeg_encoder_;
   mutable RealtimeMutex stats_mutex_;
   SensorBagRecorderStats stats_;
@@ -293,7 +289,7 @@ class SensorBagRecorder final {
   std::vector<std::thread> workers_;
   RealtimeMutex imu_queue_mutex_;
   RealtimeCondition imu_queue_condition_;
-  std::vector<icm42670_sample_t> imu_queue_;
+  std::vector<OutputImuSample> imu_queue_;
   RealtimeMutex encoded_mutex_;
   RealtimeCondition encoded_condition_;
   std::vector<EncodedFrameSlot> encoded_slots_;

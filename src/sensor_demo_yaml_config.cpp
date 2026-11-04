@@ -109,6 +109,19 @@ uint32_t ParseUint32(const std::string& text, const char* name) {
   return static_cast<uint32_t>(value);
 }
 
+uint32_t ParseExposureTimeUs(const std::string& text, const char* name) {
+  if (text.empty() || !std::all_of(text.begin(), text.end(), [](char c) {
+        return c >= '0' && c <= '9';
+      })) {
+    throw std::invalid_argument(std::string(name) + " must be positive decimal microseconds");
+  }
+  const unsigned long value = std::stoul(text, nullptr, 10);
+  if (value == 0UL || value > 0xffffffffUL) {
+    throw std::invalid_argument(std::string(name) + " must be in 1..4294967295");
+  }
+  return static_cast<uint32_t>(value);
+}
+
 long long ParseLongLong(const std::string& text, const char* name) {
   size_t parsed = 0;
   const long long value = std::stoll(text, &parsed);
@@ -181,6 +194,8 @@ std::string DefaultSensorDemoYamlConfigText() {
   std::ostringstream output;
   output << "# sensor_demo YAML config. Command-line options override this file.\n"
          << "# width/height: 1280x1088 (default), 640x480, 720x480, or 1280x720 (either axis).\n"
+         << "camera_timestamp_path: " << defaults.camera_timestamp_path << "\n"
+         << "imu_timestamp_mode: host\n"
          << "camera:\n"
          << "  width: " << defaults.width << "\n"
          << "  height: " << defaults.height << "\n"
@@ -188,6 +203,9 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  rotate: " << defaults.rotate_degrees << "\n"
          << "  # Estimated midpoint timestamps; explicit YAML overrides SC132_TEST_EXPOSURE_MIDPOINT.\n"
          << "  test_exposure_midpoint: false\n"
+         << "  # Manual calibration exposure in microseconds; ignored while auto_exposure is true.\n"
+         << "  auto_exposure: true\n"
+         << "  exposure_time_us: " << defaults.exposure_time_us << "\n"
          << "rtsp:\n"
          << "  bps: " << defaults.bps << "\n"
          << "  codec: " << VideoCodecName(defaults.video_codec) << "\n"
@@ -196,7 +214,6 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  sample_rate_hz: " << defaults.imu_sample_rate_hz << "\n"
          << "  print_rate_hz: " << kDefaultImuPrintRateHz << "\n"
          << "  print_metrics: false\n"
-         << "  fsync_enabled: false\n"
          << "save_data:\n"
          << "  save: false\n"
          << "  format: mp4\n"
@@ -248,7 +265,15 @@ void ApplyCaptureSelection(Options* options, const SensorDemoYamlConfigState& st
 bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
                           Options* options, SensorDemoYamlConfigState* state) {
   const std::string name = "sensor_config." + key;
-  if (key == "camera.width") {
+  if (key == "camera_timestamp_path") {
+    if (value != "observer" && value != "official")
+      throw std::invalid_argument("camera_timestamp_path must be observer or official");
+    options->camera_timestamp_path = value;
+  } else if (key == "imu_timestamp_mode") {
+    if (value != "host" && value != "tmst")
+      throw std::invalid_argument("imu_timestamp_mode must be host or tmst");
+    options->imu_timestamp_mode = value == "tmst" ? ICM42670_TIMESTAMP_MODE_TMST : ICM42670_TIMESTAMP_MODE_HOST;
+  } else if (key == "camera.width") {
     const int width = ParseInt(value, name.c_str());
     options->width = width;
   } else if (key == "camera.height") {
@@ -260,6 +285,10 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     options->rotate_degrees = ParseInt(value, name.c_str());
   } else if (key == "camera.test_exposure_midpoint") {
     options->test_exposure_midpoint = ParseBool(value, name.c_str());
+  } else if (key == "camera.auto_exposure") {
+    options->auto_exposure = ParseBool(value, name.c_str());
+  } else if (key == "camera.exposure_time_us") {
+    options->exposure_time_us = ParseExposureTimeUs(value, name.c_str());
   } else if (key == "rtsp.bps") {
     options->bps = ParseLongLong(value, name.c_str());
   } else if (key == "rtsp.codec") {
@@ -273,8 +302,6 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     state->imu_print_rate_was_set = true;
   } else if (key == "imu.print_metrics") {
     options->imu_print_metrics = ParseBool(value, name.c_str());
-  } else if (key == "imu.fsync_enabled") {
-    options->fsync_enabled = ParseBool(value, name.c_str());
   } else if (key == "save_data.save") {
     state->save_data_enabled = ParseBool(value, name.c_str());
     ApplySaveDataSelection(options, *state);

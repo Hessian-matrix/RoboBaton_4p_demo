@@ -33,26 +33,15 @@ extern "C" {
 #define ROBOBATON_RELEASE_VERSION "0.0.0+unknown"
 #endif
 
-#ifdef RELEASE008_TESTING
-namespace robobaton_demo {
-struct SensorDemoImuStatsTestResult {
-  uint32_t timing_sample_drops = 0U;
-  uint32_t max_consecutive_drops = 0U;
-  bool max_consecutive_drops_valid = false;
-};
-}  // namespace robobaton_demo
-#endif
 
 struct MainPipelineHooksUser {
   robobaton_demo::SensorBagRecorder* bag_recorder = nullptr;
   robobaton_demo::TeeCaptureRecorder* capture_recorder = nullptr;
-  robobaton_demo::FsyncAssociation* association = nullptr;
   robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
 };
 
 void ObserveFrameSetForBag(const sc132_frame_set_t& frame_set, void* user) {
   auto* context = static_cast<MainPipelineHooksUser*>(user);
-  if (context && context->association) context->association->ObserveGroup(frame_set);
   if (context && context->mp4_recorder) context->mp4_recorder->ObserveFrameSet(frame_set);
   if (context == nullptr || context->bag_recorder == nullptr) {
     return;
@@ -75,7 +64,7 @@ bool InjectJoinFailure(std::thread&, void*) { return false; }
 
 robobaton_demo::PipelineHooks MainPipelineHooks(MainPipelineHooksUser* user) {
   robobaton_demo::PipelineHooks hooks{};
-  if (user != nullptr && (user->bag_recorder != nullptr || user->association != nullptr || user->mp4_recorder != nullptr)) {
+  if (user != nullptr && (user->bag_recorder != nullptr || user->mp4_recorder != nullptr)) {
     hooks.on_frame_set = ObserveFrameSetForBag;
   }
   if (user != nullptr && user->capture_recorder != nullptr) {
@@ -341,7 +330,6 @@ struct ImuStats {
   uint64_t invalid_samples = 0U;
   uint64_t first_arrival_monotonic_ns = 0U;
   uint64_t last_arrival_monotonic_ns = 0U;
-  uint64_t invalid_packet_drops = 0U;
   uint64_t timestamp_duplicates = 0U;
   uint64_t timestamp_regressions = 0U;
   uint64_t sequence_gaps = 0U;
@@ -349,33 +337,18 @@ struct ImuStats {
   uint64_t sequence_regressions = 0U;
   uint64_t last_sample_sequence = 0U;
   bool sample_sequence_initialized = false;
-  uint32_t gpio_event_gap_count = 0U;
-  uint32_t fifo_overflow_count = 0U;
   uint64_t first_timestamp_ns = 0U;
   uint64_t last_timestamp_ns = 0U;
   uint64_t min_dt_ns = 0U;
   uint64_t max_dt_ns = 0U;
   uint64_t dt_sum_ns = 0U;
-  uint32_t timing_sample_drops = 0U;
-  uint32_t max_consecutive_drops = 0U;
-  uint32_t max_timestamp_uncertainty_us = 0U;
-  uint32_t previous_mapper_failure_count = 0U;
-  bool max_consecutive_drops_valid = true;
-  void ObserveMapperFailureCount(uint32_t mapper_failure_count) noexcept {
-    if (mapper_failure_count < previous_mapper_failure_count) {
-      max_consecutive_drops_valid = false;
-    } else {
-      const uint32_t delta = mapper_failure_count - previous_mapper_failure_count;
-      if (delta > max_consecutive_drops) max_consecutive_drops = delta;
-    }
-    previous_mapper_failure_count = mapper_failure_count;
-    if (mapper_failure_count > timing_sample_drops) timing_sample_drops = mapper_failure_count;
-  }
+  uint64_t evidence_id = 0U, ordinary_bursts = 0U;
+  uint64_t first_burst_raw_ns = 0U, last_burst_raw_ns = 0U;
+  uint64_t first_burst_last_sequence = 0U, last_burst_last_sequence = 0U;
   void Observe(const icm42670_sample_t& sample) noexcept {
     if (sample.struct_size != sizeof(sample)) { ++invalid_samples; return; }
     last_arrival_monotonic_ns = SensorDemoSteadyNowNs();
     if (samples == 0U) first_arrival_monotonic_ns = last_arrival_monotonic_ns;
-    ObserveMapperFailureCount(sample.mapper_failure_count);
     if (sample_sequence_initialized) {
       if (sample.sample_sequence == last_sample_sequence) ++sequence_duplicates;
       else if (sample.sample_sequence < last_sample_sequence) ++sequence_regressions;
@@ -385,10 +358,17 @@ struct ImuStats {
       }
     }
     last_sample_sequence = sample.sample_sequence; sample_sequence_initialized = true;
-    gpio_event_gap_count = std::max(gpio_event_gap_count, sample.gpio_event_gap_count);
-    fifo_overflow_count = std::max(fifo_overflow_count, sample.fifo_overflow_count);
-    max_timestamp_uncertainty_us = std::max(max_timestamp_uncertainty_us, sample.timestamp_uncertainty_us);
-    const uint64_t timestamp_ns = sample.sample_timestamp_ns;
+    if ((sample.burst_flags & ICM42670_BURST_STOP_TAIL) == 0U) {
+      if (sample.evidence_id != evidence_id) {
+        evidence_id = sample.evidence_id;
+        ++ordinary_bursts;
+        last_burst_raw_ns = sample.burst_complete_raw_ns;
+        if (ordinary_bursts == 1U) first_burst_raw_ns = last_burst_raw_ns;
+      }
+      if (ordinary_bursts == 1U) first_burst_last_sequence = sample.sample_sequence;
+      last_burst_last_sequence = sample.sample_sequence;
+    }
+    const uint64_t timestamp_ns = sample.sample_monotonic_ns;
     if (samples == 0U) first_timestamp_ns = timestamp_ns;
     else if (timestamp_ns == last_timestamp_ns) ++timestamp_duplicates;
     else if (timestamp_ns < last_timestamp_ns) ++timestamp_regressions;
@@ -404,6 +384,14 @@ struct ImuStats {
     if (samples < 2U || last_timestamp_ns <= first_timestamp_ns) return 0.0;
     return static_cast<double>(samples - 1U) * 1'000'000'000.0 / static_cast<double>(last_timestamp_ns - first_timestamp_ns);
   }
+  bool AcquisitionValid() const noexcept {
+    return ordinary_bursts > 1U && last_burst_raw_ns > first_burst_raw_ns &&
+        last_burst_last_sequence > first_burst_last_sequence;
+  }
+  double AcquisitionHz() const noexcept {
+    return AcquisitionValid() ? static_cast<double>(last_burst_last_sequence-first_burst_last_sequence) *
+        1e9 / static_cast<double>(last_burst_raw_ns-first_burst_raw_ns) : 0.0;
+  }
 };
 
 
@@ -412,34 +400,12 @@ robobaton_demo::H264Mp4SourceHealth MakeMp4SourceHealth(
   robobaton_demo::H264Mp4SourceHealth health;
   health.samples = stats.samples;
   health.invalid_samples = stats.invalid_samples;
-  health.invalid_packet_drops = 0U;
   health.timestamp_duplicates = stats.timestamp_duplicates;
   health.timestamp_regressions = stats.timestamp_regressions;
   health.sequence_gaps = stats.sequence_gaps;
   health.sequence_duplicates = stats.sequence_duplicates;
   health.sequence_regressions = stats.sequence_regressions;
-  health.gpio_event_gap_count = stats.gpio_event_gap_count;
-  health.fifo_overflow_count = stats.fifo_overflow_count;
-  health.timing_sample_drops = stats.timing_sample_drops;
-  health.max_timestamp_uncertainty_us = stats.max_timestamp_uncertainty_us;
-  health.max_consecutive_drops = stats.max_consecutive_drops;
-  health.mapper_counter_valid = stats.max_consecutive_drops_valid;
-  health.producer_final_health_valid =
-      final_health != nullptr && final_health->struct_size == sizeof(*final_health) &&
-      final_health->session_generation != 0U;
-  if (health.producer_final_health_valid) {
-    health.producer_session_generation = final_health->session_generation;
-    health.producer_published_samples = final_health->published_samples;
-    health.gpio_event_gap_count = std::max(health.gpio_event_gap_count, final_health->gpio_event_gap_count);
-    health.fifo_overflow_count = std::max(health.fifo_overflow_count, final_health->fifo_overflow_count);
-    if (final_health->mapper_failure_count < stats.previous_mapper_failure_count) health.mapper_counter_valid = false;
-    health.timing_sample_drops = final_health->mapper_failure_count;
-    health.invalid_packet_drops = final_health->invalid_packet_drop_count;
-    health.max_consecutive_drops = std::max(health.max_consecutive_drops, final_health->max_consecutive_timing_drop_count);
-    health.uncertainty_over_200_drops = final_health->uncertainty_over_200_drop_count;
-  } else {
-    health.mapper_counter_valid = false;
-  }
+  if (final_health != nullptr) health.producer = *final_health;
   return health;
 }
 
@@ -451,7 +417,6 @@ struct SensorDemoShutdownContext {
   std::atomic<int>* imu_result = nullptr;
   ImuStats* imu_stats = nullptr;
   icm42670_runtime_health_t* imu_final_health = nullptr;
-  robobaton_demo::FsyncAssociation* association = nullptr;
   int* exit_code = nullptr;
   bool record_bag_requested = false;
   bool record_mp4_requested = false;
@@ -467,24 +432,6 @@ struct SensorDemoShutdownContext {
   robobaton_demo::TeeCaptureRecorderStats capture_stats;
 };
 
-struct FsyncOutput {
-  robobaton_demo::SensorBagRecorder* bag = nullptr;
-  robobaton_demo::H264Mp4Recorder* mp4 = nullptr;
-  uint64_t stdout_dropped = 0;
-};
-void ObserveFsyncRecord(const robobaton_demo::FsyncAssociationRecord& record, void* user) {
-  auto* output = static_cast<FsyncOutput*>(user);
-  if (output->bag) output->bag->ObserveFsync(record);
-  if (output->mp4) output->mp4->ObserveFsync(record);
-  if (!output->bag && !output->mp4) {
-    char json[1024]; const size_t n = robobaton_demo::FormatFsyncAssociation(record,json,sizeof(json));
-    json[n] = '\n';
-    if (::write(STDOUT_FILENO,json,n+1) != static_cast<ssize_t>(n+1)) ++output->stdout_dropped;
-  }
-}
-void ObserveHardwareFsync(const icm42670_fsync_event_t& event, void* user) {
-  static_cast<robobaton_demo::FsyncAssociation*>(user)->ObserveEvent(event);
-}
 
 void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132ShutdownResult& shutdown,
                                         void* user) noexcept {
@@ -497,17 +444,9 @@ void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132Shutdow
   if (context->imu_thread != nullptr && context->imu_thread->joinable()) {
     context->imu_thread->join();
   }
-  try { if (context->association) context->association->Finish(); }
-  catch (...) { if (context->exit_code) *context->exit_code = 1; }
-  context->association = nullptr;
   if (context->imu_result != nullptr &&
       context->imu_result->load(std::memory_order_acquire) != 0 &&
       context->exit_code != nullptr) {
-    *context->exit_code = 1;
-  }
-  if (context->imu_stats != nullptr &&
-      !context->imu_stats->max_consecutive_drops_valid &&
-      !context->record_mp4_requested && context->exit_code != nullptr) {
     *context->exit_code = 1;
   }
   const bool session_success = context->exit_code != nullptr && *context->exit_code == 0 &&
@@ -545,6 +484,7 @@ struct SensorImuObserverState {
   robobaton_demo::ImuPrintState* print_state = nullptr;
   robobaton_demo::SensorBagRecorder* recorder = nullptr;
   robobaton_demo::H264Mp4Recorder* mp4_recorder = nullptr;
+  robobaton_demo::ImuRealtimeMapper mapper;
 };
 
 void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
@@ -558,11 +498,10 @@ void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
   if (state->print_state != nullptr) {
     robobaton_demo::PrintImuSample(sample, state->print_state);
   }
-  if (state->recorder != nullptr) {
-    state->recorder->ObserveImu(sample);
-  }
-  if (state->mp4_recorder != nullptr) {
-    state->mp4_recorder->ObserveImu(sample);
+  if (state->recorder != nullptr || state->mp4_recorder != nullptr) {
+    const auto mapped = state->mapper.Map(sample);
+    if (state->recorder != nullptr) state->recorder->ObserveImu(mapped);
+    if (state->mp4_recorder != nullptr) state->mp4_recorder->ObserveImu(mapped);
   }
 }
 
@@ -570,22 +509,6 @@ void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
 
 #ifdef RELEASE008_TESTING
 namespace robobaton_demo {
-SensorDemoImuStatsTestResult ObserveSensorDemoImuStatsForTest(
-    const uint32_t* mapper_failure_counts, std::size_t count) {
-  ImuStats stats;
-  for (std::size_t index = 0; index < count; ++index) {
-    icm42670_sample_t sample{};
-    sample.struct_size = sizeof(sample);
-    sample.sample_timestamp_ns = static_cast<uint64_t>(index + 1U) * 1'000'000ULL;
-    sample.mapper_failure_count = mapper_failure_counts[index];
-    stats.Observe(sample);
-  }
-  SensorDemoImuStatsTestResult result;
-  result.timing_sample_drops = stats.timing_sample_drops;
-  result.max_consecutive_drops = stats.max_consecutive_drops;
-  result.max_consecutive_drops_valid = stats.max_consecutive_drops_valid;
-  return result;
-}
 
 RtspPreviewFailurePolicy SensorDemoRtspPolicyForTest(
     bool record_bag_requested, bool record_mp4_requested) noexcept {
@@ -600,10 +523,6 @@ H264Mp4SourceHealth SensorDemoMp4SourceHealthForTest(
     const icm42670_sample_t* samples, std::size_t count,
     const icm42670_runtime_health_t* final_health) {
   ImuStats stats;
-  if (samples == nullptr && count != 0U) {
-    stats.max_consecutive_drops_valid = false;
-    return MakeMp4SourceHealth(stats, final_health);
-  }
   for (std::size_t index = 0U; index < count; ++index) {
     stats.Observe(samples[index]);
   }
@@ -665,8 +584,6 @@ int main(int argc, char** argv) {
   H264Mp4Recorder mp4_recorder;
   TeeCaptureRecorder capture_recorder;
   MainPipelineHooksUser pipeline_hooks_user;
-  FsyncOutput fsync_output;
-  FsyncAssociation association(ObserveFsyncRecord, &fsync_output);
   bool record_bag_requested = false;
   bool record_mp4_requested = false;
   bool capture_requested = false;
@@ -690,6 +607,10 @@ int main(int argc, char** argv) {
         setenv("SC132_TEST_EXPOSURE_MIDPOINT",
                *options.test_exposure_midpoint ? "1" : "0", 1) != 0) {
       throw std::runtime_error("set SC132_TEST_EXPOSURE_MIDPOINT failed");
+    }
+    if (setenv("SC132_AUTO_EXPOSURE", options.auto_exposure ? "1" : "0", 1) != 0 ||
+        setenv("SC132_EXPOSURE_TIME_US", std::to_string(options.exposure_time_us).c_str(), 1) != 0) {
+      throw std::runtime_error("set SC132 exposure configuration failed");
     }
     imu_sample_drop_policy = options.imu_sample_drop_policy;
     PrintTimeBase(std::cout);
@@ -725,16 +646,10 @@ int main(int argc, char** argv) {
     }
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.sample_drop_policy = options.imu_sample_drop_policy;
+    imu_options.timestamp_mode = options.imu_timestamp_mode;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.final_health = &imu_final_health;
-    if (options.fsync_enabled) {
-      fsync_output.bag = record_bag_requested ? &recorder : nullptr;
-      fsync_output.mp4 = record_mp4_requested ? &mp4_recorder : nullptr;
-      pipeline_hooks_user.association = &association;
-      shutdown_context.association = &association;
-      imu_options.fsync_observer = ObserveHardwareFsync; imu_options.fsync_user = &association;
-    }
     imu_print_state.print_every_samples =
         ImuPrintEverySamples(options.imu_sample_rate_hz, options.imu_print_rate_hz);
     imu_print_state.print_metrics = options.imu_print_metrics;
@@ -753,13 +668,16 @@ int main(int argc, char** argv) {
               << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
               << " imu_sample_drop_policy="
               << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
+              << " camera_timestamp_path=" << options.camera_timestamp_path
+              << " imu_timestamp_mode=" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host")
               << " imu_start_order="
               << (options.imu_start_order == ImuStartOrder::kCameraFirst
                       ? "camera-first"
                       : "imu-first")
               << " imu_print_rate_hz=" << options.imu_print_rate_hz
               << " imu_print_metrics=" << (options.imu_print_metrics ? "on" : "off")
-              << " imu_time=SENSOR_TIMESTAMP_FIFO record_bag="
+              << " imu_time=" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "CLOCK_MONOTONIC_RAW" : "CLOCK_MONOTONIC")
+              << " output_mapping=CLOCK_REALTIME record_bag="
               << (record_bag_requested ? record_bag_path : "disabled")
               << " record_mp4="
               << (record_mp4_requested ? record_mp4_directory : "disabled")
@@ -943,34 +861,11 @@ int main(int argc, char** argv) {
   if (imu_thread.joinable()) {
     imu_thread.join();
   }
-  try {
-    if (shutdown_context.association) shutdown_context.association->Finish();
-  } catch (const std::exception& error) {
-    std::cerr << "fatal: FSYNC finalization failed: " << error.what() << '\n';
-    exit_code = 1;
-  }
-  if (imu_options.fsync_observer) {
-    const bool valid = imu_final_health.session_generation != 0U;
-    std::cout << "SENSOR_FSYNC_RESULT health_valid=" << (valid ? "yes" : "no");
-    if (valid) {
-      std::cout << " captured=" << imu_final_health.reserved[ICM42670_HEALTH_FSYNC_CAPTURED_INDEX]
-                << " dropped=" << imu_final_health.reserved[ICM42670_HEALTH_FSYNC_DROPPED_INDEX];
-    } else {
-      std::cout << " captured=unknown dropped=unknown";
-    }
-    std::cout << " imu_generation=" << imu_final_health.session_generation
-              << " stdout_dropped=" << fsync_output.stdout_dropped << '\n';
-  }
   // IMU 高速终端输出已结束，最终摘要恢复普通 stdout flags，便于脚本稳定读取。
   output_mode.reset();
   if (imu_result.load(std::memory_order_acquire) != 0) {
-    std::cerr << "fatal: IMU FIFO/TMST producer failed\n";
+    std::cerr << "fatal: IMU IIO producer or output consumer failed\n";
     exit_code = 1;
-  }
-  if (!imu_stats.max_consecutive_drops_valid) {
-    std::cerr << (record_mp4_requested ? "warning: " : "fatal: ")
-              << "IMU mapper_failure_count regressed; "
-                 "max_consecutive_drops evidence invalid\n";
   }
   std::cout << "SENSOR_RTSP_RESULT preview_complete="
             << (rtsp_preview_complete ? "yes" : "no")
@@ -1219,14 +1114,23 @@ int main(int argc, char** argv) {
   std::cout << "IMU_RUNTIME_HEALTH final=yes health_valid=" << (imu_health_valid ? "yes" : "no")
             << " session_generation=" << imu_final_health.session_generation
             << " published_samples=" << imu_final_health.published_samples
-            << " invalid_packet_drop_count=" << imu_final_health.invalid_packet_drop_count
-            << " gpio_event_gap_count=" << imu_final_health.gpio_event_gap_count
+            << " consumed_scans=" << imu_final_health.consumed_scans
+            << " records_consumed=" << imu_final_health.records_consumed
+            << " records_acked=" << imu_final_health.records_acked
+            << " last_packet_sequence=" << imu_final_health.last_packet_sequence
+            << " irq_wakeup_count=" << imu_final_health.irq_wakeup_count
+            << " timer_service_count=" << imu_final_health.timer_service_count
+            << " fatal_reason=" << imu_final_health.fatal_reason
+            << " fatal_errno=" << imu_final_health.fatal_errno
+            << " invalid_payload_count=" << imu_final_health.invalid_payload_count
             << " fifo_overflow_count=" << imu_final_health.fifo_overflow_count
-            << " mapper_failure_count=" << imu_final_health.mapper_failure_count
-            << " uncertainty_over_200_drop_count=" << imu_final_health.uncertainty_over_200_drop_count
-            << " max_consecutive_timing_drop_count=" << imu_final_health.max_consecutive_timing_drop_count
-            << " fsync_captured=" << imu_final_health.reserved[ICM42670_HEALTH_FSYNC_CAPTURED_INDEX]
-            << " fsync_dropped=" << imu_final_health.reserved[ICM42670_HEALTH_FSYNC_DROPPED_INDEX] << "\n";
+            << " scan_push_failure_count=" << imu_final_health.scan_push_failure_count
+            << " evidence_full_count=" << imu_final_health.evidence_full_count
+            << " timestamp_service_burst_count=" << imu_final_health.timestamp_service_burst_count
+            << " tail_packet_count=" << imu_final_health.tail_packet_count
+            << " unknown_hardware_tail=" << imu_final_health.unknown_hardware_tail
+            << " quiesce_errno=" << imu_final_health.quiesce_errno
+            << " transport_complete=" << imu_final_health.transport_complete << "\n";
 
   std::cout << "SENSOR_IMU_RESULT samples=" << imu_stats.samples
             << " first_arrival_monotonic_ns=" << imu_stats.first_arrival_monotonic_ns
@@ -1237,16 +1141,14 @@ int main(int argc, char** argv) {
             << " sequence_gaps=" << imu_stats.sequence_gaps
             << " sequence_duplicates=" << imu_stats.sequence_duplicates
             << " sequence_regressions=" << imu_stats.sequence_regressions
-            << " gpio_event_gap_count=" << imu_stats.gpio_event_gap_count
-            << " fifo_overflow_count=" << imu_stats.fifo_overflow_count
-            << " effective_hz=" << imu_stats.EffectiveHz()
+            << " set_odr_hz=" << options.imu_sample_rate_hz
+            << " timestamp_hz=" << imu_stats.EffectiveHz()
+            << " acquisition_hz=" << imu_stats.AcquisitionHz()
+            << " acquisition_valid=" << (imu_stats.AcquisitionValid() ? "yes" : "no")
+            << " acquisition_endpoints=ordinary_bursts_monotonic_raw"
+            << " ordinary_bursts=" << imu_stats.ordinary_bursts
             << " min_dt_ns=" << imu_stats.min_dt_ns
             << " max_dt_ns=" << imu_stats.max_dt_ns
-            << " timing_sample_drops=" << (imu_health_valid
-                ? std::to_string(imu_final_health.mapper_failure_count) : "unknown")
-            << " max_uncertainty_us=" << imu_stats.max_timestamp_uncertainty_us
-            << " max_consecutive_drops=" << (imu_health_valid
-                ? std::to_string(imu_final_health.max_consecutive_timing_drop_count) : "unknown")
             << " imu_sample_drop_policy="
             << ImuSampleDropPolicyName(imu_sample_drop_policy) << "\n";
   std::cout << "sensor_demo stopped exit_code=" << exit_code << "\n";

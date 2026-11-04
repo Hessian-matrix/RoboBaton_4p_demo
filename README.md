@@ -6,7 +6,7 @@
 
 > **最终用户说明以 [4P_doc](https://4p-docs.readthedocs.io/zh-cn/latest/index.html) 为准。** 本 README 只保留仓库入口、最小运行方式和支持边界；部署、保存、接线、数据/API 合同和故障排查请直接阅读文档站。
 
-当前源码使用 `icm42670_*` / `icm42670_driver.h`，IMU ABI 3.0、SONAME `libicm42670.so.3`、real SO `libicm42670.so.3.0.0`；全部导出只使用 `ICM42670_X5_3.0`。字段名与布局不变，但 `host_timestamp_ns` 改为该包所在 SPI FIFO burst 成功完成时的 RAW 观测，经当次系统时钟桥接转换为 realtime；同 burst 可重复、FSYNC 延迟发布时保留转换后的原值，不是 IRQ 沿、样本或曝光时间，也不在发布时重新换算旧 RAW。FIFO 顺序与实测 TMST 定义身份和样本时间，INT1 仅唤醒；GPIO 通知序号缺口仅诊断，不单独证明丢样或使会话失败。软件版本、文档修订和板端验收分别识别，同一版本字符串不证明 manifest 相同。
+当前 IMU 使用内核 IIO 公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽。设备须由匹配内核预先绑定；不提供用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
 
 ## 包含内容
 
@@ -25,11 +25,11 @@ scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_dem
 
 | 库 | 实体文件 | SONAME | 符号节点 |
 |---|---|---|---|
-| ICM42670 | `libicm42670.so.3.0.0` | `libicm42670.so.3` | `ICM42670_X5_3.0` |
+| ICM42670 | `libicm42670.so.5.0.0` | `libicm42670.so.5` | `ICM42670_X5_5.0` |
 | SC132 | `libsc132.so.3.0.0` | `libsc132.so.3` | `LIBSC132_3.0` |
 | PRRTSP | `libprrtsp.so.2.0.1` | `libprrtsp.so.2` | `LIBPRRTSP_2.0` |
 
-`M.m.p` 分别表示实体库修订，`M` 是 ABI major，不跟软件版本或 PCB 版本机械同步；ICM42670 与 SC132 ABI 3.0 均要求成套重建 consumer，删除旧 major 库，禁止 `.so.2 -> .so.3` 链接或旧符号别名。IMU 样本时间仍为实测 TMST→RAW→realtime，随墙钟回拨；使用 `sample_sequence` 判断顺序，不以 host 观测唯一或时间递增为条件。本设计不修复底层 GPIO/内核原因，不修改 LPWM/内核，也不保证任意负载零丢失；FIFO overflow、坏包、时钟歧义与无效 epoch 仍失败，`200µs` admission 不放宽。
+`M.m.p` 标识实体库修订，`M` 为 ABI major，与软件/PCB 版本独立。ICM42670 ABI 5.0 与 SC132 ABI 3.0 都要求匹配头文件并成套重建 consumer，删除旧 major 库；禁止跨 major 链接或旧符号别名。按 `sample_sequence` 核对样本顺序，不能把 MONOTONIC 主机估计、TMST 映射或 RAW burst 观测当已校准的物理采样沿。
 
 
 当前相机 ABI 3.0 在 `sc132_frame_info_t.exposure` 中提供逐帧冻结的 ISP 曝光观测；bag 帧元数据、MP4 `exposure.jsonl` 和 tee 索引同步保存。`status=1` 仅为估计值，不是该帧实际生效曝光或真实曝光中心；`status=0` 为不可用。字段、关联键及限制见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html)。
@@ -54,7 +54,7 @@ cd /root/demo
 
 这些版本查询不需要初始化相机、IMU 或 UART。完整版本、兼容性和 ABI 说明见 [产品版本与兼容性](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/product-and-compatibility.html)、[API 参考](https://4p-docs.readthedocs.io/zh-cn/latest/development/api-reference.html) 和 [版本更新记录](https://4p-docs.readthedocs.io/zh-cn/latest/changelog.html)。
 
-可配置档位不是所有保存、推流、DDS 和负载组合的持续能力承诺。当前 non-ROS 60fps＋1600Hz FSYNC 的约300秒高压 console 证据只覆盖关联与速率，不证明保存图像干净解码或 ROS2 60fps；高压 CPU/eMMC bag 可按严格丢组间隔合法提前停止，不能把策略正确写成持续录制通过。LPWM 长尾、60fps RTSP 解码告警、端到端 IMU 首尾数量及新组成长测仍未完整闭合；软件已构建、板端已更新和正式发布须分别判断。统一限制见[发布与支持](https://4p-docs.readthedocs.io/zh-cn/latest/release-and-support.html)。
+可配置档位不是所有保存、推流、DDS 和负载组合的持续能力承诺。容器 complete、源端完整性与实际载荷完整性分别判断，不能由历史组成结果推导当前 IIO 组成。统一限制见[发布与支持](https://4p-docs.readthedocs.io/zh-cn/latest/release-and-support.html)。
 
 ## Demo 选择
 
@@ -107,7 +107,7 @@ cd /root/demo
 ./imu_reader_demo
 ```
 
-`imu_reader_demo` 在 stop 后输出一条 `IMU_RUNTIME_HEALTH final=yes`，包含会话有效性、producer/consumer 样本数、日志丢弃及最终 GPIO/FIFO/mapper/无效包计数。样本与最终摘要均为非阻塞尽力输出；缺失摘要不能作为健康通过证据。`--print-rate-hz 0` 仅关闭样本，不关闭最终摘要。
+`imu_reader_demo --count 800 --print-metrics` 达到阈值后请求 STOP，并继续排空完整 cohort，最终数量可超过800。`IMU_TIMING_SUMMARY` 分开报告 `timestamp_hz` 与基于普通 burst RAW 端点的 `acquisition_hz/acquisition_valid`。stop 后的 `IMU_RUNTIME_HEALTH final=yes` 包含 generation、published/observed、scan、record/ACK、fatal、overflow、invalid payload、push/evidence、SERVICE、尾部与 quiesce/transport_complete；stop 失败仍保留终态诊断。样本及最终摘要为非阻塞尽力日志，缺失摘要不是健康通过；`--print-rate-hz 0` 只关闭样本。
 
 运行 UART1/UART7 示例：
 
@@ -156,6 +156,24 @@ cd /root/demo
 
 开机自启动通过板端 `/userdata/startup.sh` 实现（系统 `S99auto_startup` 在 `/userdata` 挂载后执行）；脚本只追加/删除自己带标记的块，不影响其它应用写入的内容。镜像内 Wi-Fi 命令 `wifi_setup` 使用独立 `/etc/init.d/S99wifi_setup` 与 `/userdata/wifi/autostart.enabled`，不占用该共享文件。自启动使用包内默认配置，直接修改 `config/sensor_config.yaml` 即可调整，无需重新执行 `enable`。
 
+启动前在 YAML 顶层选择 `camera_timestamp_path: observer|official`（默认 `observer`）和 `imu_timestamp_mode: host|tmst`（默认 `host`）。CLI `--camera-timestamp-path`、`--imu-timestamp-mode` 覆盖 YAML；四种组合共用同一内核 IIO 采集，不切换用户态 SPI。`imu_reader_demo` 也接受 `--imu-timestamp-mode`；相机 demo 接受 `--camera-timestamp-path`。配置只在停止后重启生效，非法值在硬件启动前拒绝。
+
+相机 consumer 在启动前显式写入 `SC132_TIMESTAMP_PATH`；直接使用库时该环境变量未设置默认为 `observer`。`observer` 保留有界 SIF MMIO observer；`official` 用同帧 `timestamps - (tv - trig_tv)` 估计，不启动该 observer，物理不确定度为未知（`UINT32_MAX`），不授予有界 timing validity。两路径都输出 realtime 且不互作失败回退；FSYNC 仍关闭/不支持。示例：`./sensor_demo --camera-timestamp-path official --imu-timestamp-mode tmst`。
+
+bag `/robobaton/session_config` 保存两个 selector；IMU timing JSON 与 MP4 CSV 保存 `timestamp_mode`、`fifo_tmst`、`sample_raw_ns`、`timestamp_uncertainty_ns` 及正确的桥时钟标签。host 的 RAW sample 为零、不确定度未知；TMST 的 host/burst 原始证据不被覆盖。
+
+手动曝光用于可重复标定：在 `config/sensor_config.yaml` 的 `camera` 段设置以下两项，然后重启 `sensor_demo`：
+
+```yaml
+camera:
+  auto_exposure: false
+  exposure_time_us: 2000
+```
+
+`camera.auto_exposure` 是布尔值，默认 `true`，此时忽略曝光时长并保留 SDK tuning 的自动曝光策略。`camera.exposure_time_us` 默认 `2000`，必须为 `1..4294967295` 的整数微秒值；零、负数、小数、溢出和尾随文本均拒绝。手动模式为每路启用相机选择 ISP `HBN_ISP_MODE_MANUAL`，按 `exposure_time_us / 1000000` 转为 SDK 秒数，模拟、sensor digital 和 ISP 增益均固定 `1x`。实际可用时长由 SDK/profile 限制，配置失败即启动失败，不静默退回自动模式。
+
+库在每次 frame-set 启动时读取 `SC132_AUTO_EXPOSURE=1|0` 与十进制 `SC132_EXPOSURE_TIME_US`；`sensor_demo` 始终用 YAML 显式值或默认值覆盖继承环境。仅启动时生效，修改后须停止并重启；需重建应用和支持此配置的 `libsc132.so`。这与下述中点测试开关独立，不改时间戳公式或 C ABI，也不证明实际生效帧/真实曝光中点；本功能尚未实板部署或验证。
+
 曝光中点测试可在 `config/sensor_config.yaml` 的 `camera` 段设置 `test_exposure_midpoint: true`，默认 `false`；重启 `sensor_demo` 后生效。显式 YAML 覆盖 `SC132_TEST_EXPOSURE_MIDPOINT`，省略该键时才沿用环境变量。图像时间戳（包括 ROS1 bag 图像 `header.stamp`）使用触发时间加半曝光时长的估算值，不改变 IMU 或 bag record time；曝光不可用则停止采集。需重建应用及支持此开关的 `libsc132.so`，旧预编译包不自动支持；这不是已校准的真实曝光中点。详见[数据合同](https://4p-docs.readthedocs.io/zh-cn/latest/development/data-contracts.html#test-exposure-midpoint)。
 
 ## 调试串口免密开关
@@ -180,7 +198,7 @@ ROS1 bag 默认采用严格丢组间隔：`--record-drop-min-interval 10`（YAML
 
 回读 `/cameraN/frame_metadata`（`N=0..3`）的 `source_group_order` 核对各相机保留组集合；`group_id` 保留 producer 原始身份。`/robobaton/session_config` 记录 `drop_policy_min_group_interval`；`/robobaton/session_status` 记录 `drop_policy_stopped`、`drop_policy_stop_group_order`、`drop_policy_dropped_groups`、`drop_policy_min_observed_interval` 和停止原因。策略停止时，终止组序号是已完成录制范围的排他上界，不作为又一次合法丢组。
 
-当前 MP4 session 始终创建 `exposure.jsonl` 和 `fsync.jsonl`，后者仅在 FSYNC 启用后有记录。曝光 sidecar 是输入帧观测，可能多于编码保存帧；按相机与微秒量化组触发时间对照 CSV，不按行号或源帧号直接索引 MP4。默认 `--imu-sample-drop-policy allow-counted` 可继续计数丢样；bag complete 不单独保证 producer 零丢样，MP4 complete 还检查最终 producer 健康和样本计数。完整数据集必须回读实际载荷，不能只看退出码或 MP4 能否播放。
+MP4 session 保存 `exposure.jsonl` 与扩展 `imu.csv`，不再产生 FSYNC sidecar。bag 增加 `/robobaton/imu/timing`（`std_msgs/String`，`robobaton_imu_timing_v2`）；IMU Header/CSV 使用每 burst 桥接的 realtime，元数据保留 MONOTONIC、RAW、身份及桥基点/半宽，半宽不是物理精度。曝光 sidecar 是输入帧观测，可能多于编码帧，按相机与微秒量化组时间对照 CSV。`allow-counted` 仅计数无效六轴 payload；MP4 complete 还检查最终 producer 健康及样本计数。完整数据集须回读实际载荷。
 
 ## 从源码构建
 
@@ -225,9 +243,9 @@ python3 scripts/verify_runtime_package.py demo
 
 - 相机输出为 NV12，默认 `1280x1088`，可选 VSE 硬件整幅缩放画布 `640x480`、`720x480`、`1280x720`；RTSP 默认 H.264、H.265 可选，path 为 `/PRR`，四路默认端口为 `554..557`。
 - 相机公开支持 `25/30/40/50/60fps`，默认 `30fps`；`rotate=180` 只支持 `30fps`。
-- IMU 原生支持 `25/50/100/200/400/800/1600Hz`，默认 `800Hz`，使用 sensor-timestamp FIFO；旧 `500/1000/2000Hz` 明确拒绝，不会自动重采样。
-- 所有相机采集入口仅支持 VIN LPWM 硬件触发；相机与 IMU FSYNC 共用 LPWM IO，INT1 为 `34120000.gpio` offset `8`、仅唤醒 FIFO 排空。相机硬件触发沿、IMU 实测 TMST 样本及 burst 完成 host 观测使用 `CLOCK_REALTIME`，CLI/保存原样保留；host 可重复、FSYNC 延迟保留原值。bag record time 独立读取 realtime；系统校时允许回拨，内部超时仍用单调时钟。相机需要 X5 `/dev/mem` 只读访问；捕获/有界映射缺失即停止，不用到帧时间兜底。同域不提供曝光同步、TF 或标定。
-- `sensor_demo --fsync --sample-rate-hz 1600` 或 YAML `imu.fsync_enabled: true` 显式开启触发—样本关联（默认关闭，仅 `800/1600Hz`）；结果输出 stdout、bag `/robobaton/fsync` 或 MP4 `fsync.jsonl`。只接受 `status=1`，缺失/歧义显式报告；不改变采样相位，不承诺曝光同步或零丢失。
+- IMU 原生支持 `25/50/100/200/400/800/1600Hz`，API 默认 `800Hz`，使用同一内核 IIO 的 `host` 或 `tmst` 时间路径；旧 `500/1000/2000Hz` 明确拒绝，不会自动重采样。
+- 相机仍为 VIN LPWM 硬件触发；仅 `observer` 时间路径需要 SIF MMIO observer 的 X5 `/dev/mem` 只读访问。所选路径元数据/映射无效即停止，不自动切换路径。联合保存按 host MONOTONIC 或 TMST RAW 显式桥接 realtime，bag record time 独立读取 realtime。共同 epoch 不提供物理同步、TF 或标定。
+- IMU config 默认800Hz、watermark1、buffer4096（API 允许256..8192的2次幂）。STOP 保持回调接纳、完整排空并 ACK；`transport_complete` 只认证 STOP 集合，不包含 fence 外物理尾部、不消除 fatal。无 FSYNC callback、topic、sidecar 或启用选项。
 - IMU consumer 使用 `SCHED_RR/3`，采集 owner 使用 `SCHED_FIFO/20`，相机 RAW observer 使用 `SCHED_FIFO/60`、继承允许 CPU 集合并每轮休眠 `50µs`，需实时调度权限。IMU 不再使用独立 INT1 时钟 observer 或包/沿身份匹配；GPIO 通知序号缺口仅诊断、不单独失败。跨优先级队列使用优先级继承锁；应用不自动修改 IRQ/debug 或实时配额，重构不修复底层 GPIO/kernel 根因。压测须核对 stop 后最终 `IMU_RUNTIME_HEALTH` 与实际载荷，不能将计数丢弃宣称为零丢失。
 - UART1/UART7 使用 `3.3V`，DEBUG_UART 使用 `1.8V`；V2 UART7 5pin 有独立 IO 默认作 PPS 输入，无需复用 RX/TX。完整 pinout、供电脚限值与热插拔边界以正式 V2 硬件资料为准；确认线序和电平后断电接线，不承诺热插拔。
 - 相机运行依赖 X5 板端 `cam-service`；本仓库不是通用主机运行包。

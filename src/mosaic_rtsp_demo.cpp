@@ -49,6 +49,7 @@ constexpr int32_t kErrorJoin = -1003;
 
 struct MosaicCliOptions {
   uint32_t fps = kDefaultMosaicFps;
+  std::string camera_timestamp_path = "observer";
 };
 
 volatile sig_atomic_t g_signal_stop = 0;
@@ -111,6 +112,10 @@ MosaicCliOptions ParseMosaicCommandLine(int argc, char** argv) {
     const std::string arg(argv[i]);
     if (arg == "--fps") {
       options.fps = ParseMosaicFpsValue(RequireCliValue(argc, argv, &i, "--fps"));
+    } else if (arg == "--camera-timestamp-path") {
+      options.camera_timestamp_path = RequireCliValue(argc, argv, &i, "--camera-timestamp-path");
+      if (options.camera_timestamp_path != "observer" && options.camera_timestamp_path != "official")
+        throw std::invalid_argument("--camera-timestamp-path must be observer or official");
     } else {
       throw std::invalid_argument("unknown argument: " + arg);
     }
@@ -767,13 +772,14 @@ class MosaicPipeline final {
 };
 
 void PrintUsage(const char* program) {
-  std::cout << "Usage: " << program << " [--fps <25|30|40|50|60>|--version|--help]\n"
+  std::cout << "Usage: " << program << " [--fps <25|30|40|50|60>] [--camera-timestamp-path <observer|official>] [--version|--help]\n"
             << "Stream: four SC132 1280x1088 NV12 cameras -> "
             << robobaton_demo::kMosaicOutputWidth << "x" << robobaton_demo::kMosaicOutputHeight
             << " H.264 " << kMosaicBitrateKbps << "kbps default " << kDefaultMosaicFps
             << "fps rtsp://<board>:" << kMosaicPort << kMosaicPath << "\n"
             << "  --fps <25|30|40|50|60> Camera trigger and encoder metadata fps, default "
-            << kDefaultMosaicFps << "\n";
+            << kDefaultMosaicFps << "\n"
+            << "  --camera-timestamp-path <observer|official> Startup timestamp path, default observer\n";
 }
 
 void PrintMetric(const char* name, uint64_t value) {
@@ -851,6 +857,7 @@ int main(int argc, char** argv) {
 
     Options options;
     options.fps = static_cast<int>(cli_options.fps);
+    options.camera_timestamp_path = cli_options.camera_timestamp_path;
     options.bps = kMosaicBitrateKbps;
     options.url = kMosaicPath;
     options.camera_mask = kDefaultCameraMask;
