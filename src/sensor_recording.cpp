@@ -34,15 +34,9 @@ std::string Quote(const std::string& text) {
   }
   return result + '"';
 }
-fs::path RuntimeRoot() {
-  std::array<char, 4096> path{};
-  const auto count = readlink("/proc/self/exe", path.data(), path.size()-1);
-  if (count <= 0) throw std::runtime_error("runtime directory unavailable");
-  return fs::path(std::string(path.data(), static_cast<size_t>(count))).parent_path() / "recordings";
-}
 // TF must be the actual mounted filesystem, never an absent card's eMMC directory.
 fs::path StorageRoot(uint32_t storage) {
-  if (storage == 0) return RuntimeRoot();
+  if (storage == 0) return "/root/demo/save_data";
   const fs::path mount = "/mnt/sdcard";
   struct stat device{}, parent{};
   if (lstat(mount.c_str(), &device) != 0 || !S_ISDIR(device.st_mode) ||

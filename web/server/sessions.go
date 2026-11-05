@@ -416,14 +416,31 @@ func (s *service) createSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, 503, "media", "media initialization failed")
 		return
 	}
+	// Pion's shared UDP mux caches interfaces at construction; gather from the
+	// current interfaces for each peer, for both UDP and TCP candidates.
+	addresses, e := net.InterfaceAddrs()
+	if e != nil {
+		jsonError(w, 503, "network", "local addresses unavailable")
+		return
+	}
+	localIPs := make(map[string]bool)
+	var udpAddresses []net.Addr
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil || ip.To4() == nil || (s.config.ListenAddress != "0.0.0.0" && ip.String() != s.config.ListenAddress) || (ip.IsLoopback() && s.config.ListenAddress != "127.0.0.1") { continue }
+		localIPs[ip.String()] = true
+		udpAddresses = append(udpAddresses, &net.UDPAddr{IP: ip, Port: s.config.ICEPort})
+	}
 	settings := webrtc.SettingEngine{}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
-	settings.SetICEUDPMux(s.hub.udpMux)
+	if s.hub.udpMux != nil {
+		settings.SetICEUDPMux(&sessionUDPMux{UDPMux: s.hub.udpMux, addresses: udpAddresses})
+	}
 	settings.SetICETCPMux(s.hub.tcpMux)
 	settings.SetICETimeouts(2*time.Second, 4*time.Second, time.Second)
 	settings.SetIncludeLoopbackCandidate(s.config.ListenAddress == "127.0.0.1")
 	settings.SetIPFilter(func(ip net.IP) bool {
-		return s.allowed[ip.String()] && (!ip.IsLoopback() || s.config.ListenAddress == "127.0.0.1")
+		return localIPs[ip.String()]
 	})
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(registry), webrtc.WithSettingEngine(settings))
 	pc, e := api.NewPeerConnection(webrtc.Configuration{})

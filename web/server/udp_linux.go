@@ -6,7 +6,17 @@ import (
 	"net/netip"
 	"sync"
 	"syscall"
+
+	"github.com/pion/ice/v4"
 )
+
+// Each peer advertises its own current address snapshot while sharing packet I/O.
+type sessionUDPMux struct {
+	ice.UDPMux
+	addresses []net.Addr
+}
+
+func (m *sessionUDPMux) GetListenAddresses() []net.Addr { return m.addresses }
 
 // Each send is one nonblocking syscall. No peer cancellation changes the shared
 // socket deadline, and congestion cannot hold Go's socket write lock.

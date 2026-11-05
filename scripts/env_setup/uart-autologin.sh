@@ -1,9 +1,9 @@
 #!/bin/sh
-# The immutable getty entry reads this policy on each new debug-console login.
+# Each new debug-console login reads image-local policy, which survives reboot but resets on reflash.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
-STATE_DIR=/userdata/uart-autologin
+STATE_DIR=/etc/4p/uart-autologin
 STATE="$STATE_DIR/state"
 TMP=""
 
@@ -23,9 +23,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-trusted_userdata() {
-    mountpoint -q /userdata && [ ! -L /userdata ] || return 1
-    case "$(stat -c '%u:%g:%a' /userdata)" in
+trusted_parent_dir() {
+    [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    case "$(stat -c '%u:%g:%a' "$1")" in
         0:0:755|0:0:750|0:0:700|0:0:555|0:0:550|0:0:500) return 0 ;;
         *) return 1 ;;
     esac
@@ -38,7 +38,12 @@ trusted_state_dir() {
 
 get_state() {
     [ "$(id -u)" -eq 0 ] || fail "must run as root"
-    trusted_userdata || fail "userdata is not a trusted mounted filesystem; password login required"
+    trusted_parent_dir /etc || fail "untrusted /etc directory; password login required"
+    if [ ! -e /etc/4p ] && [ ! -L /etc/4p ]; then
+        echo enabled
+        return
+    fi
+    trusted_parent_dir /etc/4p || fail "untrusted /etc/4p directory; password login required"
     if [ ! -e "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ]; then
         echo enabled
         return
@@ -62,8 +67,13 @@ get_state() {
 
 set_state() {
     [ "$(id -u)" -eq 0 ] || fail "must run as root"
-    trusted_userdata || fail "userdata is not a trusted mounted filesystem"
+    trusted_parent_dir /etc || fail "untrusted /etc directory"
     umask 077
+    if [ ! -e /etc/4p ] && [ ! -L /etc/4p ]; then
+        mkdir -m 0755 /etc/4p || fail "cannot create /etc/4p directory"
+        chown 0:0 /etc/4p || fail "cannot own /etc/4p directory"
+    fi
+    trusted_parent_dir /etc/4p || fail "untrusted /etc/4p directory"
     if [ ! -e "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ]; then
         mkdir -m 0700 "$STATE_DIR" || fail "cannot create state directory"
         chown 0:0 "$STATE_DIR" || fail "cannot own state directory"

@@ -1,0 +1,698 @@
+#!/usr/bin/env python3
+"""Manage the revised 4P carrier's USB3 role and one device function."""
+import argparse
+import contextlib
+import errno
+import fcntl
+import ipaddress
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+UDC = "35100000.usb"
+ROLE = Path("/sys/class/usb_role") / (UDC + "-role-switch/role")
+GADGETS = Path("/sys/kernel/config/usb_gadget")
+GADGET = GADGETS / "4p_usb"
+RUN = Path("/run/4p-usb")
+DEFAULT = Path("/etc/4p-usb-default.json")
+NETWORK = Path("/etc/4p-usb-network.json")
+FACTORY_NETWORK = {"address": "192.168.7.2/24", "dhcp_start": "192.168.7.10", "dhcp_end": "192.168.7.100"}
+FFS = Path("/dev/usb-ffs/adb")
+MSD = Path("/root/usb-share.img")
+MODES = ("host", "rndis", "ecm", "uvc", "adb", "msd", "ncm")
+CAPTURE = {"sensor_demo", "sensor_web", "cam_demo", "mosaic_rtsp_demo",
+           "robobaton_sensors_node", "camera_publisher"}
+
+
+def read(path, default=""):
+    try:
+        return Path(path).read_text().strip()
+    except FileNotFoundError:
+        return default
+
+
+def put(path, value):
+    Path(path).write_text(str(value) + "\n")
+
+
+def run(*args):
+    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
+
+
+def atomic_json(path, value):
+    temporary = path.with_suffix(".new")
+    with temporary.open("w") as stream:
+        json.dump(value, stream)
+        stream.write("\n")
+    temporary.replace(path)
+
+
+def network_profile(address, dhcp_start=None, dhcp_end=None):
+    if not isinstance(address, str):
+        raise ValueError("IPv4 address must be text")
+    device = ipaddress.IPv4Interface(address if "/" in address else address + "/24")
+    subnet = device.network
+    if not 8 <= subnet.prefixlen <= 30:
+        raise ValueError("IPv4 prefix must be /8 through /30")
+    if (int(device.ip) < 1 << 24 or device.ip.is_loopback or device.ip.is_link_local
+            or device.ip.is_multicast or device.ip.is_reserved
+            or device.ip in (subnet.network_address, subnet.broadcast_address)):
+        raise ValueError("address must be a usable unicast IPv4 host")
+    first, last, host = int(subnet.network_address) + 1, int(subnet.broadcast_address) - 1, int(device.ip)
+    if (dhcp_start is None) != (dhcp_end is None):
+        raise ValueError("--dhcp-start and --dhcp-end must be supplied together")
+    if dhcp_start is None:
+        low, high = int(subnet.network_address) + 10, min(int(subnet.network_address) + 100, last)
+        if low > high:
+            low, high = first, last
+        if low <= host <= high:
+            candidates = [(low, host - 1), (host + 1, high)]
+            low, high = max(candidates, key=lambda pair: pair[1] - pair[0])
+        start, end = ipaddress.IPv4Address(low), ipaddress.IPv4Address(high)
+    else:
+        start, end = ipaddress.IPv4Address(dhcp_start), ipaddress.IPv4Address(dhcp_end)
+    if not first <= int(start) <= int(end) <= last or int(start) <= host <= int(end):
+        raise ValueError("DHCP range must be ordered, inside the subnet and exclude the board IP")
+    for blocked in ("0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/3"):
+        reserved = ipaddress.IPv4Network(blocked)
+        if int(start) <= int(reserved.broadcast_address) and int(end) >= int(reserved.network_address):
+            raise ValueError("DHCP range includes unusable addresses: " + blocked)
+    return dict(address=str(device), dhcp_start=str(start), dhcp_end=str(end))
+
+
+def load_network():
+    try:
+        fd = os.open(NETWORK, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return dict(FACTORY_NETWORK)
+    with os.fdopen(fd) as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("USB network configuration must be a regular file")
+        value = json.load(stream)
+    if not isinstance(value, dict) or set(value) != {"address", "dhcp_start", "dhcp_end"}:
+        raise ValueError("invalid USB network configuration; use ip --reset to restore factory settings")
+    if not all(isinstance(item, str) for item in value.values()):
+        raise ValueError("USB network address and DHCP values must be text")
+    return network_profile(value["address"], value["dhcp_start"], value["dhcp_end"])
+
+
+def save_network(profile):
+    if NETWORK.is_symlink() or (NETWORK.exists() and not NETWORK.is_file()):
+        raise ValueError("USB network configuration must be a regular file, not a symlink")
+    fd, name = tempfile.mkstemp(prefix=NETWORK.name + ".", dir=NETWORK.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            os.fchmod(stream.fileno(), 0o644)
+            json.dump(profile, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(NETWORK)
+        directory = os.open(NETWORK.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def network_summary(profile):
+    return f"{profile['address']}  DHCP {profile['dhcp_start']} - {profile['dhcp_end']}"
+
+
+def processes():
+    for path in Path("/proc").glob("[0-9]*"):
+        try:
+            # /proc retains the executable target after replacement or unlink.
+            executable = Path(os.readlink(path / "exe").removesuffix(" (deleted)"))
+            # comm can contain spaces and parentheses; starttime follows the final ')'.
+            start = (path / "stat").read_text().rsplit(")", 1)[1].split()[19]
+            yield int(path.name), executable, start
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+
+
+def identity(pid):
+    return next((dict(pid=p, exe=str(e), start=s) for p, e, s in processes() if p == pid), None)
+
+
+def stop_owned(saved):
+    if not saved:
+        return
+    try:
+        fd = os.pidfd_open(saved["pid"])
+    except ProcessLookupError:
+        return
+    try:
+        if identity(saved["pid"]) != saved:
+            raise RuntimeError("saved process identity changed; refusing to signal it")
+        signal.pidfd_send_signal(fd, signal.SIGTERM)
+        poll = select.poll()
+        poll.register(fd, select.POLLIN)
+        if not poll.poll(15000):
+            raise RuntimeError("backend did not stop normally; no SIGKILL or new gadget")
+    finally:
+        os.close(fd)
+
+
+class Manager:
+    def __init__(self):
+        self.state_file = RUN / "state.json"
+        self.state = json.loads(read(self.state_file, "{}"))
+
+    def save(self):
+        atomic_json(self.state_file, self.state)
+
+    def board(self):
+        model = Path("/proc/device-tree/model").read_bytes().rstrip(b"\0")
+        if model != b"D-Robotics X5 ND V0.1" or not Path("/proc/device-tree/d-robotics,usb3-default").exists():
+            raise RuntimeError("this tool requires the revised USB3-default carrier DTS")
+        if not ROLE.exists():
+            raise RuntimeError("USB3 software role switch missing; matching kernel/DT required")
+
+    def owners(self):
+        for path in GADGETS.glob("*/UDC"):
+            if read(path) == UDC and path.parent != GADGET:
+                raise RuntimeError("USB3 belongs to another gadget: " + str(path.parent))
+        function = read(Path("/sys/class/udc") / UDC / "function")
+        if function and read(GADGET / "UDC") != UDC:
+            raise RuntimeError("USB3 belongs to an unmanaged gadget driver: " + function)
+        if GADGET.exists() and not self.state.get("created"):
+            raise RuntimeError("gadget has no ownership receipt; refusing to remove it")
+
+    def capture_idle(self):
+        own = self.state.get("backend")
+        for pid, exe, start in processes():
+            if own == dict(pid=pid, exe=str(exe), start=start):
+                continue
+            if exe.name in CAPTURE or exe.name == "x5-uvc-mosaic":
+                raise RuntimeError(f"acquisition owner {exe.name} PID {pid}; stop it normally first")
+
+    def usb_interface(self, device, interfaces, seen=None):
+        seen = set() if seen is None else seen
+        if device in seen:
+            return False
+        seen.add(device)
+        path = Path("/sys/class/net") / device
+        if device in interfaces or UDC in str((path / "device").resolve()):
+            return True
+        lowers = [link.name.removeprefix("lower_") for link in path.glob("lower_*")]
+        members = [link.name for link in (path / "brif").glob("*")]
+        return any(self.usb_interface(name, interfaces, seen) for name in lowers + members)
+
+    def management(self, allow):
+        connection = os.environ.get("SSH_CONNECTION", "").split()
+        if not connection:
+            return
+        route = run("ip", "-j", "route", "get", connection[0])
+        device = json.loads(route)[0].get("dev", "")
+        if not device:
+            raise RuntimeError("cannot establish SSH management route")
+        interfaces = {read(p) for p in GADGETS.glob("*/functions/*/ifname")}
+        if self.usb_interface(device, interfaces) and not allow:
+            raise RuntimeError("SSH uses this USB link; use independent management or --allow-disconnect")
+
+    def usb_block(self, path, seen=None):
+        seen = set() if seen is None else seen
+        path = path.resolve()
+        if path in seen:
+            return False
+        seen.add(path)
+        if UDC in str(path):
+            return True
+        if (path / "partition").exists() and self.usb_block(path.parent, seen):
+            return True
+        return any(self.usb_block(slave, seen) for slave in (path / "slaves").glob("*"))
+
+    def host_idle(self):
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            fields = line.split()
+            source = Path("/sys/dev/block") / fields[2]
+            if self.usb_block(source):
+                raise RuntimeError("USB host storage is mounted; unmount normally before changing role")
+        # Includes capture, serial and raw block users, not only mounted filesystems.
+        for proc in Path("/proc").glob("[0-9]*"):
+            for fd in (proc / "fd").glob("*"):
+                try:
+                    st = fd.stat()
+                    if not (stat_is_device(st.st_mode)):
+                        continue
+                    dev = f"{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
+                    if (self.usb_block(Path("/sys/dev/block") / dev)
+                            or UDC in str((Path("/sys/dev/char") / dev).resolve())):
+                        raise RuntimeError(f"USB host device open by PID {proc.name}")
+                except (FileNotFoundError, PermissionError, ProcessLookupError):
+                    continue
+
+    def role(self, value):
+        if read(ROLE) != value:
+            put(ROLE, value)
+        for _ in range(50):
+            if read(ROLE) == value:
+                if value != "device" or (Path("/sys/class/udc") / UDC).exists():
+                    return
+            time.sleep(0.1)
+        raise RuntimeError("USB role did not settle to " + value)
+
+    def launch(self, command, ready=None):
+        log = (RUN / "backend.log").open("ab", buffering=0)
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
+                                     stderr=log, start_new_session=True, close_fds=True)
+        finally:
+            log.close()
+        for _ in range(20):
+            saved = identity(child.pid)
+            if saved and saved["exe"] == str(Path(command[0]).resolve()):
+                break
+            if child.poll() is not None:
+                raise RuntimeError("backend exited before identity capture")
+            time.sleep(0.01)
+        else:
+            raise RuntimeError("backend executable identity did not settle")
+        self.state["backend"] = saved
+        self.save()
+        for _ in range(300):
+            if child.poll() is not None:
+                raise RuntimeError("backend exited; see /run/4p-usb/backend.log")
+            if (ready is not None and ready.exists()) or (ready is None and _ >= 2):
+                return
+            time.sleep(0.1)
+        raise RuntimeError("backend readiness timed out; see /run/4p-usb/backend.log")
+
+    def stop(self):
+        stop_owned(self.state.get("backend"))
+        self.state.pop("backend", None)
+        self.save()
+        if GADGET.exists():
+            if read(GADGET / "UDC"):
+                put(GADGET / "UDC", "")
+            # ConfigFS attributes are kernel-owned; remove links and user-created directories only.
+            for path in sorted(GADGET.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                if path.is_symlink():
+                    path.unlink()
+            if self.state.get("ffs"):
+                run("umount", str(FFS))
+                self.state.pop("ffs")
+                self.save()
+            for path in sorted(GADGET.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                if path.is_dir():
+                    with contextlib.suppress(PermissionError):
+                        try:
+                            path.rmdir()
+                        except OSError as error:
+                            if error.errno not in (1, 13, 39):
+                                raise
+            GADGET.rmdir()
+        if self.state.get("ffs"):
+            run("umount", str(FFS))
+            self.state.pop("ffs")
+        self.state = {}
+        self.save()
+
+    def base(self, mode):
+        run("modprobe", "libcomposite")
+        if not GADGETS.exists():
+            run("mount", "-t", "configfs", "none", "/sys/kernel/config")
+        GADGET.mkdir()
+        self.state = {"created": True, "requested": mode}
+        self.save()
+        put(GADGET / "idVendor", "0x1d6b")
+        put(GADGET / "idProduct", hex(0x1050 + MODES.index(mode)))
+        put(GADGET / "bcdUSB", "0x0300")
+        put(GADGET / "bcdDevice", "0x0100")
+        strings = GADGET / "strings/0x409"
+        strings.mkdir()
+        uid = read("/sys/class/socinfo/soc_uid")
+        if not uid or not all(c in "0123456789abcdefABCDEFx" for c in uid):
+            raise RuntimeError("valid SoC serial required")
+        put(strings / "serialnumber", uid.removeprefix("0x"))
+        put(strings / "manufacturer", "RoboBaton")
+        put(strings / "product", "4P " + mode.upper())
+        config = GADGET / "configs/c.1"
+        config.mkdir()
+        (config / "strings/0x409").mkdir()
+        put(config / "strings/0x409/configuration", mode)
+        put(config / "bmAttributes", "0xc0")
+        put(config / "MaxPower", 2)
+
+    def link(self, function):
+        (GADGET / "configs/c.1" / function).symlink_to(GADGET / "functions" / function)
+
+    def network(self, mode):
+        profile = load_network()
+        function = mode + ".0"
+        path = GADGET / "functions" / function
+        path.mkdir()
+        if mode in ("rndis", "ncm"):
+            put(GADGET / "bDeviceClass", "0xef")
+            put(GADGET / "bDeviceSubClass", 2)
+            put(GADGET / "bDeviceProtocol", 1)
+        if mode == "rndis":
+            put(GADGET / "os_desc/use", 1)
+            put(GADGET / "os_desc/b_vendor_code", "0xcd")
+            put(GADGET / "os_desc/qw_sign", "MSFT100")
+            put(path / "os_desc/interface.rndis/compatible_id", "RNDIS")
+            put(path / "os_desc/interface.rndis/sub_compatible_id", "5162001")
+            (GADGET / "os_desc/c.1").symlink_to(GADGET / "configs/c.1")
+        self.link(function)
+        put(GADGET / "UDC", UDC)
+        interface = read(path / "ifname")
+        if not interface or len(interface) > 15 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-" for c in interface):
+            raise RuntimeError("gadget network interface unavailable")
+        run("ip", "address", "replace", profile["address"], "dev", interface)
+        run("ip", "link", "set", "dev", interface, "up")
+        conf = RUN / "dnsmasq.conf"
+        conf.write_text(f"port=0\nno-resolv\nno-hosts\ninterface={interface}\nbind-interfaces\n"
+                        f"dhcp-authoritative\ndhcp-range={profile['dhcp_start']},{profile['dhcp_end']},"
+                        f"{ipaddress.IPv4Interface(profile['address']).netmask},12h\n"
+                        "dhcp-option=option:router\ndhcp-option=option:dns-server\n"
+                        f"dhcp-leasefile={RUN}/leases\npid-file={RUN}/dnsmasq.pid\n")
+        self.launch(["/usr/sbin/dnsmasq", "--keep-in-foreground", "--conf-file=" + str(conf)])
+        self.state["interface"] = interface
+        self.state["network"] = profile
+
+    def uvc(self):
+        path = GADGET / "functions/uvc.0"
+        path.mkdir()
+        for name, value in (("streaming_interval", 1), ("streaming_maxpacket", 3072), ("streaming_maxburst", 0)):
+            put(path / name, value)
+        frame = path / "streaming/mjpeg/m/960p"
+        frame.mkdir(parents=True)
+        for name, value in (("wWidth", 1280), ("wHeight", 960), ("dwDefaultFrameInterval", 333333),
+                            ("dwFrameInterval", 333333), ("dwMinBitRate", 1280*960*12*30),
+                            ("dwMaxBitRate", 1280*960*12*30), ("dwMaxVideoFrameBufferSize", 1843200)):
+            put(frame / name, value)
+        (path / "streaming/header/h").mkdir()
+        (path / "streaming/header/h/m").symlink_to(path / "streaming/mjpeg/m")
+        (path / "control/header/h").mkdir()
+        for speed in ("fs", "hs", "ss"):
+            (path / "streaming/class" / speed / "h").symlink_to(path / "streaming/header/h")
+        for speed in ("fs", "ss"):
+            (path / "control/class" / speed / "h").symlink_to(path / "control/header/h")
+        self.link("uvc.0")
+        put(GADGET / "UDC", UDC)
+        for _ in range(50):
+            videos = [p for p in Path("/sys/class/video4linux").glob("video*")
+                      if read(p / "function_name") == "uvc.0" and UDC in str(p.resolve())]
+            if len(videos) == 1:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("UVC video output node missing")
+        ready = RUN / "uvc.ready"
+        ready.unlink(missing_ok=True)
+        self.launch(["/usr/bin/x5-uvc-mosaic", "--device", "/dev/" + videos[0].name,
+                     "--ready-file", str(ready)], ready)
+
+    def adb(self):
+        if any(e.name == "adbd" for _, e, _ in processes()):
+            raise RuntimeError("another adbd is running; refusing to take ownership")
+        (GADGET / "functions/ffs.adb").mkdir()
+        FFS.mkdir(parents=True, exist_ok=True)
+        if os.path.ismount(FFS):
+            raise RuntimeError("ADB FunctionFS already mounted")
+        run("mount", "-t", "functionfs", "adb", str(FFS))
+        self.state["ffs"] = True
+        self.save()
+        self.launch(["/usr/bin/adbd"])
+        for _ in range(100):
+            if (FFS / "ep1").exists() and (FFS / "ep2").exists():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("adbd did not publish FunctionFS descriptors")
+        self.link("ffs.adb")
+        put(GADGET / "UDC", UDC)
+
+    def msd_idle(self):
+        try:
+            image = MSD.lstat()
+        except FileNotFoundError:
+            raise RuntimeError("run init-msd first; only the dedicated regular image is exported") from None
+        if not stat.S_ISREG(image.st_mode):
+            raise RuntimeError("run init-msd first; only the dedicated regular image is exported")
+        if image.st_size != 128 * 1024 * 1024:
+            raise RuntimeError("dedicated MSD image must be exactly 128 MiB; refusing to export it")
+        for loop in Path("/sys/block").iterdir():
+            if not loop.name.startswith("loop") or not loop.name[4:].isdigit():
+                continue
+            try:
+                with (Path("/dev") / loop.name).open("rb", buffering=0) as device:
+                    # Linux loop_info64 has a fixed 232-byte UAPI layout; names may be aliases.
+                    info = bytearray(232)
+                    try:
+                        fcntl.ioctl(device.fileno(), 0x4C05, info, True)  # LOOP_GET_STATUS64
+                    except OSError as error:
+                        if error.errno == errno.ENXIO:  # Existing but unconfigured loop device.
+                            continue
+                        raise
+            except OSError as error:
+                raise RuntimeError(f"cannot inspect loop device {loop.name}: {error}") from error
+            if struct.unpack_from("=QQ", info) == (image.st_dev, image.st_ino):
+                raise RuntimeError("MSD image has a local loop owner; unmount and detach it first")
+        # A clean no-user result has exit 1 and no output; exit 1 also covers fatal errors.
+        # Loop identity checks additionally cover loop-backed mounts and aliases.
+        result = subprocess.run(["fuser", str(MSD)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 1 or result.stdout or result.stderr:
+            raise RuntimeError("MSD image is open locally or exclusive-use check failed")
+
+    def msd(self, writable):
+        self.msd_idle()
+        path = GADGET / "functions/mass_storage.0"
+        path.mkdir()
+        put(path / "stall", 1)
+        put(path / "lun.0/ro", 0 if writable else 1)
+        put(path / "lun.0/removable", 1)
+        put(path / "lun.0/file", MSD)
+        self.link("mass_storage.0")
+        # Persist the guard before a bind that can succeed even if its write reports failure.
+        self.state.update(requested="msd", writable=writable)
+        self.save()
+        put(GADGET / "UDC", UDC)
+
+    def network_available(self, profile):
+        subnet = ipaddress.IPv4Interface(profile["address"]).network
+        interfaces = {read(path) for path in GADGETS.glob("*/functions/*/ifname")}
+        if self.state.get("interface"):
+            interfaces.add(self.state["interface"])
+        for interface in json.loads(run("ip", "-j", "-4", "address", "show")):
+            if interface["ifname"] in interfaces:
+                continue
+            for address in interface.get("addr_info", []):
+                if address.get("family") == "inet":
+                    existing = ipaddress.IPv4Interface(f"{address['local']}/{address['prefixlen']}").network
+                    if subnet.overlaps(existing):
+                        raise RuntimeError(f"USB subnet {subnet} overlaps {interface['ifname']} {existing}; choose a distinct subnet")
+
+    def configure_network(self, args):
+        if args.reset:
+            profile = dict(FACTORY_NETWORK)
+        elif args.address:
+            profile = network_profile(args.address, args.dhcp_start, args.dhcp_end)
+        else:
+            if not sys.stdin.isatty():
+                raise ValueError("ip requires --address or --reset without an interactive terminal")
+            saved = load_network()
+            print("Factory / 出厂: " + network_summary(FACTORY_NETWORK))
+            print("Saved / 已保存: " + network_summary(saved))
+            print("Active / 当前: " + (network_summary(self.state["network"]) if self.state.get("network") else "unknown"))
+            try:
+                address = input(f"Board IPv4/CIDR / 板端地址 [{saved['address']}]: ").strip() or saved["address"]
+                suggested = saved if address == saved["address"] else network_profile(address)
+                start = input(f"DHCP start / 起始地址 [{suggested['dhcp_start']}]: ").strip() or suggested["dhcp_start"]
+                end = input(f"DHCP end / 结束地址 [{suggested['dhcp_end']}]: ").strip() or suggested["dhcp_end"]
+                profile = network_profile(address, start, end)
+                print("New / 新配置: " + network_summary(profile))
+                print("Apply disconnects USB; stop acquisition and use Ethernet/UART first. / 立即应用会断开USB，请先停采并使用以太网或串口。")
+                action = input("save / apply / cancel [save]: ").strip().lower() or "save"
+            except EOFError:
+                print("Cancelled / 已取消")
+                return
+            if action == "cancel":
+                print("Cancelled / 已取消")
+                return
+            if action not in ("save", "apply"):
+                raise ValueError("expected save, apply or cancel; configuration unchanged")
+            if action == "apply" and input("Confirm USB disconnect / 确认USB断线，输入 YES: ").strip() != "YES":
+                print("Cancelled / 已取消")
+                return
+            args.apply = action == "apply"
+        mode = self.state.get("requested")
+        if args.apply:
+            if mode not in ("rndis", "ecm", "ncm"):
+                raise RuntimeError("--apply requires a currently managed NCM/RNDIS/ECM function; save for next network start instead")
+            self.owners()
+            self.capture_idle()
+            self.management(args.allow_disconnect)
+            self.network_available(profile)
+        save_network(profile)
+        print("Saved / 已保存: " + network_summary(profile), flush=True)
+        if args.apply:
+            print("Applying disconnects USB. Renew the PC DHCP lease and reconnect to " + profile["address"].split("/")[0], flush=True)
+            self.switch(mode, args)
+        else:
+            print("Current USB unchanged; applies on next NCM/RNDIS/ECM start or boot. / 当前连接不变，下次启动USB网卡或开机生效。")
+
+    def switch(self, mode, args):
+        self.owners()
+        if not getattr(args, "boot_start", False):
+            self.capture_idle()
+        self.management(args.allow_disconnect)
+        if read(ROLE) == "host":
+            self.host_idle()
+        if mode == "host" and not args.host_power_confirmed:
+            raise RuntimeError("host requires --host-power-confirmed after checking VBUS/cable power safety")
+        if mode == "adb" and not args.allow_adb:
+            raise RuntimeError("ADB exposes debug access; use --allow-adb only on a trusted direct link")
+        if self.state.get("requested") == "msd" and self.state.get("writable") and not args.host_ejected:
+            raise RuntimeError("eject disk on computer first, then pass --host-ejected")
+        if mode == "msd":
+            self.msd_idle()
+        if mode in ("rndis", "ecm", "ncm"):
+            self.network_available(load_network())  # Reject invalid/conflicting settings before teardown.
+        self.stop()
+        try:
+            self.role("host" if mode == "host" else "device")
+            if mode != "host":
+                self.base(mode)
+                if mode in ("rndis", "ecm", "ncm"):
+                    self.network(mode)
+                elif mode == "uvc":
+                    self.uvc()
+                elif mode == "adb":
+                    self.adb()
+                else:
+                    self.msd(args.writable)
+            self.state["requested"] = mode
+            self.save()
+        except Exception:
+            # A writable guard means binding may have exposed the disk. Never auto-eject it.
+            if not (self.state.get("requested") == "msd" and self.state.get("writable")):
+                self.stop()
+            raise
+        print(f"USB3 configured: {mode}; host enumeration and negotiated speed require a connected host")
+
+    def status(self):
+        print(json.dumps(dict(role=read(ROLE), requested=self.state.get("requested"),
+                              bound=read(GADGET / "UDC"),
+                              udc_state=read(Path("/sys/class/udc") / UDC / "state"),
+                              speed=read(Path("/sys/class/udc") / UDC / "current_speed"),
+                              backend=identity(self.state["backend"]["pid"]) if self.state.get("backend") else None,
+                              default=json.loads(read(DEFAULT, '{"mode":"ncm"}')),
+                              network=dict(saved=load_network(), active=self.state.get("network"))), indent=2))
+
+
+def stat_is_device(mode):
+    return stat.S_ISCHR(mode) or stat.S_ISBLK(mode)
+
+
+def arguments():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", nargs="?", choices=MODES + ("status", "stop", "boot", "set-default", "init-msd", "ip"))
+    parser.add_argument("default_mode", nargs="?", choices=("host", "rndis", "ecm", "ncm"))
+    parser.add_argument("--allow-disconnect", action="store_true")
+    parser.add_argument("--host-power-confirmed", action="store_true")
+    parser.add_argument("--host-ejected", action="store_true")
+    parser.add_argument("--allow-adb", action="store_true")
+    parser.add_argument("--writable", action="store_true", help="MSD only; eject on host before switching away")
+    parser.add_argument("--address", help="USB board IPv4[/prefix]; omitted prefix is /24 (ip only)")
+    parser.add_argument("--dhcp-start", help="first client IPv4 (requires --dhcp-end)")
+    parser.add_argument("--dhcp-end", help="last client IPv4 (requires --dhcp-start)")
+    parser.add_argument("--reset", action="store_true", help="save factory USB network settings (ip only)")
+    parser.add_argument("--apply", action="store_true", help="save and reconfigure current NCM/RNDIS/ECM; disconnects USB")
+    args = parser.parse_args()
+    if args.mode != "ip" and any((args.address, args.dhcp_start, args.dhcp_end, args.reset, args.apply)):
+        parser.error("network options require ip mode")
+    if args.mode == "ip":
+        if args.reset and any((args.address, args.dhcp_start, args.dhcp_end)):
+            parser.error("--reset cannot be combined with address or DHCP overrides")
+        if bool(args.dhcp_start) != bool(args.dhcp_end) or (args.dhcp_start and not args.address):
+            parser.error("DHCP overrides require --address and both --dhcp-start/--dhcp-end")
+        if args.apply and not (args.address or args.reset):
+            parser.error("--apply requires --address or --reset; interactive ip asks whether to apply")
+    if args.default_mode and args.mode != "set-default":
+        parser.error("second mode is only valid with set-default")
+    if args.writable and args.mode != "msd":
+        parser.error("--writable is only valid for msd")
+    if args.mode == "set-default" and not args.default_mode:
+        parser.error("set-default requires host, ncm, rndis or ecm")
+    if args.mode is None:
+        if not sys.stdin.isatty():
+            parser.error("a mode is required without an interactive terminal")
+        print("USB3: " + " / ".join(MODES) + " / ip (configure network)")
+        args.mode = input("Mode (blank cancels): ").strip()
+        if not args.mode:
+            return None
+        if args.mode not in MODES + ("ip",):
+            parser.error("invalid mode")
+        if args.mode == "host":
+            args.host_power_confirmed = input("VBUS/cable power checked? Type YES: ") == "YES"
+        if args.mode == "adb":
+            args.allow_adb = input("Trusted direct debug link? Type YES: ") == "YES"
+    return args
+
+
+def main():
+    args = arguments()
+    if args is None:
+        return
+    if os.geteuid() != 0:
+        raise RuntimeError("root is required")
+    RUN.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (RUN / "lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        manager = Manager()
+        manager.board()
+        if args.mode == "status":
+            manager.status()
+        elif args.mode == "ip":
+            manager.configure_network(args)
+        elif args.mode == "set-default":
+            if args.default_mode == "host" and not args.host_power_confirmed:
+                raise RuntimeError("host default requires --host-power-confirmed")
+            atomic_json(DEFAULT, {"mode": args.default_mode})
+            print("Boot default saved; current USB unchanged")
+        elif args.mode == "init-msd":
+            manager.owners()
+            if manager.state.get("requested") == "msd":
+                raise RuntimeError("stop/eject MSD before initializing an image")
+            # Exclusive create never truncates user data or a previous image.
+            with MSD.open("xb") as stream:
+                stream.truncate(128 * 1024 * 1024)
+            run("mkfs.vfat", str(MSD))
+            print("Created dedicated 128 MiB FAT image; not mounted locally")
+        elif args.mode == "stop":
+            manager.owners()
+            manager.capture_idle()
+            manager.management(args.allow_disconnect)
+            if manager.state.get("requested") == "msd" and manager.state.get("writable") and not args.host_ejected:
+                raise RuntimeError("eject on host first, then pass --host-ejected")
+            manager.stop()
+        else:
+            if args.mode == "boot":
+                args.mode = json.loads(read(DEFAULT, '{"mode":"ncm"}'))["mode"]
+                if args.mode not in ("host", "rndis", "ecm", "ncm"):
+                    raise RuntimeError("invalid boot default; expected host, ncm, rndis or ecm")
+                args.host_power_confirmed = True
+                # Boot networking does not take camera ownership or stop acquisition.
+                args.boot_start = True
+            manager.switch(args.mode, args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, RuntimeError, EOFError, KeyboardInterrupt, subprocess.SubprocessError) as error:
+        print("switch_usb_gadget: " + str(error), file=sys.stderr)
+        sys.exit(1)

@@ -5,23 +5,25 @@ set -u
 umask 077
 
 IFACE="${WIFI_IFACE:-wlan0}"
-BASE_DIR="${WIFI_MANAGER_DIR:-/userdata/wifi}"
+BASE_DIR="${WIFI_MANAGER_DIR:-/etc/4p/wifi}"
 SCRIPT_PATH="${WIFI_SCRIPT_PATH:-/usr/bin/wifi_setup}"
 STATE_FILE="$BASE_DIR/current.conf"
-HOSTAPD_CONF="$BASE_DIR/hostapd.conf"
-WPA_CONF="$BASE_DIR/wpa_supplicant.conf"
-SCAN_FILE="$BASE_DIR/scan_ssids.txt"
-LOG_DIR="$BASE_DIR/logs"
+RUN_DIR="${WIFI_RUN_DIR:-/run}"
+RUNTIME_DIR="$RUN_DIR/4p-wifi"
+HOSTAPD_CONF="$RUNTIME_DIR/hostapd.conf"
+WPA_CONF="$RUNTIME_DIR/wpa_supplicant.conf"
+SCAN_FILE="$RUNTIME_DIR/scan_ssids.txt"
+LOG_DIR="$RUNTIME_DIR/logs"
 HOSTAPD_LOG="$LOG_DIR/hostapd.log"
 DNSMASQ_LOG="$LOG_DIR/dnsmasq.log"
 WPA_LOG="$LOG_DIR/wpa_supplicant.log"
 AUTOSTART_FILE="$BASE_DIR/autostart.enabled"
-RUN_DIR="${WIFI_RUN_DIR:-/run}"
+BOOT_LOG="$RUNTIME_DIR/boot.log"
 BOOT_APPLIED="$RUN_DIR/wifi_setup.boot-applied"
-DNSMASQ_PID="$BASE_DIR/dnsmasq.pid"
+DNSMASQ_PID="$RUNTIME_DIR/dnsmasq.pid"
 DEFAULT_AP_SSID="RoboBaton-X5"
 DEFAULT_AP_IP="192.168.5.1"
-DEFAULT_AP_CHANNEL="1"
+DEFAULT_AP_CHANNEL="36"
 DEFAULT_DHCP_START="192.168.5.2"
 DEFAULT_DHCP_END="192.168.5.254"
 
@@ -49,13 +51,59 @@ check_deps() {
     need_cmd awk
     need_cmd sed
     need_cmd flock
-    need_cmd mountpoint
+    need_cmd stat
+    need_cmd readlink
     need_cmd seq
 }
 
+trusted_dir() {
+    [ -d "$1" ] && [ ! -L "$1" ] || die "不可信的配置目录：$1"
+    case "$(stat -c '%u:%g:%a' "$1")" in
+        0:0:755|0:0:750|0:0:700|0:0:555|0:0:550|0:0:500) ;;
+        *) die "不安全的配置目录权限：$1" ;;
+    esac
+}
+
+check_config() {
+    trusted_dir /etc
+    if [ -e /etc/4p ] || [ -L /etc/4p ]; then
+        trusted_dir /etc/4p
+    fi
+    if [ -e "$BASE_DIR" ] || [ -L "$BASE_DIR" ]; then
+        trusted_dir "$BASE_DIR"
+    fi
+    local path
+    for path in "$STATE_FILE" "$AUTOSTART_FILE"; do
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            [ -f "$path" ] && [ ! -L "$path" ] &&
+                [ "$(stat -c '%u:%g:%a' "$path")" = 0:0:600 ] ||
+                die "不可信的配置文件：$path"
+        fi
+    done
+}
+
 ensure_dirs() {
-    mkdir -p "$BASE_DIR" "$LOG_DIR" || die "无法创建目录：$BASE_DIR"
-    chmod 700 "$BASE_DIR" "$LOG_DIR" || die "无法保护配置目录：$BASE_DIR"
+    check_config
+    if [ ! -d "$BASE_DIR" ]; then
+        mkdir -p "$BASE_DIR" || die "无法创建系统配置目录：$BASE_DIR"
+        chmod 700 "$BASE_DIR" || die "无法保护配置目录：$BASE_DIR"
+    fi
+    trusted_dir "$RUN_DIR"
+    local directory path
+    for directory in "$RUNTIME_DIR" "$LOG_DIR"; do
+        if [ -e "$directory" ] || [ -L "$directory" ]; then
+            trusted_dir "$directory"
+        else
+            mkdir -m 700 "$directory" || die "无法创建运行目录：$directory"
+        fi
+    done
+    for path in "$HOSTAPD_CONF" "$WPA_CONF" "$SCAN_FILE" "$HOSTAPD_LOG" \
+                "$DNSMASQ_LOG" "$WPA_LOG" "$BOOT_LOG" "$DNSMASQ_PID" "$BOOT_APPLIED"; do
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            [ -f "$path" ] && [ ! -L "$path" ] || die "运行文件不可信：$path"
+        fi
+    done
+    chmod 700 "$RUNTIME_DIR" "$LOG_DIR" || die "无法保护运行目录：$RUNTIME_DIR"
 }
 
 escape_wpa_string() {
@@ -112,9 +160,23 @@ save_sta_state() {
 
 load_state() {
     [ -f "$STATE_FILE" ] || die "没有保存的 WiFi 配置：$STATE_FILE"
-    # current.conf 由本脚本用 bash %q 生成，只 source 受控配置避免解析任意输入。
+    unset MODE IFACE AP_SSID AP_PSK AP_CHANNEL AP_IP DHCP_START DHCP_END STA_SSID STA_PSK
+    # Saved profiles are root-owned Bash assignments produced with %q.
     # shellcheck disable=SC1090
-    . "$STATE_FILE"
+    . "$STATE_FILE" || die "WiFi 配置语法无效：$STATE_FILE"
+    local required key
+    case "${MODE:-}" in
+        ap) required='IFACE AP_SSID AP_PSK AP_CHANNEL AP_IP DHCP_START DHCP_END' ;;
+        sta) required='IFACE STA_SSID STA_PSK' ;;
+        *) die "未知保存模式：${MODE:-empty}" ;;
+    esac
+    for key in $required; do
+        [ -v "$key" ] || die "WiFi 配置缺少字段：$key"
+        case "$key" in
+            AP_PSK|STA_PSK) ;;
+            *) [ -n "${!key}" ] || die "WiFi 配置字段为空：$key" ;;
+        esac
+    done
 }
 
 valid_ipv4_like() {
@@ -124,10 +186,13 @@ valid_ipv4_like() {
     esac
 }
 
-valid_channel_24g() {
+# Channel numbers identify the band without changing the saved profile format.
+# Only non-DFS 20 MHz channels are offered; hostapd enforces driver/regulatory limits.
+ap_hw_mode() {
     case "$1" in
-        ''|*[!0-9]*) return 1 ;;
-        *) [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 13 ] 2>/dev/null ;;
+        1|2|3|4|5|6|7|8|9|10|11|12|13) printf g ;;
+        36|40|44|48|149|153|157|161|165) printf a ;;
+        *) return 1 ;;
     esac
 }
 
@@ -161,30 +226,57 @@ confirm() {
     esac
 }
 
+wifi_dnsmasq_owned() {
+    local pid="$1" arg interface=0 pidfile=0 executable
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] 2>/dev/null || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    executable="$(readlink -f "$(command -v dnsmasq)")" || return 1
+    [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$executable" ] || return 1
+    while IFS= read -r -d '' arg; do
+        case "$arg" in
+            "--interface=$IFACE") interface=1 ;;
+            "--pid-file=$DNSMASQ_PID") pidfile=1 ;;
+        esac
+    done < "/proc/$pid/cmdline"
+    [ "$interface" = 1 ] && [ "$pidfile" = 1 ]
+}
+
+stop_wifi_dnsmasq() {
+    local pid attempt
+    [ -e "$DNSMASQ_PID" ] || [ -L "$DNSMASQ_PID" ] || return 0
+    pid="$(cat "$DNSMASQ_PID" 2>/dev/null || true)"
+    if ! wifi_dnsmasq_owned "$pid"; then
+        rm -f "$DNSMASQ_PID"
+        return $?
+    fi
+    kill "$pid" 2>/dev/null || {
+        wifi_dnsmasq_owned "$pid" && return 1
+    }
+    for attempt in $(seq 1 30); do
+        if ! wifi_dnsmasq_owned "$pid"; then
+            rm -f "$DNSMASQ_PID"
+            return $?
+        fi
+        sleep 0.1
+    done
+    warn "WiFi DHCP PID=$pid 未退出；保留当前网络。"
+    return 1
+}
+
 stop_wifi_processes() {
-    # 切换 AP/STA 前释放 wlan0，避免 hostapd/wpa_supplicant/dnsmasq 抢占接口。
+    # USB DHCP has a separate owner and must survive Wi-Fi mode changes.
+    stop_wifi_dnsmasq || return 1
     killall hostapd >/dev/null 2>&1 || true
     killall wpa_supplicant >/dev/null 2>&1 || true
     killall udhcpc >/dev/null 2>&1 || true
-
-    if [ -f "$DNSMASQ_PID" ]; then
-        local pid
-        pid="$(cat "$DNSMASQ_PID" 2>/dev/null || true)"
-        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-            kill "$pid" >/dev/null 2>&1 || true
-        fi
-        rm -f "$DNSMASQ_PID" >/dev/null 2>&1 || true
-    fi
-
-    # 兼容旧 wifi_init.sh 启动的无 pidfile dnsmasq，避免旧 DHCP 服务继续占用 wlan0。
-    killall dnsmasq >/dev/null 2>&1 || true
 }
 
 disable_wifi_runtime() {
     # 显式停用 WiFi 功能时，不只杀进程，还要清空地址并关闭 wlan0 射频接口。
     rm -f "$BOOT_APPLIED"
     # 不卸载 aic8800 内核模块，避免影响蓝牙/驱动生命周期；需要彻底断电时再手工处理。
-    stop_wifi_processes
+    stop_wifi_processes || die "WiFi DHCP 停止失败，取消网络切换。"
     ip addr flush dev "$IFACE" >/dev/null 2>&1 || true
     ip link set "$IFACE" down >/dev/null 2>&1 || true
     info "已停用 WiFi：进程已停止，$IFACE 已 down；内核驱动未卸载。"
@@ -209,12 +301,16 @@ write_hostapd_config() {
     local ssid="$1"
     local psk="$2"
     local channel="$3"
+    local hw_mode
+    hw_mode="$(ap_hw_mode "$channel")" || die "不支持的 AP 信道：$channel"
 
     cat > "$HOSTAPD_CONF" <<EOF_AP
 interface=$IFACE
 driver=nl80211
 ssid=$ssid
-hw_mode=g
+country_code=CN
+ieee80211d=1
+hw_mode=$hw_mode
 channel=$channel
 beacon_int=100
 dtim_period=2
@@ -283,15 +379,15 @@ start_ap_runtime() {
     local dhcp_end="$6"
 
     write_hostapd_config "$ssid" "$psk" "$channel"
-    stop_wifi_processes
+    stop_wifi_processes || die "WiFi DHCP 停止失败，取消网络切换。"
     reset_interface
     ip addr add "$ap_ip/24" dev "$IFACE" || die "无法设置 AP 地址：$ap_ip/24"
 
-    # AP 进程输出写入 /userdata，避免 SSH 远程执行时后台进程继承终端导致命令挂住。
+    # Daemon output stays in /run and never inherits the SSH terminal or operation lock.
     # 后台服务不得继承操作锁，否则交互退出后仍会阻止后续配置。
     hostapd -B "$HOSTAPD_CONF" 9>&- > "$HOSTAPD_LOG" 2>&1 || die "hostapd 启动失败，查看：$HOSTAPD_LOG"
     sleep 1
-    dnsmasq --interface="$IFACE" \
+    dnsmasq --conf-file=/dev/null --interface="$IFACE" \
         --bind-interfaces \
         --no-resolv \
         --no-poll \
@@ -306,7 +402,7 @@ start_ap_runtime() {
     state="$(wpa_cli -p /var/run/hostapd -i "$IFACE" status 2>/dev/null | awk -F= '$1 == "state" {print $2}')"
     [ "$state" = "ENABLED" ] || die "AP 未进入 ENABLED 状态，查看：$HOSTAPD_LOG"
 
-    info "AP 已启动：SSID=$ssid, IP=$ap_ip, DHCP=$dhcp_start-$dhcp_end"
+    info "AP 已启动：SSID=$ssid, 信道=$channel, IP=$ap_ip, DHCP=$dhcp_start-$dhcp_end"
 }
 
 wait_sta_connected() {
@@ -325,10 +421,10 @@ start_sta_runtime() {
     local psk="$2"
 
     write_wpa_config "$ssid" "$psk"
-    stop_wifi_processes
+    stop_wifi_processes || die "WiFi DHCP 停止失败，取消网络切换。"
     reset_interface
 
-    # STA 连接日志持久化，便于现场排查密码错误、认证失败和 DHCP 失败。
+    # STA diagnostics live in /run; saved credentials alone belong to the system partition.
     wpa_supplicant -D nl80211 -i "$IFACE" -c "$WPA_CONF" -B 9>&- > "$WPA_LOG" 2>&1 || die "wpa_supplicant 启动失败，查看：$WPA_LOG"
     if ! wait_sta_connected; then
         iw dev "$IFACE" link 2>/dev/null || true
@@ -394,6 +490,9 @@ prompt_ap_mode() {
     local ap_ip
     local dhcp_start
     local dhcp_end
+    local band
+    local channel_default
+    local hw_mode
 
     info "配置 AP 模式。密码留空表示开放热点；非空密码长度必须为 8-63 个字符。"
     ssid="$(read_default "AP SSID" "$DEFAULT_AP_SSID")"
@@ -412,9 +511,24 @@ prompt_ap_mode() {
     done
 
     while true; do
-        channel="$(read_default "2.4G 信道" "$DEFAULT_AP_CHANNEL")"
-        valid_channel_24g "$channel" && break
-        warn "信道必须是 1-13。"
+        band="$(read_default "AP 频段（2.4 或 5 GHz）" 5)"
+        case "$band" in
+            2.4) channel_default=1; break ;;
+            5) channel_default="$DEFAULT_AP_CHANNEL"; break ;;
+            *) warn "频段必须是 2.4 或 5。" ;;
+        esac
+    done
+    while true; do
+        channel="$(read_default "$band GHz 信道" "$channel_default")"
+        hw_mode="$(ap_hw_mode "$channel")" || hw_mode=''
+        case "$band:$hw_mode" in
+            2.4:g|5:a) break ;;
+        esac
+        if [ "$band" = 2.4 ]; then
+            warn "2.4 GHz 信道必须是 1-13。"
+        else
+            warn "5 GHz 信道必须是 36/40/44/48/149/153/157/161/165（非 DFS）。"
+        fi
     done
 
     while true; do
@@ -445,7 +559,7 @@ prompt_sta_mode() {
 }
 
 install_autostart() {
-    # rootfs 可只读；开机恢复仅由持久化分区上的标记控制。
+    # This policy survives reboot but is replaced with the system image on reflash.
     : > "$AUTOSTART_FILE" || die "无法启用开机恢复：$AUTOSTART_FILE"
     sync
     info "已启用开机恢复：$AUTOSTART_FILE"
@@ -468,14 +582,12 @@ ask_autostart() {
 apply_saved() {
     ensure_dirs
     load_state
-    IFACE="${IFACE:-wlan0}"
     case "${MODE:-}" in
         ap)
-            start_ap_runtime "${AP_SSID:-$DEFAULT_AP_SSID}" "${AP_PSK:-}" "${AP_CHANNEL:-$DEFAULT_AP_CHANNEL}" "${AP_IP:-$DEFAULT_AP_IP}" "${DHCP_START:-$DEFAULT_DHCP_START}" "${DHCP_END:-$DEFAULT_DHCP_END}"
+            start_ap_runtime "$AP_SSID" "$AP_PSK" "$AP_CHANNEL" "$AP_IP" "$DHCP_START" "$DHCP_END"
             ;;
         sta)
-            [ -n "${STA_SSID:-}" ] || die "STA_SSID 为空，无法启动客户端模式。"
-            start_sta_runtime "$STA_SSID" "${STA_PSK:-}"
+            start_sta_runtime "$STA_SSID" "$STA_PSK"
             ;;
         *)
             die "未知保存模式：${MODE:-empty}"
@@ -486,7 +598,7 @@ apply_saved() {
 boot_wifi() {
     [ -f "$AUTOSTART_FILE" ] || return 0
     [ ! -e "$BOOT_APPLIED" ] || return 0
-    exec >> "$BASE_DIR/boot.log" 2>&1
+    exec >> "$BOOT_LOG" 2>&1
     apply_saved || return 1
     : > "$BOOT_APPLIED" || die "无法记录本次开机恢复状态。"
 }
@@ -512,8 +624,8 @@ status_wifi() {
 usage() {
     cat <<EOF_USAGE
 用法：
-  $SCRIPT_PATH                 交互式配置 AP/客户端模式
-  $SCRIPT_PATH --apply-saved   按 /userdata/wifi/current.conf 启动已保存配置
+  $SCRIPT_PATH                 交互式配置 AP（2.4/5 GHz，默认 5 GHz）/客户端模式
+  $SCRIPT_PATH --apply-saved   按 $STATE_FILE 启动已保存配置
   $SCRIPT_PATH --boot          系统启动入口：仅在启用开机恢复时应用一次
   $SCRIPT_PATH --stop          停止 WiFi 进程、清空地址并关闭 wlan0
   $SCRIPT_PATH --disable       同 --stop，不卸载内核驱动
@@ -552,8 +664,8 @@ main() {
         *) usage; return 1 ;;
     esac
     need_root
-    need_cmd mountpoint
-    mountpoint -q /userdata || die "/userdata 尚未挂载，拒绝在 rootfs 写入配置。"
+    need_cmd stat
+    check_config
     # 未配置的镜像开机不检查无线依赖，也不触碰接口或创建配置。
     if [ "${1:-}" = --boot ] && [ ! -f "$AUTOSTART_FILE" ]; then
         return 0

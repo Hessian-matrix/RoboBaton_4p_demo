@@ -56,7 +56,6 @@ type service struct {
 	control            *net.UnixConn
 	controlWriteMu     sync.Mutex
 	recording          recordingCache
-	allowed            map[string]bool
 	sourceBits         atomic.Uint32
 	sourceAt           atomic.Int64
 	producerIMUDrops   atomic.Uint64
@@ -159,17 +158,8 @@ func run() error {
 			return err
 		}
 	}
-	s := &service{config: c, hub: h, control: control, allowed: make(map[string]bool)}
+	s := &service{config: c, hub: h, control: control}
 	s.telemetry = newTelemetry(c)
-	ips, err := net.InterfaceAddrs()
-	if err != nil {
-		return err
-	}
-	for _, address := range ips {
-		if ip, _, e := net.ParseCIDR(address.String()); e == nil && ip.To4() != nil && (c.ListenAddress == "0.0.0.0" || ip.String() == c.ListenAddress) {
-			s.allowed[ip.String()] = true
-		}
-	}
 	h.udpMux = udpMux
 	h.tcpMux = tcpMux
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -271,7 +261,9 @@ func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		host = h
 	}
-	if !s.allowed[host] || r.URL.RawQuery != "" {
+	// The accepted socket is authoritative even when an interface appears after startup.
+	local, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if !ok || local.IP.To4() == nil || local.IP.IsUnspecified() || host != local.IP.String() || local.Port != s.config.Port || r.URL.RawQuery != "" {
 		jsonError(w, 400, "host", "invalid host or query")
 		return
 	}

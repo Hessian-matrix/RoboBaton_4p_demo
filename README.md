@@ -2,19 +2,22 @@
 
 [English](README_EN.md) · [中文使用文档](https://4p-docs.readthedocs.io/zh-cn/latest/index.html)
 
-面向 X5 的 SC132 四目相机、RTSP、ICM-42670-P IMU、UART 和 SocketCAN 示例仓库。接线、部署、参数、保存、API 和排障说明统一维护在公开文档仓库 [4P_doc](https://github.com/Hessian-matrix/4P_doc)。
+面向 X5 的 SC132 四目相机、RTSP、ICM-42670-P IMU、UART 和 SocketCAN 示例仓库。V2 主分支为 `V2_main`；接线、部署、参数、保存、API 和排障说明统一维护在公开文档仓库 [4P_doc](https://github.com/Hessian-matrix/4P_doc/tree/V2_main)。
 
 ## 仓库内容
 
 - `demo/`：X5 完整运行包，含 `sensor_demo`、`cam_demo`、`mosaic_rtsp_demo`、`imu_reader_demo`、`serial_port_demo` 和 `can_demo`。
 - `src/`、`include/`、`lib/`、`config/`：示例源码、公开头文件、匹配的预编译库与默认配置。
 - `scripts/`：构建、打包与运行包校验入口。
+- [`scripts/env_setup/x5_usb/`](scripts/env_setup/x5_usb/)：系统 USB 功能管理与四目 UVC 的公开源码、独立构建和离线镜像安装工具。
 
 当前 IMU 使用内核 IIO V3／公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V3 内核模块预先绑定；旧 V2 即使 host 模式也不兼容。无用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
 
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
 ## 开始使用
+
+系统镜像下载：[4P_V2.0.0_image.tar.gz](https://www.hessian-matrix.com/wp-content/uploads/2026/automaticupdates/4P_V2.0.0_image.tar.gz)。烧录前备份数据，并按[系统烧录](https://4p-docs.readthedocs.io/zh-cn/latest/ops/system-flashing.html)核对适用硬件与发布方 SHA-256；使用随板预装系统无需重新烧录。
 
 先按[首次上电](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html)和[部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)准备设备及运行包，再在 X5 上执行：
 
@@ -31,11 +34,15 @@ cd /root/demo
 
 运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功只表示前 2 秒未退出，仍须检查日志和页面。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/latest/usage/non-ros-demo.html#non-ros-autostart)。
 
+开机自启动及 `restart` 在包内配置之上固定传入 `--print-rate-hz 0`，不再将高频 IMU 样本块写入后台日志；启动信息、错误、录制结果和退出健康摘要仍保留，不改变原生采样率、网页遥测或保存数据。前台 `./sensor_demo` 与无参数 `./start_sensor_demo.sh` 仍按 YAML 打印，调试可显式使用 `./sensor_demo --print-rate-hz 10 --print-metrics`。日志仍为追加写入，不自动清空已有文件，也不提供容量上限。
+
+配套新系统的 `/etc/init.d/S98sensor_demo_autostart` 读取 `/etc/4p/sensor-demo-autostart`（缺失默认开启）；`enable`/`disable` 写入系统策略，不再编辑共享 `/userdata/startup.sh`。普通重启保留设置，重烧 system 恢复镜像默认值，不导入旧注册状态。需同时更新匹配系统入口和运行包，不能仅复制 launcher；设置变更要求系统分区可写，脚本不自动 remount。日志与录制数据不迁移、不删除。
+
 ### 局域网视频与六轴预览
 
 当前源码的 `sensor_demo` 默认开启 Web、关闭 RTSP。同一可信局域网电脑打开 `http://<设备IP>/`，查看四路 H.264 原生视频、IMU 六轴数值及趋势；页面资源离线内嵌，无需插件。`sensor_web` 由应用启动和回收，不要单独运行。此功能尚未作为新软件版本发布，不代表全部浏览器、双机稳态或 GPU 已验收。
 
-右上角语言按钮用 `CH` / `EN` 表示切换目标：中文页面显示 `EN`，英文页面显示 `CH`；默认中文，浏览器允许本地存储时记住选择。切换覆盖静态文案、动态状态与无障碍提示，不刷新页面、不重建视频/SSE/姿态 Worker，不重置录制选项、设备录制或已接受的零偏。“在线文档 / Online Docs”按当前语言在新标签页打开对应官方文档；只有在线文档需要互联网，设备页面与切换仍使用离线内嵌资源。
+右上角语言按钮用 `CH` / `EN` 表示切换目标：中文页面显示 `EN`，英文页面显示 `CH`；默认中文，浏览器允许本地存储时记住选择。切换覆盖静态文案、动态状态与无障碍提示，不刷新页面、不重建视频/SSE/姿态 Worker，不重置录制选项、设备录制或已接受的零偏。“在线文档 / Online Docs”按当前语言在新标签页打开 `4pv2` 文档：[中文](https://4p-docs.readthedocs.io/zh-cn/4pv2/) / [英文](https://4p-doc-en.readthedocs.io/en/4pv2/)；只有在线文档需要互联网，设备页面与切换仍使用离线内嵌资源。
 
 所有功能集中在**同一首页**，无左侧页面导航或独立 hash 视图。主工作区包含四路相机、惯性姿态、六轴原始遥测和常驻的“录制与保存”四张卡片。宽度 ≥1440px 时四列并排，相机列最大、遥测列加宽至略宽于姿态列，从相机列两侧空白让出空间，四张外框等高、上下边缘对齐；1100–1439px 时相机/姿态/遥测三列并排，录制卡片在下方独占一行；768–1099px 时相机与录制各占整行，姿态和遥测左右并排；小于 768px 时全部上下堆叠。姿态校准与相对航向重置仍在姿态卡片内。
 
@@ -63,11 +70,13 @@ cd /root/demo
 
 YAML 中 `web.enabled`、`rtsp.enabled` 独立；`rtsp.bps/codec` 仍是共享编码参数。Web 视频仅支持 H.264；H.265 不转码，IMU 遥测仍可用。HTTP 使用 TCP 80，WebRTC 使用 UDP/TCP 8189；只放通 HTTP 不够。端口冲突使 Web 降级，不抢占其他服务、不影响采集/保存。
 
+手机连接板卡 AP 后，使用 `ip -4 addr show wlan0` 显示的板端 IPv4 打开 `http://<AP地址>/`，不是手机的地址或有线地址。默认监听 `0.0.0.0` 时，服务支持启动后才配置的本机地址；HTTP Host 须匹配实际接收连接的本机 IP，WebRTC 新会话使用当前网卡地址。显式绑定单个 IP 时只服务该地址；不接受域名、查询参数或跨域 Origin。仅在可信隔离网络使用。
+
 网页没有身份认证，只用于可信隔离 LAN；HTTP 信令/遥测没有传输真实性保护，不要直接暴露到公网或不可信网络。硬解由浏览器、系统和驱动决定，缺少诊断字段显示 `unknown`，有 GPU 不等于四路硬解。页面并排播放不证明四路显示同步或相机/IMU 同步。
 
 首页常驻的“录制与保存”卡片只有一份表单，默认显示格式、固定存储位置、开始/停止/查询、设备状态、设备计时时长和已写入字节数。默认折叠的原生“高级选项”详情包含图像隔帧与最小丢组间隔；另一默认折叠的“录制详情与使用说明”包含可用空间、丢弃计数、最终结果、会话 ID、实际格式/存储、输出路径、完整性/清理、健康范围及使用边界。实际错误、命令结果不确定和停止排空/封装提示始终位于折叠区外。隐藏的高级值无效时，先自动展开高级选项，再显示浏览器校验提示。沿用原有校验、实时状态/能力检查、命令锁定及设备确认/查询；状态不可用或过期、命令待确认或结果不确定、设备不允许开始时不能开始录制。
 
-在录制卡片中选择格式和固定存储后开始；需要调整隔帧或最小丢组间隔时展开“高级选项”。点击“停止录制”后等待设备排空/封装及最终结果；只有 `published_complete`、`data_complete=true` 和 `cleanup_complete=true` 才表示完整发布。相机、原生 IMU 和预览继续运行，可连续多次录制。网页关闭/断网不停止录制；重新打开页面查询真实状态，命令超时后不盲目重发。运行目录为实际 ELF 目录下的 `recordings`（标准包 `/root/demo/bin/recordings`），TF 为已挂载的 `/mnt/sdcard/recordings`，不接受任意路径。bag/MP4 互斥，MP4 要求四路 H.264。存储、API 与原生数据合同不变；启动参数及 YAML 自动保存保留，也可网页停止，保存不使用网页降频/姿态滤波数据，动态 MP4 健康仅覆盖 `callback_window`。页面无认证，能够访问设备的人可开始/停止写盘。完整合同见[数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
+在录制卡片中选择格式和固定存储后开始；需要调整隔帧或最小丢组间隔时展开“高级选项”。点击“停止录制”后等待设备排空/封装及最终结果；只有 `published_complete`、`data_complete=true` 和 `cleanup_complete=true` 才表示完整发布。相机、原生 IMU 和预览继续运行，可连续多次录制。网页关闭/断网不停止录制；重新打开页面查询真实状态，命令超时后不盲目重发。“运行目录 / eMMC”固定保存到绝对目录 `/root/demo/save_data`，不从 ELF 位置推导：bag 为 `/root/demo/save_data/session-<id>.bag`，MP4 为 `/root/demo/save_data/session-<id>`，会话名由设备分配。TF 仍为已挂载的 `/mnt/sdcard/recordings`，缺卡或未挂载明确失败、不退回 eMMC；网页不接受自定义路径，符号链接安全约束不变。旧数据保留原目录，不自动移动或删除。bag/MP4 互斥，MP4 要求四路 H.264。API 与原生数据合同不变；CLI/YAML 自动保存及 `save_data.save_path` 语义和默认 `/root/demo/save_mp4/` 保留，也可网页停止，保存不使用网页降频/姿态滤波数据，动态 MP4 健康仅覆盖 `callback_window`。页面无认证，能够访问设备的人可开始/停止写盘。完整合同见[数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
 
 页面另提供客户端姿态预览：浏览器 Web Worker 用 ≤50Hz 的姿态专用六轴输入融合四元数，动画板体显示 Roll/Pitch/相对 Yaw；设备端不计算姿态或零偏。设备仅在降频前对每个原生样本执行四级一阶低通，单级极点为 `min(10Hz, 遥测上限×0.2, 原生采样率×0.2)`；默认 800→50Hz 时低频群延迟约 64ms。SSE 新增 `attitude_accel_mps2` / `attitude_gyro_rps`，原始六轴数值/趋势字段、原生采样、保存与公共 ABI 不变。世界 +Z 向上，按当前重力初始化；原始和滤波加速度均在重力带内才修正倾角，带外仅陀螺积分。
 
@@ -92,6 +101,14 @@ YAML 中 `web.enabled`、`rtsp.enabled` 独立；`rtsp.bps/codec` 仍是共享�
 H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部分 Windows 硬解端四路彩色竖条。更新时必须整包替换并重启应用；只刷新网页不会更新已运行的编码器。解码帧数增长、零丢包也不能证明像素正确，需检查实际画面。此修复不要求关闭浏览器硬件加速，也不等于全部 GPU 兼容性验收。
 
 源码构建额外需要固定 Go `1.27.3`，预先配置 module 缓存，再设置 `SENSOR_WEB_GO_EXECUTABLE`；构建不自动下载或切换工具链。完整运行包内已包含 ARM64 `bin/sensor_web` 和第三方许可证，板端无需 Go。
+
+### USB 摄像头源码与重编
+
+四目 UVC 程序独立于 `sensor_demo` 和根 CMake 构建，**不需要 Go**。修改入口为 [`uvc_mosaic.cpp`](scripts/env_setup/x5_usb/uvc_mosaic.cpp) 中的 `Source::Start()`（采集）、`Compose()`（拼图）和 `Encoder`（硬件 JPEG）；USB 描述符和后端启停见 [`switch_usb_gadget`](scripts/env_setup/x5_usb/switch_usb_gadget) 的 `uvc()`。使用 [`build_uvc.sh`](scripts/env_setup/x5_usb/build_uvc.sh) 配合匹配 X5 SDK、本仓 ABI3 头文件及库交叉编译；[`install.py`](scripts/env_setup/x5_usb/install.py) 只接受离线 rootfs 和 `--package` 暂存目录，运行脚本为 [`S98rootfs.sh`](scripts/env_setup/x5_usb/S98rootfs.sh) 与 [`S99usb.sh`](scripts/env_setup/x5_usb/S99usb.sh)，不能用于在线 `/`。
+
+新镜像默认 USB 网卡为 CDC NCM，支持 `switch_usb_gadget ncm` 和 `switch_usb_gadget set-default ncm`；RNDIS 与 ECM 仍可选择。三种网卡模式共用 `switch_usb_gadget ip` 的持久 IPv4/DHCP 配置与断链保护。离线安装保留已有显式默认值，不自动迁移正在运行的设备；物理枚举及主机驱动兼容性须使用匹配镜像验证。
+
+完整命令、相机资源交接与已有板卡安全更新见[USB 使用与开发指南](https://4p-docs.readthedocs.io/zh-cn/latest/usage/usb-gadget-switch.html#usb-uvc-development)。重编其他拼图示例不会更新 `/usr/bin/x5-uvc-mosaic`；应用逻辑保持输出规格且内核/设备树已支持时通常无需重刷系统。工具不自动部署板卡，源码更新也不表示已发布或通过板端收流验收。
 
 ## 文档入口
 

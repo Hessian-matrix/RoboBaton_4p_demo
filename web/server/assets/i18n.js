@@ -75,7 +75,7 @@ const i18n = (() => {
     '完整性 / 清理': 'Completeness / cleanup',
     '健康状态范围': 'Health scope',
     '仅限可信局域网。此页面没有身份认证，能访问设备的人可启动或停止录制。请勿暴露到公网。': 'Trusted LAN only. This page has no authentication; anyone who can reach the device can start or stop recording. Do not expose it to the public Internet.',
-    '路径由设备分配：运行目录为可执行文件目录下的 recordings，TF 卡为 /mnt/sdcard/recordings，不接受自定义路径。': 'Paths are allocated by the device: recordings under the executable directory for runtime storage, or /mnt/sdcard/recordings on the TF card. Custom paths are not accepted.',
+    '路径由设备分配：运行目录为 /root/demo/save_data，TF 卡为 /mnt/sdcard/recordings，不接受自定义路径。': 'Paths are allocated by the device: /root/demo/save_data for runtime storage, or /mnt/sdcard/recordings on the TF card. Custom paths are not accepted.',
     '同一时刻只能运行一个 bag 或 MP4 会话。录制保存原生 IMU，预览抽取、滤波和浏览器姿态校准不改变保存数据。MP4 保存四路 H.264 视频，不是屏幕录制。': 'Only one bag or MP4 session can run at a time. Recording saves native IMU samples; preview decimation, filtering, and browser attitude calibration do not alter saved data. MP4 saves four H.264 videos, not a screen capture.',
     '关闭网页或断网不会停止设备录制。停止后仍需排空和封装；只有设备返回最终结果才可判断完成。命令超时后请查询状态，不要盲目重复发送，也不要在停止过程中断电。': 'Closing the page or losing the network does not stop device recording. Stopping still requires draining and finalization; completion is determined only by the device final result. After a command timeout, query status instead of blindly resending. Do not power off during finalization.',
     '运行诊断': 'Diagnostics',
@@ -200,7 +200,7 @@ const i18n = (() => {
     toggle.lang = language === 'en' ? 'zh-CN' : 'en';
     toggle.setAttribute('aria-label', language === 'en' ? 'Switch to Chinese' : '切换到英文');
     const docs = document.getElementById('online-docs');
-    docs.href = language === 'en' ? 'https://4p-doc-en.readthedocs.io/en/latest/index.html' : 'https://4p-docs.readthedocs.io/zh-cn/latest/index.html';
+    docs.href = language === 'en' ? 'https://4p-doc-en.readthedocs.io/en/4pv2/' : 'https://4p-docs.readthedocs.io/zh-cn/4pv2/';
     docs.hreflang = language;
     try { localStorage.setItem('4p-language', language); } catch { /* Language switching also works when browser storage is blocked. */ }
   }
