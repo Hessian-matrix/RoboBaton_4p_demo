@@ -8,7 +8,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/demo}"
 PACKAGE_LIB_DIR="${PROJECT_DIR}/lib"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake}"
 STRIP_TOOL="${STRIP_TOOL:-}"
-SENSOR_WEB_GO_EXECUTABLE="${SENSOR_WEB_GO_EXECUTABLE:-${GO:-}}"
+SENSOR_WEB_CARGO_EXECUTABLE="${SENSOR_WEB_CARGO_EXECUTABLE:-}"
 WORK_ROOT=""
 BACKUP_ACTIVE=0
 
@@ -31,7 +31,7 @@ Options:
   --output-dir <path>      Runtime package output directory, default ./demo
   --toolchain-file <path>  CMake toolchain for the consumer demos
   --strip-tool <path>      Optional strip override for staged executables
-  --go <path>              Exact Go 1.27.3 compiler (or SENSOR_WEB_GO_EXECUTABLE/GO)
+  --cargo <path>           Cargo executable for Rust 1.95.0 (or SENSOR_WEB_CARGO_EXECUTABLE)
   -h, --help               Show this help
 USAGE
 }
@@ -67,9 +67,9 @@ while [[ $# -gt 0 ]]; do
       STRIP_TOOL="$2"
       shift 2
       ;;
-    --go)
+    --cargo)
       require_option_value "$1" "${2:-}"
-      SENSOR_WEB_GO_EXECUTABLE="$2"
+      SENSOR_WEB_CARGO_EXECUTABLE="$2"
       shift 2
       ;;
     -h|--help)
@@ -192,13 +192,13 @@ fi
 
 # Configure only this release repository. The imported producer libraries come from ./lib.
 rm -rf "${BUILD_DIR}"
-GO_CMAKE_ARGS=()
-if [[ -n "${SENSOR_WEB_GO_EXECUTABLE}" ]]; then
-  GO_CMAKE_ARGS+=("-DSENSOR_WEB_GO_EXECUTABLE=${SENSOR_WEB_GO_EXECUTABLE}")
+WEB_CMAKE_ARGS=()
+if [[ -n "${SENSOR_WEB_CARGO_EXECUTABLE}" ]]; then
+  WEB_CMAKE_ARGS+=("-DSENSOR_WEB_CARGO_EXECUTABLE=${SENSOR_WEB_CARGO_EXECUTABLE}")
 fi
 cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
-  -DCMAKE_BUILD_TYPE="Release" "${GO_CMAKE_ARGS[@]}"
+  -DCMAKE_BUILD_TYPE="Release" "${WEB_CMAKE_ARGS[@]}"
 
 PRODUCER_GCC="$(read_configured_c_compiler)"
 if ! TARGET_TRIPLET="$("${PRODUCER_GCC}" -dumpmachine)"; then

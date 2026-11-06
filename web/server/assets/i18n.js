@@ -200,7 +200,7 @@ const i18n = (() => {
     toggle.lang = language === 'en' ? 'zh-CN' : 'en';
     toggle.setAttribute('aria-label', language === 'en' ? 'Switch to Chinese' : '切换到英文');
     const docs = document.getElementById('online-docs');
-    docs.href = language === 'en' ? 'https://4p-doc-en.readthedocs.io/en/4pv2/' : 'https://4p-docs.readthedocs.io/zh-cn/4pv2/';
+    docs.href = language === 'en' ? 'https://4p-doc-en.readthedocs.io/en/4pv2.main/' : 'https://4p-docs.readthedocs.io/zh-cn/4pv2.main/';
     docs.hreflang = language;
     try { localStorage.setItem('4p-language', language); } catch { /* Language switching also works when browser storage is blocked. */ }
   }

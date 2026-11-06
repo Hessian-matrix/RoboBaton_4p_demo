@@ -4,64 +4,56 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT="${PROJECT_DIR}/build_x5/sensor_web"
-GO_EXECUTABLE="${SENSOR_WEB_GO_EXECUTABLE:-${GO:-go}}"
-
+CARGO_EXECUTABLE="${SENSOR_WEB_CARGO_EXECUTABLE:-cargo}"
 usage() {
   cat <<'USAGE'
-Usage: scripts/build_sensor_web.sh [--output <path>] [--go <executable>]
+Usage: scripts/build_sensor_web.sh [--output <path>] [--cargo <executable>]
 
-Build the embedded sensor_web service for Linux ARM64 using exactly Go 1.27.3.
-Set SENSOR_WEB_GO_EXECUTABLE or GO to an installed compiler. GOTOOLCHAIN=local
-prevents automatic compiler downloads. Dependencies must already be provisioned
-in GOMODCACHE; this build is offline, readonly, and never installs board tools.
-The output retains Go ELF symbols for package identity verification.
+Build static Linux ARM64 sensor_web using Rust 1.95.0's bundled musl 1.2.5
+mallocng and rust-lld. cargo-zigbuild 0.23.0 / Zig 0.16.0 compile native C
+dependencies only. Provision the aarch64-unknown-linux-musl Rust target and
+Cargo.lock dependencies before building. Builds are frozen/offline and never
+install compilers or board tools; deterministic ELF inspection verifies output.
 USAGE
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --output|--go)
-      if [[ $# -lt 2 || -z "$2" ]]; then
-        echo "Missing value for $1" >&2
-        exit 2
-      fi
-      if [[ "$1" == --output ]]; then OUTPUT="$2"; else GO_EXECUTABLE="$2"; fi
-      shift 2
-      ;;
+    --output|--cargo)
+      if [[ $# -lt 2 || -z "$2" ]]; then echo "Missing value for $1" >&2; exit 2; fi
+      if [[ "$1" == --output ]]; then OUTPUT="$2"; else CARGO_EXECUTABLE="$2"; fi
+      shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
-if ! GO_EXECUTABLE="$(command -v "${GO_EXECUTABLE}")" || [[ ! -x "${GO_EXECUTABLE}" ]]; then
-  echo "sensor_web requires Go 1.27.3; set SENSOR_WEB_GO_EXECUTABLE or GO to its executable (automatic toolchain switching is disabled)." >&2
-  exit 1
+CARGO_EXECUTABLE="$(command -v "${CARGO_EXECUTABLE}")"
+if [[ "$(rustc --version)" != 'rustc 1.95.0 (59807616e 2026-04-14)' ]]; then
+  echo 'sensor_web requires exactly Rust 1.95.0; provision it before building.' >&2; exit 1
 fi
-export GOTOOLCHAIN=local GOENV=off GOFLAGS= GOWORK=off
-export GOOS=linux GOARCH=arm64 GOARM64=v8.0 CGO_ENABLED=0 GOEXPERIMENT=
-export GOPROXY=off GOSUMDB=off GOTELEMETRY=off
-if [[ "$("${GO_EXECUTABLE}" env GOVERSION)" != go1.27.3 ]]; then
-  echo "sensor_web requires exactly Go 1.27.3: ${GO_EXECUTABLE}" >&2
-  exit 1
+if ! cargo install --list | python3 -c 'import sys; sys.exit("cargo-zigbuild v0.23.0:" not in sys.stdin.read().splitlines())'; then
+  echo 'sensor_web requires cargo-zigbuild 0.23.0; provision it before building.' >&2; exit 1
 fi
-VERSION="$(<"${PROJECT_DIR}/VERSION")"
-if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "VERSION must contain a SemVer core version" >&2
-  exit 1
-fi
-SOURCE_DIGEST="$(python3 "${SCRIPT_DIR}/verify_runtime_package.py" --web-source-digest)"
+if command -v zig >/dev/null; then ZIG_VERSION="$(zig version)"; else ZIG_VERSION="$(python3 -m ziglang version)"; fi
+if [[ "$ZIG_VERSION" != 0.16.0 ]]; then echo 'sensor_web requires Zig 0.16.0' >&2; exit 1; fi
 mkdir -p "$(dirname "${OUTPUT}")"
 OUTPUT="$(cd "$(dirname "${OUTPUT}")" && pwd)/$(basename "${OUTPUT}")"
 case "${OUTPUT}" in
   "${PROJECT_DIR}/web/"*|"${PROJECT_DIR}/src/"*|"${PROJECT_DIR}/scripts/"*)
-    echo "Refusing sensor_web output inside source inputs: ${OUTPUT}" >&2
-    exit 1
-    ;;
+    echo "Refusing sensor_web output inside source inputs: ${OUTPUT}" >&2; exit 1 ;;
 esac
+TARGET_DIR="$(dirname "${OUTPUT}")/build_rust_web"
 TEMP_OUTPUT="$(mktemp "${OUTPUT}.XXXXXX")"
 trap 'rm -f "${TEMP_OUTPUT}"' EXIT
-cd "${PROJECT_DIR}/web/server"
-"${GO_EXECUTABLE}" build -mod=readonly -trimpath -buildvcs=false -buildmode=exe \
-  -ldflags="-X main.version=${VERSION} -X main.sourceDigest=${SOURCE_DIGEST}" \
-  -o "${TEMP_OUTPUT}" .
+# Final libc comes from the pinned Rust target, not Zig's retaining allocator.
+RUST_SYSROOT="$(rustc --print sysroot)"
+RUST_HOST="$(rustc --print host-tuple)"
+RUST_LLD="${RUST_SYSROOT}/lib/rustlib/${RUST_HOST}/bin/rust-lld"
+if [[ ! -x "${RUST_LLD}" ]]; then echo "Missing Rust linker: ${RUST_LLD}" >&2; exit 1; fi
+export RUSTFLAGS="-C relocation-model=static -C target-feature=+crt-static -C link-self-contained=yes -C linker=${RUST_LLD} -C linker-flavor=ld.lld"
+"${CARGO_EXECUTABLE}" zigbuild --frozen --release --bin sensor_web \
+  --manifest-path "${PROJECT_DIR}/web/server/Cargo.toml" \
+  --target aarch64-unknown-linux-musl --target-dir "${TARGET_DIR}"
+cp "${TARGET_DIR}/aarch64-unknown-linux-musl/release/sensor_web" "${TEMP_OUTPUT}"
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" --sensor-web "${TEMP_OUTPUT}"
 chmod 755 "${TEMP_OUTPUT}"
 mv "${TEMP_OUTPUT}" "${OUTPUT}"

@@ -209,7 +209,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') state.cameras.forEach(camera => camera.setExpanded(false));
 });
 (async () => { try { setupValues('accel-values'); setupValues('gyro-values'); const response = await fetch('/api/v1/info', { signal: AbortSignal.timeout(3000) }); if (!response.ok) throw new Error('无法读取设备信息'); state.info = await response.json();
-  text($('composition'), `${state.info.version} · Pion ${state.info.pion_version}`); text($('video-config'), `${state.info.width}×${state.info.height} / ${state.info.fps} fps / ${state.info.codec.toUpperCase()}`);
+  text($('composition'), `${state.info.version} · ${state.info.webrtc_stack} ${state.info.webrtc_version}`); text($('video-config'), `${state.info.width}×${state.info.height} / ${state.info.fps} fps / ${state.info.codec.toUpperCase()}`);
   state.attitude = new AttitudeView();
   state.recording = new RecordingView(); state.recording.poll();
   state.cameras = state.info.cameras.map(config => new Camera(config)); openIMU(); requestAnimationFrame(render); poll();
