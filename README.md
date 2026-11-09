@@ -10,7 +10,7 @@
 - `src/`、`include/`、`lib/`、`config/`：示例源码、公开头文件、匹配的预编译库与默认配置。
 - `scripts/`：构建、打包与运行包校验入口。
 
-当前 IMU 使用内核 IIO V3／公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V3 内核模块预先绑定；旧 V2 即使 host 模式也不兼容。无用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
+当前 IMU 使用内核 IIO V4／公共 ABI 6.0：实体 `libicm42670.so.6.0.0`、SONAME `libicm42670.so.6`，九个导出均为 `ICM42670_X5_6.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V4 内核模块预先绑定；旧 V2/V3 即使 host 模式也不兼容。无用户态 SPI、触发—样本关联或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。 独立FSYNC诊断默认开启：YAML `imu.fsync_diagnostics: true`，`sensor_demo`／`imu_reader_demo --imu-fsync-diagnostics on|off`；ROS2启动只读参数`imu.fsync_diagnostics=true`。timing v3／MP4 IMU CSV原样保留`fifo_header,fsync_flags,fsync_sequence,fsync_raw_ns,fsync_uncertainty_ns,fsync_delta_us`；RAW沿诊断不校正正常样本／相机时间，不匹配帧。
 
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
@@ -63,6 +63,8 @@ cd /root/demo
 
 YAML 中 `web.enabled`、`rtsp.enabled` 独立；`rtsp.bps/codec` 仍是共享编码参数。Web 视频仅支持 H.264；H.265 不转码，IMU 遥测仍可用。HTTP 使用 TCP 80，WebRTC 使用 UDP/TCP 8189；只放通 HTTP 不够。端口冲突使 Web 降级，不抢占其他服务、不影响采集/保存。
 
+Web 可先于 USB/Wi-Fi 网络就绪启动；网络可达后，使用该连接实际到达的设备 IPv4 地址访问，无需为新增地址重启应用。HTTP Host 必须与连接的本地地址一致，显式端口须匹配配置；不支持域名、反向代理 Host 或用另一网卡地址作为 Host。同源限制不变，新的 WebRTC 会话按当时可用的网卡地址收集候选；已有会话断网后由页面重连。
+
 网页没有身份认证，只用于可信隔离 LAN；HTTP 信令/遥测没有传输真实性保护，不要直接暴露到公网或不可信网络。硬解由浏览器、系统和驱动决定，缺少诊断字段显示 `unknown`，有 GPU 不等于四路硬解。页面并排播放不证明四路显示同步或相机/IMU 同步。
 
 首页常驻的“录制与保存”卡片只有一份表单，默认显示格式、固定存储位置、开始/停止/查询、设备状态、设备计时时长和已写入字节数。默认折叠的原生“高级选项”详情包含图像隔帧与最小丢组间隔；另一默认折叠的“录制详情与使用说明”包含可用空间、丢弃计数、最终结果、会话 ID、实际格式/存储、输出路径、完整性/清理、健康范围及使用边界。实际错误、命令结果不确定和停止排空/封装提示始终位于折叠区外。隐藏的高级值无效时，先自动展开高级选项，再显示浏览器校验提示。沿用原有校验、实时状态/能力检查、命令锁定及设备确认/查询；状态不可用或过期、命令待确认或结果不确定、设备不允许开始时不能开始录制。
@@ -92,6 +94,32 @@ YAML 中 `web.enabled`、`rtsp.enabled` 独立；`rtsp.bps/codec` 仍是共享�
 H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部分 Windows 硬解端四路彩色竖条。更新时必须整包替换并重启应用；只刷新网页不会更新已运行的编码器。解码帧数增长、零丢包也不能证明像素正确，需检查实际画面。此修复不要求关闭浏览器硬件加速，也不等于全部 GPU 兼容性验收。
 
 源码构建额外需要固定 Go `1.27.3`，预先配置 module 缓存，再设置 `SENSOR_WEB_GO_EXECUTABLE`；构建不自动下载或切换工具链。完整运行包内已包含 ARM64 `bin/sensor_web` 和第三方许可证，板端无需 Go。
+
+### 标定驱动的 360° 环视
+
+新增独立 `panorama_demo`，不是 `mosaic_rtsp_demo` 的四格拼图，也不接入 `sensor_demo` 首页。先正常停止其他相机应用，保持 `cam-service` 运行，再在新构建的完整运行包中执行：
+
+```bash
+./panorama_demo --calibration config/calibration.yaml --port 8080
+```
+
+同一可信局域网浏览器打开 `http://<设备IP>:8080/`，查看单张等距柱状环视图、覆盖率、处理耗时与丢组计数；`Ctrl+C` 退出。HTTP 无认证、无加密，禁止暴露公网。程序不采集 IMU、不录制，也不自动启停其他应用。
+
+配置要求 schema 7、`kannala-brandt4` 内参与 `T_camN_from_imu` 外参（wxyz、米），cam0..3 必须对应标定时的同一固定安装和像素方向；示例配置标记 `pending_human_review`，不可作为任意设备的标定。默认输出 1600×600、方位角 360°、仰角 ±60°，中心为 IMU +X，正方位角朝 +Y、正仰角朝 +Z，不做重力调平。`--yaw` 改变中心方位角；`--distance-m 0` 用无穷远旋转模型，正值 ≥0.1m 使用 IMU 原点球面及平移外参。每帧从标定重叠区域稳健估计相机间的亮度比例，对具有可靠重叠的相机求解共同曝光增益，范围为 0.5–2 倍；暗部、饱和及明显色彩不一致的样本不参与，无可靠证据的相机保持原亮度。主体像素按光轴与源边缘质量选择一路；在选路边界附近，按局部颜色差、结构边缘和投影质量搜索连续接缝，优先避开不一致的前景边缘，并对上一处理帧的接缝位置施加软约束。接缝处对平滑的低频照明差做较宽的渐变补偿，在有效重叠和归属边缘淡出；高频细节仍取单路，仅在接缝两侧各 4 个输出像素内对补偿后接近的颜色窄幅融合，避免大范围混合造成前景重影。360° 首尾使用同样的环绕处理。RGB 与 NV12 共用亮度补偿及选路逻辑，不做锐化、图像模糊或光流形变，不改变标定采样坐标。亮度补偿不是相机曝光控制，也不能恢复过曝或欠曝细节；无可靠共同内容、明显色差和强视差时仍可能残留接缝，运动场景不保证无闪跳。近物仍可能在接缝处错位或断裂；盲区保持黑色。`100%` 地平线几何覆盖不代表全天球、有效像素或标定精度验收。
+
+采集固定四路 30fps，只处理最新完整帧组，默认处理上限 `--max-fps 10`，慢处理主动丢组，不承诺板端帧率。拼接最多复用 3 个后台计算线程加调用线程，互斥像素区域并行处理；接缝滤波按连续行访问，标定质量项预计算，不降低输出分辨率。`/frame.jpg` 和 `/status.json` 为只读最新快照；页面请求和显示不是物理同步验收。
+
+主机离线构建仅需 C++17、CMake、LibYAML/JPEG 开发头和静态库，不需要 X5 或 Go：
+
+```bash
+cmake -S . -B build_panorama_host -DPANORAMA_OFFLINE_ONLY=ON
+cmake --build build_panorama_host -j
+./build_panorama_host/panorama_demo --calibration config/calibration.yaml \
+  --images /path/to/group --once --output /path/to/new-panorama.jpg
+```
+
+输入目录包含同一帧组的 `cam0.jpg`～`cam3.jpg`，必须与标定尺寸/方向一致，程序不按文件名验证同步。去掉 `--once` 可通过同一 Web 页面查看离线静态图；`--output` 拒绝覆盖已有路径。X5 完整构建同样需要目标 LibYAML/JPEG 开发头及静态库，标准打包脚本包含新入口、标定和许可证；板端无需安装这两个库。算法基于标定投影、亮度补偿与接缝融合，未实现深度重建或自动重标定。JPEG 部分基于 Independent JPEG Group；第三方许可见 `licenses/panorama/THIRD_PARTY_NOTICES.txt`。
+
 
 ## 文档入口
 

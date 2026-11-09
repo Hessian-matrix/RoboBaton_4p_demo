@@ -61,6 +61,7 @@ void PrintUsage(const char* program, bool include_imu_options) {
 
     std::cout << "  --imu-sample-drop-policy <allow-counted|strict> Invalid six-axis payload policy, default allow-counted\n";
     std::cout << "  --imu-timestamp-mode <host|tmst> Kernel IIO timestamp mode, default host\n";
+    std::cout << "  --imu-fsync-diagnostics <on|off> Independent FSYNC diagnostics, default on; does not correct sample time\n";
     std::cout << "  --imu-start-order <imu-first|camera-first> IMU startup order, default camera-first\n";
     std::cout << "  --print-rate-hz HZ IMU terminal output rate, default min(sample-rate-hz, 10); 0 disables IMU sample output\n";
     std::cout << "  --print-metrics Include metrics diagnostics section in each IMU output record, default off\n";
@@ -454,6 +455,11 @@ Options ParseCommandLineImpl(int argc, char** argv, bool accept_imu_options,
       options.camera_timestamp_path = RequireValue(argc, argv, &i, "--camera-timestamp-path");
     } else if (accept_imu_options && arg == "--imu-timestamp-mode") {
       options.imu_timestamp_mode = ParseImuTimestampMode(RequireValue(argc, argv, &i, "--imu-timestamp-mode"));
+    } else if (accept_imu_options && arg == "--imu-fsync-diagnostics") {
+      const auto value = RequireValue(argc, argv, &i, "--imu-fsync-diagnostics");
+      if (value != "on" && value != "off")
+        throw std::invalid_argument("--imu-fsync-diagnostics must be on or off");
+      options.imu_fsync_diagnostics = value == "on";
     } else if (accept_imu_options && arg == "--sample-rate-hz") {
       options.imu_sample_rate_hz =
           ParseUint32(RequireValue(argc, argv, &i, "--sample-rate-hz"), "--sample-rate-hz");

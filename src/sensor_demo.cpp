@@ -656,6 +656,7 @@ int main(int argc, char** argv) {
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.sample_drop_policy = options.imu_sample_drop_policy;
     imu_options.timestamp_mode = options.imu_timestamp_mode;
+    imu_options.fsync_diagnostics = options.imu_fsync_diagnostics;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.final_health = &imu_final_health;
@@ -683,6 +684,7 @@ int main(int argc, char** argv) {
               << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
               << " camera_timestamp_path=" << options.camera_timestamp_path
               << " imu_timestamp_mode=" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host")
+              << " imu_fsync_diagnostics=" << (options.imu_fsync_diagnostics ? "on" : "off")
               << " imu_start_order="
               << (options.imu_start_order == ImuStartOrder::kCameraFirst
                       ? "camera-first"

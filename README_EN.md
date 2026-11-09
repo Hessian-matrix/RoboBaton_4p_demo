@@ -10,7 +10,7 @@ X5 examples for SC132 four-camera capture, RTSP, ICM-42670-P IMU, UART, and Sock
 - `src/`, `include/`, `lib/`, `config/`: example sources, public headers, matching prebuilt libraries, and default configuration.
 - `scripts/`: build, packaging, and runtime verification entry points.
 
-Current IMU capture uses kernel IIO V3 / public ABI 5.0: real file `libicm42670.so.5.0.0`, SONAME `libicm42670.so.5`, and nine exports under `ICM42670_X5_5.0`. `host` retains the `CLOCK_MONOTONIC` host estimate; `tmst` additionally maps sensor TMST to `CLOCK_MONOTONIC_RAW`. Both preserve native host time and all burst evidence. Saved output explicitly bridges the selected native clock to realtime per burst, retaining the bridge bracket half-width without certifying physical sampling or exposure synchronization accuracy. The matching V3 kernel module must already bind the device; V2 is incompatible even in host mode. No userspace SPI, FSYNC, or automatic fallback is provided. Rebuild every consumer with matching headers/libraries, without cross-major links. Software, documentation, ABI, and release status remain independent.
+Current IMU capture uses kernel IIO V4 / public ABI 6.0: real file `libicm42670.so.6.0.0`, SONAME `libicm42670.so.6`, and nine exports under `ICM42670_X5_6.0`. `host` retains the `CLOCK_MONOTONIC` host estimate; `tmst` additionally maps sensor TMST to `CLOCK_MONOTONIC_RAW`. Both preserve native host time and all burst evidence. Saved output explicitly bridges the selected native clock to realtime per burst, retaining the bridge bracket half-width without certifying physical sampling or exposure synchronization accuracy. The matching V4 kernel module must already bind the device; V2/V3 is incompatible even in host mode. No userspace SPI, trigger-to-sample association, or automatic fallback is provided. Rebuild every consumer with matching headers/libraries, without cross-major links. Software, documentation, ABI, and release status remain independent. Independent FSYNC diagnostics default on: YAML `imu.fsync_diagnostics: true`, or `sensor_demo`/`imu_reader_demo --imu-fsync-diagnostics on|off`; ROS2 startup-only parameter `imu.fsync_diagnostics=true`. Timing schema v3 and MP4 IMU CSV preserve `fifo_header,fsync_flags,fsync_sequence,fsync_raw_ns,fsync_uncertainty_ns,fsync_delta_us`; RAW-edge diagnostics never correct sample/camera time or match frames.
 
 This repository builds user-side examples, not the underlying runtime libraries. Keep sources, headers, libraries, and configuration matched. Deploy the complete runtime package, preserving symbolic links; do not replace individual `.so` files.
 
@@ -59,6 +59,8 @@ Expanding or collapsing recording details, advanced options, or diagnostics does
 
 YAML `web.enabled` and `rtsp.enabled` are independent; `rtsp.bps/codec` remain shared encoding parameters. Web video supports H.264 only; H.265 is not transcoded and IMU telemetry remains available. HTTP uses TCP 80 and WebRTC uses UDP/TCP 8189; allowing HTTP alone is insufficient. Port conflicts degrade Web without taking over other services or stopping acquisition/saving.
 
+Web may start before USB/Wi-Fi networking is ready. Once reachable, open the device IPv4 address actually reached by that connection; newly available addresses do not require an application restart. HTTP Host must match the connection's local address, and an explicit port must match configuration. Hostnames, reverse-proxy Host values, and another interface's address as Host are unsupported. Same-origin checks remain enforced. New WebRTC sessions gather candidates from currently available interfaces; the page reconnects after an existing session loses connectivity.
+
 There is no authentication: use only a trusted isolated LAN. HTTP signaling/telemetry lacks transport authenticity; do not expose it directly to the Internet or untrusted networks. Hardware decoding depends on the browser, OS, and driver; missing diagnostics show `unknown`, and a GPU does not imply four hardware-decoded streams. Side-by-side playback does not establish display or camera/IMU synchronization.
 
 The always-present “录制与保存” (Recording and Saving) card contains one form. Its default view shows format, fixed storage, start/stop/query, device state, device-timed duration, and bytes written. A native “高级选项” (Advanced Options) details section is closed by default and contains frame skipping and minimum drop interval. A second, initially closed “录制详情与使用说明” (Recording Details and Usage) section contains free space, drop counts, final outcome, session ID, actual format/storage, output path, integrity/cleanup, health scope, and use boundaries. Actual errors, uncertain-command messages, and stopping/drain/remux messages stay outside the folds. Invalid hidden advanced values automatically open Advanced Options before browser validation feedback is shown. Existing validation, fresh-state/capability checks, command locks, and device acknowledgments/queries remain. Starting is unavailable when status is missing or stale, a command is pending or its outcome uncertain, or the device does not allow a start.
@@ -86,6 +88,32 @@ To deploy this update, rebuild `sensor_demo`, the `sensor_web` helper containing
 Deployment here means only an authorized local runtime-package update on the user's device, not a new software-version release or an expansion of the existing acceptance scope.
 
 Source builds additionally require exact Go `1.27.3`, a pre-provisioned module cache, and `SENSOR_WEB_GO_EXECUTABLE`; builds do not download dependencies or switch toolchains automatically. The complete runtime includes ARM64 `bin/sensor_web` and third-party licenses; the device needs no Go installation.
+
+### Calibrated 360° Panorama
+
+The independent `panorama_demo` is a geometric panorama, not the four-tile `mosaic_rtsp_demo` or a new `sensor_demo` homepage mode. Gracefully stop other camera applications, keep `cam-service` running, and run from a freshly built complete package:
+
+```bash
+./panorama_demo --calibration config/calibration.yaml --port 8080
+```
+
+Open `http://<device-ip>:8080/` on a trusted isolated LAN for one equirectangular image, geometric coverage, processing time, and dropped groups. Stop with `Ctrl+C`. HTTP has no authentication or encryption; never expose it to public networks. The program neither acquires IMU nor records data nor starts/stops other applications.
+
+Calibration requires schema 7, `kannala-brandt4` intrinsics, and `T_camN_from_imu` poses (wxyz, metres). cam0..3 must match the calibrated fixed assembly and pixel orientation. The example is `pending_human_review`, not calibration for arbitrary devices. Defaults: 1600×600, 360° azimuth, ±60° elevation. Centre is IMU +X, positive azimuth toward +Y and positive elevation toward +Z; no gravity levelling. `--yaw` changes centre azimuth. `--distance-m 0` uses rotation-only infinity; positive values ≥0.1m use an IMU-centred sphere and extrinsic translation. Each frame robustly estimates brightness ratios from calibrated overlaps and solves common exposure gains, bounded to 0.5–2, for reliably connected views. Dark, clipped, and strongly chromatically inconsistent samples are excluded; cameras without reliable evidence retain their brightness. Main pixels select one source by optical-axis/source-border quality. Near ownership boundaries, a continuous seam search uses local color disagreement, structural edges, and projection quality to avoid inconsistent foreground edges, with a soft penalty for movement from the previous processed frame. Broad smooth compensation removes low-frequency illumination differences around the seam and fades at valid overlap/ownership edges. High-frequency detail remains single-view; only colors agreeing after compensation blend within four output pixels on either side, avoiding wide foreground ghosting. The 360° join uses the same wrapped processing. RGB/NV12 share photometric correction and source selection without sharpening, image blur, optical-flow deformation, or changes to calibrated sampling coordinates. Compensation does not control camera exposure or restore clipped/crushed details. Missing reliable common content, strong chromatic disagreement, and parallax can leave seams; motion is not guaranteed flicker-free. Near objects can still misalign or break. Blind regions remain black. `100%` geometric horizon coverage does not certify full-sphere coverage, valid scene pixels, or calibration accuracy.
+
+Capture stays at four-channel 30fps; processing uses only the latest complete group, capped by `--max-fps 10` by default. Slow processing intentionally drops groups; no board throughput is promised. Rendering reuses at most three helper threads plus the caller for disjoint pixel regions, traverses seam-filter rows contiguously, and precomputes calibrated quality terms without reducing output resolution. `/frame.jpg` and `/status.json` are latest-only read-only snapshots, not a physical synchronization acceptance surface.
+
+Host offline builds require C++17, CMake, LibYAML/JPEG development headers and static archives, without X5 or Go:
+
+```bash
+cmake -S . -B build_panorama_host -DPANORAMA_OFFLINE_ONLY=ON
+cmake --build build_panorama_host -j
+./build_panorama_host/panorama_demo --calibration config/calibration.yaml \
+  --images /path/to/group --once --output /path/to/new-panorama.jpg
+```
+
+The input directory must contain `cam0.jpg`..`cam3.jpg` from one group in calibrated dimensions/orientation; filenames alone do not establish synchronization. Omit `--once` to serve the static image through the same Web page. `--output` refuses existing paths. Full X5 builds also need target LibYAML/JPEG headers/static archives; the standard package includes the new entry, calibration, and notices, with neither library installation required on-device. This uses calibrated projection, photometric correction, and seam blending, not depth reconstruction or automatic recalibration. JPEG handling is based in part on the work of the Independent JPEG Group; see `licenses/panorama/THIRD_PARTY_NOTICES.txt`.
+
 
 ## Documentation
 

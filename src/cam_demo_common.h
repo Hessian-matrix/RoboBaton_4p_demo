@@ -96,6 +96,7 @@ struct Options {
   std::string trigger_mode = kDefaultSc132TriggerMode;
   std::string camera_timestamp_path = "observer";
   uint32_t imu_timestamp_mode = ICM42670_TIMESTAMP_MODE_HOST;
+  bool imu_fsync_diagnostics = true;
   // Unset preserves the library's environment setting; explicit YAML overrides it.
   std::optional<bool> test_exposure_midpoint;
   bool auto_exposure = true;
@@ -161,6 +162,7 @@ struct ImuConsumerOptions {
   uint32_t sample_rate_hz = kDefaultImuSampleRateHz;
   uint32_t sample_drop_policy = ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   uint32_t timestamp_mode = ICM42670_TIMESTAMP_MODE_HOST;
+  bool fsync_diagnostics = true;
   uint32_t count = 0U;
   std::atomic<bool>* stop_requested = nullptr;
   icm42670_runtime_health_t* final_health = nullptr;

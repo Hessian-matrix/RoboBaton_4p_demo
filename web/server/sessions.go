@@ -423,7 +423,8 @@ func (s *service) createSession(w http.ResponseWriter, r *http.Request) {
 	settings.SetICETimeouts(2*time.Second, 4*time.Second, time.Second)
 	settings.SetIncludeLoopbackCandidate(s.config.ListenAddress == "127.0.0.1")
 	settings.SetIPFilter(func(ip net.IP) bool {
-		return s.allowed[ip.String()] && (!ip.IsLoopback() || s.config.ListenAddress == "127.0.0.1")
+		// Pion enumerates current interface addresses for each new connection.
+		return ip.To4() != nil && (s.config.ListenAddress == "0.0.0.0" || ip.String() == s.config.ListenAddress) && (!ip.IsLoopback() || s.config.ListenAddress == "127.0.0.1")
 	})
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(registry), webrtc.WithSettingEngine(settings))
 	pc, e := api.NewPeerConnection(webrtc.Configuration{})

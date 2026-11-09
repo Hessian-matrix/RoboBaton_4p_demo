@@ -1,0 +1,162 @@
+schema_version: 7
+mode: multi_camera_imu
+acceptance: pending_human_review
+cameras:
+- id: cam0
+  image_width: 1280
+  image_height: 1088
+  parameters:
+    model: kannala-brandt4
+    parameters:
+      fx: 474.5059583843041
+      fy: 474.0853536828673
+      cx: 642.4743903682817
+      cy: 539.4406371511506
+      k1: 0.03556076385104952
+      k2: -0.0008136285889477694
+      k3: 0.0014769089361963757
+      k4: -0.0011742222730297795
+- id: cam1
+  image_width: 1280
+  image_height: 1088
+  parameters:
+    model: kannala-brandt4
+    parameters:
+      fx: 474.44657776254854
+      fy: 474.8013081978602
+      cx: 642.2229488599543
+      cy: 537.2025044941694
+      k1: 0.03436254654383281
+      k2: 0.0007077087148807394
+      k3: 0.0009034167472656536
+      k4: -0.0011379857219279122
+- id: cam2
+  image_width: 1280
+  image_height: 1088
+  parameters:
+    model: kannala-brandt4
+    parameters:
+      fx: 473.5944158920648
+      fy: 473.96122025419413
+      cx: 646.3286341874544
+      cy: 532.3135345116877
+      k1: 0.03601315556448332
+      k2: -0.0029699460596421907
+      k3: 0.002863567681704284
+      k4: -0.0014635128565067118
+- id: cam3
+  image_width: 1280
+  image_height: 1088
+  parameters:
+    model: kannala-brandt4
+    parameters:
+      fx: 473.60762810863974
+      fy: 473.73143523412233
+      cx: 641.0497495606579
+      cy: 542.8127166414064
+      k1: 0.03584639716134771
+      k2: -0.0021012381900278017
+      k3: 0.0025190036643880577
+      k4: -0.0014341174075459516
+reference_camera: cam0
+inertial:
+  method: continuous_time
+  camera_from_imu:
+  - direction: T_cam0_from_imu
+    pose:
+      translation_m:
+      - 0.0013867082042213457
+      - 0.04751749804052708
+      - -0.04319974989848497
+      quaternion_wxyz:
+      - 0.6484076249920421
+      - 0.6581452335762578
+      - 0.27037807623877197
+      - -0.2707546846546765
+  - direction: T_cam1_from_imu
+    pose:
+      translation_m:
+      - 0.0009043219653191456
+      - 0.047907024571361104
+      - -0.027213226664572605
+      quaternion_wxyz:
+      - 0.2847096128380197
+      - 0.26025808820185886
+      - -0.6586767040753403
+      - 0.6460272156740652
+  - direction: T_cam2_from_imu
+    pose:
+      translation_m:
+      - -0.007749797705158146
+      - 0.04714727166501927
+      - -0.03663254629291607
+      quaternion_wxyz:
+      - 0.26982170937103206
+      - 0.2739720976828256
+      - 0.6520279780526372
+      - -0.6534485830422746
+  - direction: T_cam3_from_imu
+    pose:
+      translation_m:
+      - 0.008109718579768057
+      - 0.0472356005474433
+      - -0.03468589069077788
+      quaternion_wxyz:
+      - 0.6536230814951888
+      - 0.6524250713754044
+      - -0.2701863990933654
+      - 0.2722456672244629
+  gyro_bias_rad_s:
+  - -0.0030028209066522236
+  - -0.005913620992781258
+  - 0.0033653261835071575
+  accelerometer_bias_m_s2:
+  - 0.0056967705452870415
+  - 0.0293999676683481
+  - -0.0373475029710514
+  gravity_world_m_s2:
+  - 0.04263232693845886
+  - 9.750194812175723
+  - 0.8618007306340888
+  time_offset_s: 0.004371689848703494
+  clock_reference_time_s: 21.773936479
+  clock_skew_ppm: 0.0
+  camera_time_offsets_s:
+  - id: cam0
+    value_s: 0.0
+  - id: cam1
+    value_s: 0.00008244549434518813
+  - id: cam2
+    value_s: 0.0000190392172907916
+  - id: cam3
+    value_s: 0.00005557973557840972
+  camera_clock_skews_ppm:
+  - id: cam0
+    value_ppm: 0.0
+  - id: cam1
+    value_ppm: 0.0
+  - id: cam2
+    value_ppm: 0.0
+  - id: cam3
+    value_ppm: 0.0
+  axis_calibration:
+    gyro_calibrated_from_raw:
+    - - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+    accelerometer_calibrated_from_raw:
+    - - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0

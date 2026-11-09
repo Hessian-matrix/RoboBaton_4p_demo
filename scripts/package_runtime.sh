@@ -18,7 +18,7 @@ Usage:
   scripts/package_runtime.sh [options]
 
 Behavior:
-  Build the six non-ROS consumer demos and the embedded sensor_web service from
+  Build the seven non-ROS consumer demos and the embedded sensor_web service from
   this release repository, using prebuilt runtime libraries already in ./lib,
   then publish a verified runtime package to ./demo.
 
@@ -149,7 +149,7 @@ if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUT
 fi
 
 
-for real in libicm42670.so.5.0.0 libsc132.so.3.0.0 libprrtsp.so.2.0.1; do
+for real in libicm42670.so.6.0.0 libsc132.so.3.0.0 libprrtsp.so.2.0.1; do
   soname="${real%.*.*}"
   linker="${soname%.*}"
   if [[ ! -f "${PACKAGE_LIB_DIR}/${real}" || -L "${PACKAGE_LIB_DIR}/${real}" ]]; then
@@ -231,6 +231,7 @@ for path in \
   "${BUILD_DIR}/sensor_demo" \
   "${BUILD_DIR}/sensor_web" \
   "${BUILD_DIR}/mosaic_rtsp_demo" \
+  "${BUILD_DIR}/panorama_demo" \
   "${BUILD_DIR}/can_demo" \
   "${BUILD_DIR}/serial_port_demo"; do
   if [[ ! -f "${path}" ]]; then
@@ -260,26 +261,30 @@ cp "${BUILD_DIR}/imu_reader_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/sensor_web" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/bin/"
+cp "${BUILD_DIR}/panorama_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/serial_port_demo" "${STAGE_DIR}/bin/"
 cp "${BUILD_DIR}/can_demo" "${STAGE_DIR}/bin/"
 cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
-  libicm42670.so.5.0.0 libicm42670.so.5 libicm42670.so \
+  libicm42670.so.6.0.0 libicm42670.so.6 libicm42670.so \
   libsc132.so.3.0.0 libsc132.so.3 libsc132.so \
   libprrtsp.so.2.0.1 libprrtsp.so.2 libprrtsp.so; do
   cp -P "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
 mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
+cp "${PROJECT_DIR}/config/calibration.yaml" "${STAGE_DIR}/config/"
 cp "${PROJECT_DIR}/VERSION" "${STAGE_DIR}/VERSION"
 mkdir -p "${STAGE_DIR}/licenses/sensor_web"
 cp "${PROJECT_DIR}/LICENSE" "${PROJECT_DIR}/LICENSE_SCOPE.md" "${STAGE_DIR}/"
 cp "${PROJECT_DIR}/web/THIRD_PARTY_NOTICES.txt" "${PROJECT_DIR}/web/dependencies.lock.json" \
   "${STAGE_DIR}/licenses/sensor_web/"
+mkdir -p "${STAGE_DIR}/licenses/panorama"
+cp "${PROJECT_DIR}/licenses/panorama/THIRD_PARTY_NOTICES.txt" "${STAGE_DIR}/licenses/panorama/"
 
-for executable in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo can_demo; do
+for executable in cam_demo imu_reader_demo mosaic_rtsp_demo panorama_demo sensor_demo serial_port_demo can_demo; do
   "${STRIP_TOOL}" --strip-unneeded "${STAGE_DIR}/bin/${executable}"
 done
 
@@ -301,7 +306,7 @@ fi
 unset DEMO_LD_LIBRARY_PATH DEMO_PATH_PREFIX
 EOF
 
-for name in cam_demo imu_reader_demo mosaic_rtsp_demo sensor_demo serial_port_demo can_demo; do
+for name in cam_demo imu_reader_demo mosaic_rtsp_demo panorama_demo sensor_demo serial_port_demo can_demo; do
   cat > "${STAGE_DIR}/${name}" <<EOF
 #!/bin/sh
 set -eu
@@ -316,8 +321,10 @@ chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/con
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/can_demo" "${STAGE_DIR}/start_sensor_demo.sh"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/can_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
 chmod 755 "${STAGE_DIR}/bin/sensor_web" "${STAGE_DIR}/licenses" "${STAGE_DIR}/licenses/sensor_web"
+chmod 755 "${STAGE_DIR}/panorama_demo" "${STAGE_DIR}/bin/panorama_demo" "${STAGE_DIR}/licenses/panorama"
 chmod 644 "${STAGE_DIR}/LICENSE" "${STAGE_DIR}/LICENSE_SCOPE.md" "${STAGE_DIR}/licenses/sensor_web/"*
 chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so.[0-9]*.[0-9]*.[0-9]*
+chmod 644 "${STAGE_DIR}/config/calibration.yaml" "${STAGE_DIR}/licenses/panorama/THIRD_PARTY_NOTICES.txt"
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --write-provenance \

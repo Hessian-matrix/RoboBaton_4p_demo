@@ -20,6 +20,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
+option(PANORAMA_OFFLINE_ONLY "Build only the host panorama JPEG/Web demo without X5 capture" OFF)
+find_path(PANORAMA_YAML_INCLUDE_DIR yaml.h REQUIRED)
+find_path(PANORAMA_JPEG_INCLUDE_DIR jpeglib.h REQUIRED)
+# Static codec/parser archives keep the X5 runtime package independent of extra OS packages.
+find_library(PANORAMA_YAML_LIBRARY NAMES libyaml.a REQUIRED)
+find_library(PANORAMA_JPEG_LIBRARY NAMES libjpeg.a REQUIRED)
+add_executable(panorama_demo
+  src/panorama_demo.cpp
+  src/panorama_stitcher.cpp
+  src/panorama_jpeg.cpp
+  src/panorama_http.cpp
+)
+target_include_directories(panorama_demo PRIVATE ${PANORAMA_YAML_INCLUDE_DIR} ${PANORAMA_JPEG_INCLUDE_DIR})
+target_compile_definitions(panorama_demo PRIVATE ROBOBATON_RELEASE_VERSION="${ROBOBATON_RELEASE_VERSION}")
+target_compile_options(panorama_demo PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(panorama_demo PRIVATE ${PANORAMA_YAML_LIBRARY} ${PANORAMA_JPEG_LIBRARY} Threads::Threads)
+if(PANORAMA_OFFLINE_ONLY)
+  target_compile_definitions(panorama_demo PRIVATE PANORAMA_OFFLINE_ONLY)
+  return()
+endif()
+
 set(SENSOR_WEB_GO_EXECUTABLE "" CACHE FILEPATH "Go 1.27.3 executable for the embedded ARM64 Web service")
 if(NOT SENSOR_WEB_GO_EXECUTABLE)
   if(DEFINED ENV{GO} AND NOT "$ENV{GO}" STREQUAL "")
@@ -52,9 +73,9 @@ add_custom_target(sensor_web ALL
   VERBATIM
 )
 
-set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5.0.0")
+set(ICM42670_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.6.0.0")
 if(NOT EXISTS "${ICM42670_SO}")
-  message(FATAL_ERROR "Missing ${ICM42670_SO}. Build and synchronize the ABI 5 producer and its relative library links into this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${ICM42670_SO}. Build and synchronize the ABI 6 producer and its relative library links into this demo's lib/ directory.")
 endif()
 
 set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0")
@@ -242,10 +263,18 @@ if(X5_HOBOT_LIB_DIR)
   target_link_options(cam_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
   target_link_options(sensor_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
   target_link_options(mosaic_rtsp_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
+  target_link_options(panorama_demo PRIVATE "LINKER:-rpath-link,${X5_HOBOT_LIB_DIR}")
 endif()
 target_link_libraries(cam_demo PRIVATE sc132 prrtsp_v2 Threads::Threads)
 target_link_libraries(sensor_demo PRIVATE icm42670_x5 sc132 prrtsp_v2 Threads::Threads ${X5_MULTIMEDIA_SO} ${X5_HBMEM_SO})
 target_link_libraries(mosaic_rtsp_demo PRIVATE sc132 prrtsp_v2 ${X5_HBMEM_SO} Threads::Threads)
+target_include_directories(panorama_demo PRIVATE ${SC132_INCLUDE_DIRS})
+target_link_libraries(panorama_demo PRIVATE sc132)
+target_link_options(panorama_demo PRIVATE -static-libstdc++ -static-libgcc "LINKER:--no-allow-shlib-undefined")
+set_target_properties(panorama_demo PROPERTIES
+  BUILD_WITH_INSTALL_RPATH ON
+  INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib;\$ORIGIN/lib;/usr/hobot/lib;/usr/hobot/lib/sensor;/usr/lib;/lib64:/lib"
+)
 target_link_options(cam_demo PRIVATE
   -static-libstdc++
   -static-libgcc
@@ -288,7 +317,7 @@ set_target_properties(mosaic_rtsp_demo PROPERTIES
 )
 
 
-install(TARGETS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo mosaic_rtsp_demo
+install(TARGETS imu_reader_demo serial_port_demo can_demo cam_demo sensor_demo mosaic_rtsp_demo panorama_demo
   RUNTIME DESTINATION .
   LIBRARY DESTINATION lib
 )
@@ -297,10 +326,12 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${CMAKE_CURRENT_SOURCE_DIR}
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/web/THIRD_PARTY_NOTICES.txt"
               "${CMAKE_CURRENT_SOURCE_DIR}/web/dependencies.lock.json"
         DESTINATION licenses/sensor_web)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/licenses/panorama/THIRD_PARTY_NOTICES.txt"
+        DESTINATION licenses/panorama)
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5.0.0"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.5"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.6.0.0"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so.6"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42670.so"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3.0.0"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.3"
@@ -318,6 +349,7 @@ install(FILES
   DESTINATION include
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/sensor_config.yaml"
+              "${CMAKE_CURRENT_SOURCE_DIR}/config/calibration.yaml"
   DESTINATION config
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DESTINATION .)

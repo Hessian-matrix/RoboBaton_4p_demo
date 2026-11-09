@@ -33,12 +33,23 @@ typedef struct sc132_frame sc132_frame_t;
 #define SC132_EXPOSURE_UNAVAILABLE 0U
 #define SC132_EXPOSURE_ESTIMATED 1U
 
-/* Frozen latest-ISP observation, NOT certified applied exposure. No error bound.
- * duration_ns is the reported integration duration converted from SDK seconds.
- * source_frame_id/source_timestamp are the SDK's non-atomic current identity;
- * source_timestamp is opaque, not RAW or realtime. observed_raw_ns marks query
- * completion in CLOCK_MONOTONIC_RAW, not integration start/end. Unavailable
- * observations are all zero and never reuse a preceding frame's value.
+/* Fixed one-hardware-frame ESTIMATED association, NOT certified applied exposure;
+ * no measured physical error bound. Actual AE effective lag may differ; there is
+ * no per-frame applied guarantee. A getter obtained while acquiring raw frame
+ * N estimates N+1 only, using acquired raw hardware ID adjacency (uint32 wrap),
+ * never normalized group IDs or the SDK source_frame_id. Each acquisition worker
+ * owns zero-initialized per-session state; frame-set warmup primes it without
+ * extra image buffering or delivery delay. No predecessor, hardware gaps, or an
+ * invalid predecessor query produce UNAVAILABLE/all zero; never stretch across
+ * gaps. A failed query at N makes N+1 unavailable, but a valid predecessor may
+ * still estimate N. duration_ns converts SDK integration seconds to nanoseconds.
+ * source_frame_id/source_timestamp retain the older getter's non-atomic SDK
+ * identity; observed_raw_ns retains its CLOCK_MONOTONIC_RAW query completion.
+ * Provenance is not rewritten to the target image. source_timestamp is opaque,
+ * not RAW/realtime; observed_raw_ns is not integration start/end. The estimate
+ * is frozen with the frame. Default trigger timestamps are unchanged; opt-in
+ * midpoint uses the matched estimate and fails closed when unavailable.
+ * Consumers forward exposure unchanged and MUST NOT apply another frame shift.
  */
 typedef struct sc132_exposure_info {
   uint32_t status;

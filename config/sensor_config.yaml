@@ -27,6 +27,7 @@ web:
   max_imu_clients: 2
 imu:
   sample_rate_hz: 800
+  fsync_diagnostics: true
   print_rate_hz: 10
   print_metrics: false
 
