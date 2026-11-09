@@ -27,28 +27,30 @@ WEB_PACKAGE_COPIES = {
     "LICENSE_SCOPE.md": "LICENSE_SCOPE.md",
     "web/THIRD_PARTY_NOTICES.txt": "licenses/sensor_web/THIRD_PARTY_NOTICES.txt",
     "web/dependencies.lock.json": "licenses/sensor_web/dependencies.lock.json",
+    "licenses/panorama/THIRD_PARTY_NOTICES.txt": "licenses/panorama/THIRD_PARTY_NOTICES.txt",
 }
 
 EXPECTED_VERSION_NEEDS = {
     "bin/cam_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
     "bin/mosaic_rtsp_demo": {"LIBSC132_3.0", "LIBPRRTSP_2.0"},
-    "bin/imu_reader_demo": {"ICM42670_X5_5.0"},
-    "bin/sensor_demo": {"ICM42670_X5_5.0",
+    "bin/panorama_demo": {"LIBSC132_3.0"},
+    "bin/imu_reader_demo": {"ICM42670_X5_6.0"},
+    "bin/sensor_demo": {"ICM42670_X5_6.0",
                         "LIBSC132_3.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42670.so.5.0.0": {"ICM42670_X5_5.0"},
+    "lib/libicm42670.so.6.0.0": {"ICM42670_X5_6.0"},
     "lib/libsc132.so.3.0.0": {"LIBSC132_3.0"},
     "lib/libprrtsp.so.2.0.1": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42670.so.5.0.0": "libicm42670.so.5",
+    "lib/libicm42670.so.6.0.0": "libicm42670.so.6",
     "lib/libsc132.so.3.0.0": "libsc132.so.3",
     "lib/libprrtsp.so.2.0.1": "libprrtsp.so.2",
 }
 EXPECTED_LIBRARY_LINKS = {
-    "lib/libicm42670.so.5": "libicm42670.so.5.0.0",
-    "lib/libicm42670.so": "libicm42670.so.5",
+    "lib/libicm42670.so.6": "libicm42670.so.6.0.0",
+    "lib/libicm42670.so": "libicm42670.so.6",
     "lib/libsc132.so.3": "libsc132.so.3.0.0",
     "lib/libsc132.so": "libsc132.so.3",
     "lib/libprrtsp.so.2": "libprrtsp.so.2.0.1",
@@ -60,15 +62,16 @@ EXPECTED_SCRIPT_COPIES = {
     "scripts/rosbag_info.py": "bin/rosbag_info.py",
 }
 EXPECTED_NEEDED = {
-    "bin/imu_reader_demo": {"libicm42670.so.5", "libm.so.6", "libc.so.6"},
-    "bin/sensor_demo": {"libicm42670.so.5", "libsc132.so.3", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
+    "bin/imu_reader_demo": {"libicm42670.so.6", "libm.so.6", "libc.so.6"},
+    "bin/sensor_demo": {"libicm42670.so.6", "libsc132.so.3", "libprrtsp.so.2", "libmultimedia.so.1", "libhbmem.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6"},
     "bin/cam_demo": {"libsc132.so.3", "libprrtsp.so.2", "libc.so.6"},
     "bin/mosaic_rtsp_demo": {"libsc132.so.3", "libprrtsp.so.2", "libhbmem.so.1", "libc.so.6"},
+    "bin/panorama_demo": {"libsc132.so.3", "libm.so.6", "libc.so.6"},
     "bin/serial_port_demo": {"libc.so.6"},
     "bin/can_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42670.so.5.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42670.so.6.0.0": {"libstdc++.so.6", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libsc132.so.3.0.0": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
     "lib/libprrtsp.so.2.0.1": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
 }
@@ -77,6 +80,7 @@ REQUIRED_FILES = {
     PROVENANCE_NAME,
     "cam_demo",
     "mosaic_rtsp_demo",
+    "panorama_demo",
     "imu_reader_demo",
     "sensor_demo",
     "serial_port_demo",
@@ -84,9 +88,11 @@ REQUIRED_FILES = {
     "start_sensor_demo.sh",
     "env.sh",
     "config/sensor_config.yaml",
+    "config/calibration.yaml",
     "bin/cam_demo",
     "bin/imu_reader_demo",
     "bin/mosaic_rtsp_demo",
+    "bin/panorama_demo",
     "bin/sensor_demo",
     "bin/sensor_web",
     "bin/serial_port_demo",
@@ -414,6 +420,8 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
         repo_root / "VERSION",
         repo_root / "CMakeLists.txt",
         repo_root / "config/sensor_config.yaml",
+        repo_root / "config/calibration.yaml",
+        repo_root / "licenses/panorama/THIRD_PARTY_NOTICES.txt",
         repo_root / "include/icm42670_driver.h",
         repo_root / "include/sc132camera.h",
         repo_root / "include/prrtsp_v2.h",
@@ -447,6 +455,7 @@ def expected_inventory_nodes() -> dict[str, str]:
         "lib": "dir",
         "licenses": "dir",
         "licenses/sensor_web": "dir",
+        "licenses/panorama": "dir",
         MANIFEST_NAME: "regular",
     }
     for relative in REQUIRED_FILES:
@@ -754,7 +763,7 @@ def verify_package(
     if (package_dir / "VERSION").read_text(encoding="utf-8").strip() != RELEASE_VERSION:
         raise AssertionError("runtime VERSION does not match the release version")
 
-    for relative in ["cam_demo", "imu_reader_demo", "mosaic_rtsp_demo", "sensor_demo", "serial_port_demo", "can_demo", "start_sensor_demo.sh", "bin/ffprobe", "bin/rosbag_info.py", *EXPECTED_NEEDED]:
+    for relative in ["cam_demo", "imu_reader_demo", "mosaic_rtsp_demo", "panorama_demo", "sensor_demo", "serial_port_demo", "can_demo", "start_sensor_demo.sh", "bin/ffprobe", "bin/rosbag_info.py", *EXPECTED_NEEDED]:
         mode = (package_dir / relative).stat().st_mode
         if not mode & stat.S_IXUSR:
             raise AssertionError(f"not executable: {relative}")
@@ -804,7 +813,7 @@ def verify_package(
             )
 
     version_getters = {
-        "lib/libicm42670.so.5.0.0": "icm42670_get_version",
+        "lib/libicm42670.so.6.0.0": "icm42670_get_version",
         "lib/libsc132.so.3.0.0": "sc132_get_version",
         "lib/libprrtsp.so.2.0.1": "prrtsp_get_version",
     }
@@ -822,6 +831,8 @@ def verify_package(
     for source_relative, package_relative in WEB_PACKAGE_COPIES.items():
         if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):
             raise AssertionError(f"runtime license/lock copy drift: {package_relative}")
+    if sha256(repo_root / "config/calibration.yaml") != sha256(package_dir / "config/calibration.yaml"):
+        raise AssertionError("runtime calibration copy drift")
 
 
 def main() -> int:

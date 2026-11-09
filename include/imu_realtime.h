@@ -80,14 +80,16 @@ inline size_t FormatImuTiming(const OutputImuSample& s, char* out, size_t capaci
   const bool raw = n.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST;
   const char* clock = raw ? "CLOCK_MONOTONIC_RAW" : "CLOCK_MONOTONIC";
   const int size = std::snprintf(out, capacity,
-      "{\"schema\":\"robobaton_imu_timing_v2\",\"sample_clock\":\"%s\","
+      "{\"schema\":\"robobaton_imu_timing_v3\",\"sample_clock\":\"%s\","
       "\"output_clock\":\"CLOCK_REALTIME\",\"burst_complete_clock\":\"CLOCK_MONOTONIC_RAW\","
       "\"generation\":%u,\"sample_sequence\":%llu,\"evidence_id\":%llu,\"burst_flags\":%u,"
       "\"sample_monotonic_ns\":%llu,\"sample_realtime_ns\":%llu,\"burst_complete_raw_ns\":%llu,"
       "\"observation_monotonic_ns\":%llu,\"estimated_period_ns\":%llu,\"timestamp_source\":%u,"
       "\"packet_flags\":%u,\"timestamp_mode\":\"%s\",\"fifo_tmst\":%u,"
       "\"sample_raw_ns\":%llu,\"timestamp_uncertainty_ns\":%u,\"bridge_clock\":\"%s\","
-      "\"bridge_monotonic_ns\":%llu,\"bridge_raw_ns\":%llu,\"bridge_realtime_ns\":%llu,\"bridge_uncertainty_ns\":%llu}",
+      "\"bridge_monotonic_ns\":%llu,\"bridge_raw_ns\":%llu,\"bridge_realtime_ns\":%llu,\"bridge_uncertainty_ns\":%llu,"
+      "\"fifo_header\":%u,\"fsync_flags\":%u,\"fsync_sequence\":%llu,\"fsync_raw_ns\":%llu,"
+      "\"fsync_uncertainty_ns\":%u,\"fsync_delta_us\":%u}",
       clock, n.session_generation, static_cast<unsigned long long>(n.sample_sequence),
       static_cast<unsigned long long>(n.evidence_id), n.burst_flags,
       static_cast<unsigned long long>(n.sample_monotonic_ns), static_cast<unsigned long long>(s.realtime_ns),
@@ -97,7 +99,9 @@ inline size_t FormatImuTiming(const OutputImuSample& s, char* out, size_t capaci
       n.timestamp_uncertainty_ns, clock,
       static_cast<unsigned long long>(s.bridge_monotonic_ns), static_cast<unsigned long long>(s.bridge_raw_ns),
       static_cast<unsigned long long>(s.bridge_realtime_ns),
-      static_cast<unsigned long long>(s.bridge_uncertainty_ns));
+      static_cast<unsigned long long>(s.bridge_uncertainty_ns), n.fifo_header, n.fsync_flags,
+      static_cast<unsigned long long>(n.fsync_sequence), static_cast<unsigned long long>(n.fsync_raw_ns),
+      n.fsync_uncertainty_ns, n.fsync_delta_us);
   if (size < 0 || static_cast<size_t>(size) >= capacity) throw std::runtime_error("IMU timing metadata too large");
   return static_cast<size_t>(size);
 }

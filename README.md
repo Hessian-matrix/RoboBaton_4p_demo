@@ -11,7 +11,7 @@
 - `scripts/`：构建、打包与运行包校验入口。
 - [`scripts/env_setup/x5_usb/`](scripts/env_setup/x5_usb/)：系统 USB 功能管理与四目 UVC 的公开源码、独立构建和离线镜像安装工具。
 
-当前 IMU 使用内核 IIO V3／公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V3 内核模块预先绑定；旧 V2 即使 host 模式也不兼容。无用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
+当前 IMU 使用内核 IIO V4／公共 ABI 6.0：实体 `libicm42670.so.6.0.0`、SONAME `libicm42670.so.6`，九个导出均为 `ICM42670_X5_6.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V4 内核模块预先绑定；旧 V2/V3 即使 host 模式也不兼容。无用户态 SPI、触发—样本关联或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。 独立FSYNC诊断默认开启：YAML `imu.fsync_diagnostics: true`，`sensor_demo`／`imu_reader_demo --imu-fsync-diagnostics on|off`；ROS2启动只读参数`imu.fsync_diagnostics=true`。timing v3／MP4 IMU CSV原样保留`fifo_header,fsync_flags,fsync_sequence,fsync_raw_ns,fsync_uncertainty_ns,fsync_delta_us`；RAW沿诊断不校正正常样本／相机时间，不匹配帧。
 
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
@@ -103,6 +103,31 @@ H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部�
 `sensor_web` 使用 Rust 与 str0m，静态链接 ARM64 musl，内嵌网页；四路视频、UDP/被动 TCP ICE、IMU SSE 和录制控制入口不变。源码构建需固定 Rust `1.95.0`、cargo-zigbuild `0.23.0`、Zig `0.16.0`、`aarch64-unknown-linux-musl` target 和预置 crate 缓存，通过 `SENSOR_WEB_CARGO_EXECUTABLE` 指定 Cargo。实际构建 frozen/offline，不自动下载或切换工具链。完整运行包含 `bin/sensor_web` 和第三方许可证，板端不需要 Rust 或 Go；CPU/RSS 改善必须以同机同负载实测为准。
 
 最终静态链接使用该 Rust target 自带的 musl `1.2.5` / mallocng 与 `rust-lld`；Zig 仅编译原生 C/汇编依赖，不提供最终 libc。verifier 要求保留 mallocng 原生符号，拒绝旧分配器或被剥除这些符号的程序。该选择允许空闲分配组归还内核，不承诺关闭网页后 RSS 归零；必须重建整包并正常重启应用，仅刷新网页无效。
+
+### 标定驱动的 360° 环视
+
+新增独立 `panorama_demo`，不是 `mosaic_rtsp_demo` 的四格拼图，也不接入 `sensor_demo` 首页。先正常停止其他相机应用，保持 `cam-service` 运行，再在新构建的完整运行包中执行：
+
+```bash
+./panorama_demo --calibration config/calibration.yaml --port 8080
+```
+
+同一可信局域网浏览器打开 `http://<设备IP>:8080/`，查看单张等距柱状环视图、覆盖率、处理耗时与丢组计数；`Ctrl+C` 退出。HTTP 无认证、无加密，禁止暴露公网。程序不采集 IMU、不录制，也不自动启停其他应用。
+
+配置要求 schema 7、`kannala-brandt4` 内参与 `T_camN_from_imu` 外参（wxyz、米），cam0..3 必须对应标定时的同一固定安装和像素方向；示例配置标记 `pending_human_review`，不可作为任意设备的标定。默认输出 1600×600、方位角 360°、仰角 ±60°，中心为 IMU +X，正方位角朝 +Y、正仰角朝 +Z，不做重力调平。`--yaw` 改变中心方位角；`--distance-m 0` 用无穷远旋转模型，正值 ≥0.1m 使用 IMU 原点球面及平移外参。每帧从标定重叠区域稳健估计相机间的亮度比例，对具有可靠重叠的相机求解共同曝光增益，范围为 0.5–2 倍；暗部、饱和及明显色彩不一致的样本不参与，无可靠证据的相机保持原亮度。主体像素按光轴与源边缘质量选择一路；在选路边界附近，按局部颜色差、结构边缘和投影质量搜索连续接缝，优先避开不一致的前景边缘，并对上一处理帧的接缝位置施加软约束。接缝处对平滑的低频照明差做较宽的渐变补偿，在有效重叠和归属边缘淡出；高频细节仍取单路，仅在接缝两侧各 4 个输出像素内对补偿后接近的颜色窄幅融合，避免大范围混合造成前景重影。360° 首尾使用同样的环绕处理。RGB 与 NV12 共用亮度补偿及选路逻辑，不做锐化、图像模糊或光流形变，不改变标定采样坐标。亮度补偿不是相机曝光控制，也不能恢复过曝或欠曝细节；无可靠共同内容、明显色差和强视差时仍可能残留接缝，运动场景不保证无闪跳。近物仍可能在接缝处错位或断裂；盲区保持黑色。`100%` 地平线几何覆盖不代表全天球、有效像素或标定精度验收。
+
+采集固定四路 30fps，只处理最新完整帧组，默认处理上限 `--max-fps 10`，慢处理主动丢组，不承诺板端帧率。拼接最多复用 3 个后台计算线程加调用线程，互斥像素区域并行处理；接缝滤波按连续行访问，标定质量项预计算，不降低输出分辨率。`/frame.jpg` 和 `/status.json` 为只读最新快照；页面请求和显示不是物理同步验收。
+
+主机离线构建仅需 C++17、CMake、LibYAML/JPEG 开发头和静态库，不需要 X5 或 Rust：
+
+```bash
+cmake -S . -B build_panorama_host -DPANORAMA_OFFLINE_ONLY=ON
+cmake --build build_panorama_host -j
+./build_panorama_host/panorama_demo --calibration config/calibration.yaml \
+  --images /path/to/group --once --output /path/to/new-panorama.jpg
+```
+
+输入目录包含同一帧组的 `cam0.jpg`～`cam3.jpg`，必须与标定尺寸/方向一致，程序不按文件名验证同步。去掉 `--once` 可通过同一 Web 页面查看离线静态图；`--output` 拒绝覆盖已有路径。X5 完整构建同样需要目标 LibYAML/JPEG 开发头及静态库，标准打包脚本包含新入口、标定和许可证；板端无需安装这两个库。算法基于标定投影、亮度补偿与接缝融合，未实现深度重建或自动重标定。JPEG 部分基于 Independent JPEG Group；第三方许可见 `licenses/panorama/THIRD_PARTY_NOTICES.txt`。
 
 ### USB 摄像头源码与重编
 

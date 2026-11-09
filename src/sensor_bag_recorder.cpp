@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <new>
 #include <sstream>
+#include <string_view>
 #include <stdexcept>
 #include <utility>
 
@@ -225,10 +227,12 @@ void AppendRosbagWriterStatsJson(std::ostringstream* stream,
 
 
 void AppendHeader(std::vector<uint8_t>* payload, uint32_t seq, RosbagTime stamp,
-                  const std::string& frame_id) {
+                  std::string_view frame_id) {
   AppendU32(payload, seq);
   AppendRosTime(payload, stamp);
-  AppendRosString(payload, frame_id);
+  AppendU32(payload, static_cast<uint32_t>(frame_id.size()));
+  const auto* data = reinterpret_cast<const uint8_t*>(frame_id.data());
+  payload->insert(payload->end(), data, data + frame_id.size());
 }
 
 // sensor_msgs/CompressedImage 的 data 长度在 JPEG 编码完成后回填。
@@ -326,6 +330,7 @@ std::string SessionConfigJson(const Options& options) {
          << "\"trigger_mode\":\"" << JsonEscape(options.trigger_mode) << "\","
          << "\"camera_timestamp_path\":\"" << JsonEscape(options.camera_timestamp_path) << "\","
          << "\"imu_timestamp_mode\":\"" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host") << "\","
+         << "\"imu_fsync_diagnostics\":" << (options.imu_fsync_diagnostics ? "true" : "false") << ","
          << "\"camera_timestamp_domain\":\""
          << TimestampDomainName(Sc132OutputTimestampDomain(options)) << "\","
          << "\"imu_timestamp_domain\":\""
@@ -336,27 +341,38 @@ std::string SessionConfigJson(const Options& options) {
   return stream.str();
 }
 
-std::string FrameMetadataJson(const SensorBagFrameJob& job, size_t jpeg_size) {
-  std::ostringstream stream;
-  stream << "{\"camera_id\":" << job.camera_id << ','
-         << "\"sequence\":" << job.sequence << ','
-         << "\"frame_id\":" << job.frame_id << ','
-         << "\"raw_frame_id\":" << job.raw_frame_id << ','
-         << "\"exposure\":{\"status\":" << job.exposure.status
-         << ",\"duration_ns\":" << job.exposure.duration_ns
-         << ",\"source_frame_id\":" << job.exposure.source_frame_id
-         << ",\"source_timestamp\":" << job.exposure.source_timestamp
-         << ",\"observed_raw_ns\":" << job.exposure.observed_raw_ns << "},"
-         << "\"group_id\":" << job.group_id << ','
-         << "\"source_group_order\":" << job.source_group_order << ','
-         << "\"group_timestamp_ns\":" << job.group_timestamp_ns << ','
-         << "\"camera_timestamp_ns\":" << job.camera_timestamp_ns << ','
-         << "\"width\":" << job.width << ','
-         << "\"height\":" << job.height << ','
-         << "\"stride\":" << job.stride << ','
-         << "\"vstride\":" << job.vstride << ','
-         << "\"jpeg_bytes\":" << jpeg_size << "}";
-  return stream.str();
+void AppendFrameMetadataPayload(const SensorBagFrameJob& job, size_t jpeg_size,
+                                std::vector<uint8_t>* payload) {
+  payload->clear();
+  AppendU32(payload, 0U);
+  const auto append_number = [payload](std::string_view prefix, auto value) {
+    const auto* data = reinterpret_cast<const uint8_t*>(prefix.data());
+    payload->insert(payload->end(), data, data + prefix.size());
+    // 32 bytes cover every signed/unsigned 64-bit decimal value, including its sign.
+    char digits[32];
+    const auto result = std::to_chars(digits, digits + sizeof(digits), value);
+    payload->insert(payload->end(), digits, result.ptr);
+  };
+  append_number("{\"camera_id\":", job.camera_id);
+  append_number(",\"sequence\":", job.sequence);
+  append_number(",\"frame_id\":", job.frame_id);
+  append_number(",\"raw_frame_id\":", job.raw_frame_id);
+  append_number(",\"exposure\":{\"status\":", job.exposure.status);
+  append_number(",\"duration_ns\":", job.exposure.duration_ns);
+  append_number(",\"source_frame_id\":", job.exposure.source_frame_id);
+  append_number(",\"source_timestamp\":", job.exposure.source_timestamp);
+  append_number(",\"observed_raw_ns\":", job.exposure.observed_raw_ns);
+  append_number("},\"group_id\":", job.group_id);
+  append_number(",\"source_group_order\":", job.source_group_order);
+  append_number(",\"group_timestamp_ns\":", job.group_timestamp_ns);
+  append_number(",\"camera_timestamp_ns\":", job.camera_timestamp_ns);
+  append_number(",\"width\":", job.width);
+  append_number(",\"height\":", job.height);
+  append_number(",\"stride\":", job.stride);
+  append_number(",\"vstride\":", job.vstride);
+  append_number(",\"jpeg_bytes\":", jpeg_size);
+  payload->push_back('}');
+  PatchU32(payload, 0U, static_cast<uint32_t>(payload->size() - sizeof(uint32_t)));
 }
 
 }  // namespace
@@ -1408,7 +1424,9 @@ void SensorBagRecorder::WorkerEntry(int camera_id) noexcept {
 void SensorBagRecorder::WriterEntry() noexcept {
   ApplyRecorderWorkerPriority(kRecorderWriterNice);
   std::vector<uint8_t> imu_payload;
-  imu_payload.reserve(320U);
+  // The writer copies each message before returning; one scratch buffer serves
+  // both the fixed IMU message and its variable-length timing JSON.
+  imu_payload.reserve(1540U);
   std::array<OutputImuSample, kWriterImuDrainBatch> imu_batch{};
   std::vector<PendingEncodedWrite> pending_images;
   pending_images.reserve(kWriterImagePrefetchLimit);
@@ -1850,8 +1868,7 @@ SensorBagRecorder::EncodedFrameJob SensorBagRecorder::EncodeFrame(SensorBagFrame
     throw std::runtime_error("JPEG payload too large for sensor_msgs/CompressedImage");
   }
   PatchU32(&encoded.image_payload, jpeg_size_offset, static_cast<uint32_t>(encoded.jpeg_size));
-  encoded.metadata_payload.clear();
-  AppendRosString(&encoded.metadata_payload, FrameMetadataJson(*job, encoded.jpeg_size));
+  AppendFrameMetadataPayload(*job, encoded.jpeg_size, &encoded.metadata_payload);
   return encoded;
 }
 
@@ -1942,33 +1959,27 @@ void SensorBagRecorder::WriteImuSample(const OutputImuSample& output,
   payload->clear();
   AppendHeader(payload, SequenceToRosSeq(sample.sample_sequence),
                RosbagTimeFromNs(output.realtime_ns), "robobaton_imu_link");
-  AppendF64(payload, 0.0);
-  AppendF64(payload, 0.0);
-  AppendF64(payload, 0.0);
-  AppendF64(payload, 1.0);
-  for (int i = 0; i < 9; ++i) {
-    AppendF64(payload, i == 0 ? -1.0 : 0.0);
-  }
-  for (double value : sample.gyro_rps) {
-    AppendF64(payload, value);
-  }
-  for (int i = 0; i < 9; ++i) {
-    AppendF64(payload, 0.0);
-  }
-  for (double value : sample.accel_mps2) {
-    AppendF64(payload, value);
-  }
-  for (int i = 0; i < 9; ++i) {
-    AppendF64(payload, 0.0);
-  }
+  // sensor_msgs/Imu body: quaternion, orientation covariance, angular velocity,
+  // angular covariance, linear acceleration, linear covariance (37 doubles).
+  std::array<double, 37> body{};
+  body[3] = 1.0;
+  body[4] = -1.0;
+  std::copy_n(sample.gyro_rps, 3U, body.begin() + 13);
+  std::copy_n(sample.accel_mps2, 3U, body.begin() + 25);
+  const auto* body_data = reinterpret_cast<const uint8_t*>(body.data());
+  payload->insert(payload->end(), body_data, body_data + sizeof(body));
 
   const uint64_t writer_hold_start_ns = SteadyClockNowNs();
   const RosbagTime record_stamp = RecordDataStamp();
   EnsureSessionConfigWritten(record_stamp);
   writer_.WriteMessage(imu_connection_, record_stamp, *payload);
   char timing[1536];
-  FormatImuTiming(output, timing, sizeof(timing));
-  writer_.WriteMessage(imu_timing_connection_, record_stamp, MakeStringPayload(timing));
+  const size_t timing_size = FormatImuTiming(output, timing, sizeof(timing));
+  payload->clear();
+  AppendU32(payload, static_cast<uint32_t>(timing_size));
+  const auto* data = reinterpret_cast<const uint8_t*>(timing);
+  payload->insert(payload->end(), data, data + timing_size);
+  writer_.WriteMessage(imu_timing_connection_, record_stamp, *payload);
   const uint64_t writer_hold_ns = SteadyClockNowNs() - writer_hold_start_ns;
   {
     std::lock_guard<RealtimeMutex> stats_lock(stats_mutex_);
