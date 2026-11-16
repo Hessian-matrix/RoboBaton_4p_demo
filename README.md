@@ -15,11 +15,25 @@
 
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
 
-当前源码使用 ABI6，但仓内保留的 `demo/` 预编译包仍为历史 ABI5，不能直接用于 V4 模块。部署前按[源码编译与运行包校验](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/development/open-source-build.html)重新构建完整包，并使用当前 verifier 检查源码、库与 consumer 的一致性；包内 manifest／provenance 只说明该包自身组成。
+当前 `demo/` 已是与验收组成匹配的 ABI6 完整运行包，可执行文件、库、配置和启动脚本逐项一致；本次仅刷新公开来源与清单，软件仍为 `2.0.0`。部署要求匹配的 **IIO V4 内核模块**已绑定，应用包不升级模块。包身份及默认组合实板范围见[初版运行包与验证范围](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/release-and-support.html#public-runtime-acceptance)。
+
+在完整仓库内执行：
+
+```bash
+python3 scripts/verify_runtime_package.py demo --portable
+```
+
+校验源码提交／输入、载荷、符号链接、ELF 与 ABI；`--portable` 不要求原构建机工具链文件，构建机省略此选项还会核验原始工具链。`demo/manifest.sha256` 的 SHA-256 为：
+
+```text
+ecb2a043e5d52ee4133b4ba9a018ec0af2c1b2ff1a271f3d2e5cab1ff9454b0f
+```
 
 ## 开始使用
 
 系统镜像下载：[4P_V2.0.0_image.tar.gz](https://www.hessian-matrix.com/wp-content/uploads/2026/automaticupdates/4P_V2.0.0_image.tar.gz)。烧录前备份数据，并按[系统烧录](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/ops/system-flashing.html)核对适用硬件与发布方 SHA-256；使用随板预装系统无需重新烧录。
+
+**上方官网镜像下载保持原样，本次未更新镜像。** 不按同名 `2.0.0` 推断该下载已包含 ABI6／IIO V4；部署前确认系统模块与实际交付清单。
 
 先按[首次上电](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/getting-started/first-boot.html)和[部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/development/deployment-and-upgrade.html)准备设备及运行包，再在 X5 上执行：
 
@@ -32,7 +46,7 @@ cd /root/demo
 
 按 `Ctrl+C` 正常停止。保持 `cam-service` 运行，不同时启动多个相机应用。其他示例及完整参数见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
 
-当前默认相机 `official` + IMU `host`，IMU 默认 `800Hz`。全部四种组合保留：YAML 顶层 `camera_timestamp_path: observer|official`、`imu_timestamp_mode: host|tmst`，CLI `--camera-timestamp-path`／`--imu-timestamp-mode` 可覆盖；修改后正常停止并重启，无热切换或失败回退。默认 official 使用同帧 RAW IRQ `timestamps − (tv − trig_tv) × 1000`（AON 微秒 delta 转 ns），不启动 SIF MMIO observer，因此其 `500µs` 窗口调度长尾不再终止默认采集。逐组 RAW→realtime 使用实际测得的桥括号，即使超过 observer 的 `200µs` 投影准入也不因宽度退出，不以当前时刻替代触发；有界 timing validity `0`、uncertainty `UINT32_MAX` 表示没有有限精度证书，不表示图像无效或已物理同步。显式 observer 是诊断／精度选择，保留严格 `500µs` 捕获及 `200µs` 投影准入与失败停止；IMU tmst 的 `200µs` 合同及 IMU 输出桥不变。真实非法元数据、时钟读取／算术、传输、所有权及设备故障仍失败；可用性优先不承诺任意负载无崩溃或无丢失。本次为本地更新，不新增实板验收。默认 YAML 保留 Web 开、RTSP 关、自动曝光开启；显式手动曝光与完整合同见 [non-ROS 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
+当前默认相机 `official` + IMU `host`，IMU 默认 `800Hz`。全部四种组合保留：YAML 顶层 `camera_timestamp_path: observer|official`、`imu_timestamp_mode: host|tmst`，CLI `--camera-timestamp-path`／`--imu-timestamp-mode` 可覆盖；修改后正常停止并重启，无热切换或失败回退。默认 official 使用同帧 RAW IRQ `timestamps − (tv − trig_tv) × 1000`（AON 微秒 delta 转 ns），不启动 SIF MMIO observer，因此其 `500µs` 窗口调度长尾不再终止默认采集。逐组 RAW→realtime 使用实际测得的桥括号，即使超过 observer 的 `200µs` 投影准入也不因宽度退出，不以当前时刻替代触发；有界 timing validity `0`、uncertainty `UINT32_MAX` 表示没有有限精度证书，不表示图像无效或已物理同步。显式 observer 是诊断／精度选择，保留严格 `500µs` 捕获及 `200µs` 投影准入与失败停止；IMU tmst 的 `200µs` 合同及 IMU 输出桥不变。真实非法元数据、时钟读取／算术、传输、所有权及设备故障仍失败；可用性优先不承诺任意负载无崩溃或无丢失。当前默认组合的采集、保存、压力和重启验收见[验证范围](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/release-and-support.html#public-runtime-acceptance)，不认证其余三组合或物理精度。默认 YAML 保留 Web 开、RTSP 关、自动曝光开启；显式手动曝光与完整合同见 [non-ROS 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
 
 运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功表示所选相机与 IMU 的数据计数已持续推进至少 5 秒；启动健康检查默认最多等待 30 秒，可用 `SENSOR_DEMO_START_TIMEOUT_S` 调整。健康检查不依赖 Web 或日志，不能代替长期稳定性验收。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html#non-ros-autostart)。
 
@@ -42,7 +56,7 @@ cd /root/demo
 
 ### 局域网视频与六轴预览
 
-当前源码的 `sensor_demo` 默认开启 Web、关闭 RTSP。同一可信局域网电脑打开 `http://<设备IP>/`，查看四路 H.264 原生视频、IMU 六轴数值及趋势；页面资源离线内嵌，无需插件。`sensor_web` 由应用启动和回收，不要单独运行。此功能尚未作为新软件版本发布，不代表全部浏览器、双机稳态或 GPU 已验收。
+当前源码的 `sensor_demo` 默认开启 Web、关闭 RTSP。同一可信局域网电脑打开 `http://<设备IP>/`，查看四路 H.264 原生视频、IMU 六轴数值及趋势；页面资源离线内嵌，无需插件。`sensor_web` 由应用启动和回收，不要单独运行。此功能随当前初版运行包提供；默认配置验收不代表全部浏览器、双机稳态或 GPU 已验收。
 
 右上角语言按钮用 `CH` / `EN` 表示切换目标：中文页面显示 `EN`，英文页面显示 `CH`；默认中文，浏览器允许本地存储时记住选择。切换覆盖静态文案、动态状态与无障碍提示，不刷新页面、不重建视频/SSE/姿态 Worker，不重置录制选项、设备录制或已接受的零偏。“在线文档 / Online Docs”按当前语言在新标签页打开 `4pv2.main` 文档：[中文](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/) / [英文](https://4p-doc-en.readthedocs.io/en/4pv2.main/)；只有在线文档需要互联网，设备页面与切换仍使用离线内嵌资源。
 
@@ -129,7 +143,7 @@ H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部�
 
 ## FSYNC 独立诊断
 
-ABI6 配套内核 IIO V4。`fsync_diagnostics` 只接受 `0/1`，默认 `1`；non-ROS 在 `imu.fsync_diagnostics: true|false` 或 `--imu-fsync-diagnostics on|off` 配置，ROS2 为启动时只读 bool 参数 `imu_fsync_diagnostics`。切换需正常停止并重启。独立 reader 使用 `--fsync-diagnostics on|off`，`imu_reader_demo` 使用 `--imu-fsync-diagnostics on|off`。
+ABI6 配套内核 IIO V4。`fsync_diagnostics` 只接受 `0/1`，默认 `1`；non-ROS 在 `imu.fsync_diagnostics: true|false` 或 `--imu-fsync-diagnostics on|off` 配置，ROS2 为启动时只读 bool 参数 `imu.fsync_diagnostics`。切换需正常停止并重启。独立 reader 使用 `--fsync-diagnostics on|off`，`imu_reader_demo` 使用 `--imu-fsync-diagnostics on|off`。
 
 sample 在原布局后追加六字段：`fifo_header`、`fsync_flags`、`fsync_sequence`、`fsync_raw_ns`、`fsync_uncertainty_ns`、`fsync_delta_us`。`fifo_header & 0xfc` 等于 `0x68` 时为普通包，等于 `0x6c` 时为真实 FSYNC 标记；标记包的 `fifo_tmst` 是 FSYNC delta（µs），不是绝对 sample tick。flags 位为 `1=ENABLED`、`2=TAGGED`、`4=TIME_VALID`、`8=UNRESOLVED`；普通样本事件序号为零，真实 tag 事件序号在会话内递增。没有有效边沿时必须为 `fsync_raw_ns=0`、`fsync_uncertainty_ns=UINT32_MAX`，不得将其解释为零误差。
 

@@ -5,15 +5,13 @@ set -eu
 #
 # 无参数前台启动；stop/restart 管理本包进程；enable/disable 管理开机自启动。
 #
-# 开机自启动通过 /userdata/startup.sh 实现：板端 /etc/init.d/S99auto_startup
-# 在 /userdata 挂载后执行该文件。本脚本只追加/删除自己带标记的块，
-# 不会覆盖其它应用写入的内容；系统 wifi_setup 使用独立启动入口。
+# 开机入口 /etc/init.d/S98sensor_demo_autostart 读取系统分区策略。
+# 缺失策略默认开启；普通重启保留设置，重烧 system 恢复镜像默认值。
+# 旧 /userdata/startup.sh 的调用同样受策略约束，不读取旧注册状态。
 #
 # 开机自启动使用运行包内 config/sensor_config.yaml 的默认配置。
 
-AUTOSTART_FILE="${SENSOR_DEMO_AUTOSTART_FILE:-/userdata/startup.sh}"
-AUTOSTART_BEGIN="# SENSOR_DEMO_AUTOSTART_MANAGED"
-AUTOSTART_END="# SENSOR_DEMO_AUTOSTART_END"
+AUTOSTART_FILE="${SENSOR_DEMO_AUTOSTART_FILE:-/etc/4p/sensor-demo-autostart}"
 BOOT_LOG="${SENSOR_DEMO_LOG_FILE:-/userdata/sensor_demo_autostart.log}"
 CAM_SERVICE_WAIT_S="${CAM_SERVICE_WAIT_S:-15}"
 STOP_TIMEOUT_S="${SENSOR_DEMO_STOP_TIMEOUT_S:-1800}"
@@ -38,10 +36,12 @@ usage() {
   help        显示本帮助
 
 如需带参数启动 sensor_demo，请直接运行 ./sensor_demo <参数>。
-开机自启动使用包内默认配置，直接修改 config/sensor_config.yaml 即可生效。
+开机自启动与 restart 使用包内配置，但关闭 IMU 样本打印；前台启动不覆盖打印配置。
 stop/restart 不改变开机自启动设置，不停止 cam-service，不强杀进程。
 停止最多等待 ${STOP_TIMEOUT_S} 秒，可用 SENSOR_DEMO_STOP_TIMEOUT_S 调整。
-restart 日志：${BOOT_LOG}；返回成功仅表示启动后 2 秒内未退出。
+restart 日志：${BOOT_LOG}；成功需所选相机和 IMU 连续推进至少 5 秒。
+启动健康检查默认最多 30 秒；可用 SENSOR_DEMO_START_TIMEOUT_S 调整。
+后台日志保留启动、错误、录制结果与退出健康摘要，不影响 IMU 采集、网页或保存。
 EOF
 }
 
@@ -61,6 +61,7 @@ import os
 from pathlib import Path
 import select
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -125,16 +126,74 @@ def stop_runtime(timeout):
         for _, fd in mains + helpers:
             os.close(fd)
 
-def start_runtime(log):
-    process = subprocess.Popen([str(base / 'bin/sensor_demo')], cwd=base,
-                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                               start_new_session=True)
+def start_runtime(log, stop_timeout):
+    # Background logging excludes sample dumps, not acquisition or final health.
+    timeout = float(os.environ.get('SENSOR_DEMO_START_TIMEOUT_S', '30'))
+    stable_seconds = float(os.environ.get('SENSOR_DEMO_START_STABLE_S', '5'))
+    if not math.isfinite(timeout) or not math.isfinite(stable_seconds) or not 0 < stable_seconds < timeout:
+        raise ValueError('启动超时必须大于健康观察时长，且均为有限正数')
+    reader, writer = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    process = None
     try:
-        code = process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        print(f'sensor_demo started (pid {process.pid}), log={log_path}', flush=True)
-        return
-    raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+        process = subprocess.Popen([str(base / 'bin/sensor_demo'), '--print-rate-hz', '0'], cwd=base,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            pass_fds=(writer.fileno(),),
+            env=dict(os.environ, SENSOR_DEMO_STARTUP_FD=str(writer.fileno())))
+        writer.close()
+        reader.settimeout(.5)
+        deadline = time.monotonic() + timeout
+        previous = None
+        previous_at = stable_at = None
+        while time.monotonic() < deadline:
+            code = process.poll()
+            if code is not None:
+                raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+            try:
+                data, _, flags, _ = reader.recvmsg(512)
+            except socket.timeout:
+                if previous_at is None or time.monotonic()-previous_at >= 1:
+                    stable_at = None
+                continue
+            if not data:
+                try:
+                    code = process.wait(timeout=.1)
+                except subprocess.TimeoutExpired:
+                    code = None
+                if code is not None:
+                    raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+                raise RuntimeError('sensor_demo 未完成数据健康检查即关闭启动通道')
+            values = data.decode('ascii').split()
+            if flags & socket.MSG_TRUNC or len(values) != 8 or any(not v.isdecimal() for v in values):
+                raise RuntimeError('sensor_demo 启动健康报告格式无效')
+            version, pid, mask, *counts = map(int, values)
+            if version != 1 or pid != process.pid or not 0 < mask <= 15 or any(v > 2**64-1 for v in counts):
+                raise RuntimeError('sensor_demo 启动健康报告身份无效')
+            now = time.monotonic()
+            selected = [counts[i] for i in range(4) if mask & (1 << i)] + [counts[4]]
+            progressing = previous is not None and previous[0] == mask and now-previous_at < 1 and all(
+                current > prior for current, prior in zip(selected, previous[1]))
+            if not progressing or not all(selected):
+                stable_at = None
+            elif stable_at is None:
+                stable_at = now
+            previous, previous_at = (mask, selected), now
+            if stable_at is not None and now-stable_at >= stable_seconds and process.poll() is None:
+                print(f'sensor_demo started (pid {process.pid}), capture/IMU progressing, log={log_path}', flush=True)
+                return
+        raise RuntimeError(f'sensor_demo 在 {timeout:g} 秒内未达到持续采集健康条件；检查 {log_path}')
+    except BaseException:
+        if process is not None and process.poll() is None:
+            # Only this launch's child is stopped; do not kill an unrelated
+            # package or skip recording cleanup when startup health times out.
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=stop_timeout)
+            except subprocess.TimeoutExpired:
+                print('ERROR: 启动失败且正常收尾超时；保留进程，未强杀', file=sys.stderr)
+        raise
+    finally:
+        reader.close()
+        writer.close()
 
 try:
     if action == 'status':
@@ -171,7 +230,7 @@ try:
                         if existing:
                             print('sensor_demo already running, skip autostart', flush=True)
                             sys.exit(0)
-                    start_runtime(log)
+                    start_runtime(log, timeout)
 except (OSError, ValueError, RuntimeError) as error:
     print(f'ERROR: {error}', file=sys.stderr)
     sys.exit(1)
@@ -184,9 +243,10 @@ restart_runtime() {
     manage_runtime restart
 }
 
-# 开机模式：等待 cam-service 完成相机初始化后，后台启动 sensor_demo，
-# 输出写入 /userdata 日志，避免阻塞 S99auto_startup 的启动流程。
+# 开机模式等待 cam-service 初始化；只读策略，不自动重写用户选择。
 run_boot() {
+    read_autostart
+    [ "$AUTOSTART_STATE" = enabled ] || return 0
     i=0
     while [ "${i}" -lt "${CAM_SERVICE_WAIT_S}" ]; do
         pgrep -x cam-service >/dev/null 2>&1 && break
@@ -204,69 +264,64 @@ run_boot() {
     manage_runtime start
 }
 
-enable_autostart() {
-    [ "$(id -u)" = "0" ] || die "enable 需要 root 权限，请使用 root 执行"
-    [ -x "${DEMO_DIR}/bin/sensor_demo" ] || die "缺少可执行文件：${DEMO_DIR}/bin/sensor_demo"
-    [ -f /etc/init.d/S99auto_startup ] ||
-        warn "未检测到 /etc/init.d/S99auto_startup，开机自启动可能不会生效"
-
-    block="$(mktemp)"
-    {
-        printf '%s\n' "${AUTOSTART_BEGIN}"
-        printf '# 由 %s enable 生成：开机自启动 sensor_demo。\n' "$(basename "${SCRIPT_PATH}")"
-        printf '%s --boot >/dev/null 2>&1\n' "${SCRIPT_PATH}"
-        printf '%s\n' "${AUTOSTART_END}"
-    } >"${block}"
-
-    tmp="$(mktemp)"
-    if [ -f "${AUTOSTART_FILE}" ]; then
-        # 先移除旧的 sensor_demo 块，保留文件内其它内容，实现多脚本共存。
-        sed "/^${AUTOSTART_BEGIN}$/,/^${AUTOSTART_END}$/d" "${AUTOSTART_FILE}" >"${tmp}" ||
-            die "无法处理 ${AUTOSTART_FILE}"
-    else
-        : >"${tmp}"
+read_autostart() {
+    AUTOSTART_STATE=enabled
+    parent="$(dirname "$AUTOSTART_FILE")"
+    for directory in /etc "$parent"; do
+        [ ! -L "$directory" ] || die "策略目录不能是符号链接：$directory"
+        if [ -e "$directory" ]; then
+            [ -d "$directory" ] || die "策略目录无效：$directory"
+            case "$(stat -c '%u:%g:%a' "$directory")" in
+                0:0:755|0:0:750|0:0:700|0:0:555|0:0:550|0:0:500) ;;
+                *) die "策略目录权限不安全：$directory" ;;
+            esac
+        fi
+    done
+    if [ -e "$AUTOSTART_FILE" ] || [ -L "$AUTOSTART_FILE" ]; then
+        [ -f "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ] &&
+            [ "$(stat -c '%u:%g:%a' "$AUTOSTART_FILE")" = 0:0:600 ] ||
+            die "策略文件不可信：$AUTOSTART_FILE"
+        if printf 'enabled\n' | cmp -s - "$AUTOSTART_FILE"; then
+            AUTOSTART_STATE=enabled
+        elif printf 'disabled\n' | cmp -s - "$AUTOSTART_FILE"; then
+            AUTOSTART_STATE=disabled
+        else
+            die "策略文件无效：$AUTOSTART_FILE"
+        fi
     fi
+}
 
-    if [ -s "${tmp}" ]; then
-        { cat "${tmp}"; printf '\n'; cat "${block}"; } >"${AUTOSTART_FILE}.new"
-    else
-        { printf '#!/bin/sh\n\n'; cat "${block}"; } >"${AUTOSTART_FILE}.new"
+set_autostart() {
+    [ "$(id -u)" = 0 ] || die "$1 需要 root 权限"
+    read_autostart
+    if [ ! -d "$parent" ]; then
+        mkdir -m 755 "$parent" || die "无法创建系统策略目录：$parent"
     fi
-    mv "${AUTOSTART_FILE}.new" "${AUTOSTART_FILE}"
-    chmod 755 "${AUTOSTART_FILE}"
+    temporary="$(mktemp "$parent/.sensor-demo-autostart.XXXXXX")" ||
+        die "无法写入系统策略目录：$parent"
+    trap 'rm -f "$temporary"' EXIT
+    trap 'exit 1' HUP INT TERM
+    printf '%s\n' "$1" > "$temporary"
+    chmod 600 "$temporary"
+    mv -f "$temporary" "$AUTOSTART_FILE"
     sync
-    rm -f "${tmp}" "${block}"
-    info "已启用 sensor_demo 开机自启动：${AUTOSTART_FILE}"
+    info "autostart=$1 ($AUTOSTART_FILE)"
+}
+
+enable_autostart() {
+    [ -x "${DEMO_DIR}/bin/sensor_demo" ] || die "缺少可执行文件：${DEMO_DIR}/bin/sensor_demo"
+    [ -f /etc/init.d/S98sensor_demo_autostart ] ||
+        warn "未检测到 /etc/init.d/S98sensor_demo_autostart，需安装配套系统启动入口"
+    set_autostart enabled
 }
 
 disable_autostart() {
-    [ "$(id -u)" = "0" ] || die "disable 需要 root 权限，请使用 root 执行"
-    if [ ! -f "${AUTOSTART_FILE}" ]; then
-        info "未启用开机自启动：${AUTOSTART_FILE} 不存在"
-        return 0
-    fi
-
-    tmp="$(mktemp)"
-    sed "/^${AUTOSTART_BEGIN}$/,/^${AUTOSTART_END}$/d" "${AUTOSTART_FILE}" >"${tmp}" ||
-        die "无法处理 ${AUTOSTART_FILE}"
-    # 只保留含实际命令的文件；仅剩 shebang、注释或空行的残留直接删除。
-    if [ -s "${tmp}" ] && grep -qE '^[^#].*[^[:space:]]' "${tmp}"; then
-        mv "${tmp}" "${AUTOSTART_FILE}"
-        chmod 755 "${AUTOSTART_FILE}"
-        info "已移除 sensor_demo 开机自启动块：${AUTOSTART_FILE}"
-    else
-        rm -f "${AUTOSTART_FILE}"
-        info "已移除开机自启动文件：${AUTOSTART_FILE}"
-    fi
-    sync
+    set_autostart disabled
 }
 
 status_autostart() {
-    if [ -f "${AUTOSTART_FILE}" ] && grep -q "^${AUTOSTART_BEGIN}$" "${AUTOSTART_FILE}" 2>/dev/null; then
-        info "autostart=enabled (${AUTOSTART_FILE})"
-    else
-        info "autostart=disabled"
-    fi
+    read_autostart
+    info "autostart=$AUTOSTART_STATE ($AUTOSTART_FILE)"
     manage_runtime status
 }
 
