@@ -39,7 +39,8 @@ usage() {
 开机自启动与 restart 使用包内配置，但关闭 IMU 样本打印；前台启动不覆盖打印配置。
 stop/restart 不改变开机自启动设置，不停止 cam-service，不强杀进程。
 停止最多等待 ${STOP_TIMEOUT_S} 秒，可用 SENSOR_DEMO_STOP_TIMEOUT_S 调整。
-restart 日志：${BOOT_LOG}；返回成功仅表示启动后 2 秒内未退出。
+restart 日志：${BOOT_LOG}；成功需所选相机和 IMU 连续推进至少 5 秒。
+启动健康检查默认最多 30 秒；可用 SENSOR_DEMO_START_TIMEOUT_S 调整。
 后台日志保留启动、错误、录制结果与退出健康摘要，不影响 IMU 采集、网页或保存。
 EOF
 }
@@ -60,6 +61,7 @@ import os
 from pathlib import Path
 import select
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -124,17 +126,74 @@ def stop_runtime(timeout):
         for _, fd in mains + helpers:
             os.close(fd)
 
-def start_runtime(log):
+def start_runtime(log, stop_timeout):
     # Background logging excludes sample dumps, not acquisition or final health.
-    process = subprocess.Popen([str(base / 'bin/sensor_demo'), '--print-rate-hz', '0'], cwd=base,
-                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                               start_new_session=True)
+    timeout = float(os.environ.get('SENSOR_DEMO_START_TIMEOUT_S', '30'))
+    stable_seconds = float(os.environ.get('SENSOR_DEMO_START_STABLE_S', '5'))
+    if not math.isfinite(timeout) or not math.isfinite(stable_seconds) or not 0 < stable_seconds < timeout:
+        raise ValueError('启动超时必须大于健康观察时长，且均为有限正数')
+    reader, writer = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    process = None
     try:
-        code = process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        print(f'sensor_demo started (pid {process.pid}), log={log_path}', flush=True)
-        return
-    raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+        process = subprocess.Popen([str(base / 'bin/sensor_demo'), '--print-rate-hz', '0'], cwd=base,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            pass_fds=(writer.fileno(),),
+            env=dict(os.environ, SENSOR_DEMO_STARTUP_FD=str(writer.fileno())))
+        writer.close()
+        reader.settimeout(.5)
+        deadline = time.monotonic() + timeout
+        previous = None
+        previous_at = stable_at = None
+        while time.monotonic() < deadline:
+            code = process.poll()
+            if code is not None:
+                raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+            try:
+                data, _, flags, _ = reader.recvmsg(512)
+            except socket.timeout:
+                if previous_at is None or time.monotonic()-previous_at >= 1:
+                    stable_at = None
+                continue
+            if not data:
+                try:
+                    code = process.wait(timeout=.1)
+                except subprocess.TimeoutExpired:
+                    code = None
+                if code is not None:
+                    raise RuntimeError(f'sensor_demo 启动后退出，退出码 {code}；检查 {log_path}')
+                raise RuntimeError('sensor_demo 未完成数据健康检查即关闭启动通道')
+            values = data.decode('ascii').split()
+            if flags & socket.MSG_TRUNC or len(values) != 8 or any(not v.isdecimal() for v in values):
+                raise RuntimeError('sensor_demo 启动健康报告格式无效')
+            version, pid, mask, *counts = map(int, values)
+            if version != 1 or pid != process.pid or not 0 < mask <= 15 or any(v > 2**64-1 for v in counts):
+                raise RuntimeError('sensor_demo 启动健康报告身份无效')
+            now = time.monotonic()
+            selected = [counts[i] for i in range(4) if mask & (1 << i)] + [counts[4]]
+            progressing = previous is not None and previous[0] == mask and now-previous_at < 1 and all(
+                current > prior for current, prior in zip(selected, previous[1]))
+            if not progressing or not all(selected):
+                stable_at = None
+            elif stable_at is None:
+                stable_at = now
+            previous, previous_at = (mask, selected), now
+            if stable_at is not None and now-stable_at >= stable_seconds and process.poll() is None:
+                print(f'sensor_demo started (pid {process.pid}), capture/IMU progressing, log={log_path}', flush=True)
+                return
+        raise RuntimeError(f'sensor_demo 在 {timeout:g} 秒内未达到持续采集健康条件；检查 {log_path}')
+    except BaseException:
+        if process is not None and process.poll() is None:
+            # Only this launch's child is stopped; do not kill an unrelated
+            # package or skip recording cleanup when startup health times out.
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=stop_timeout)
+            except subprocess.TimeoutExpired:
+                print('ERROR: 启动失败且正常收尾超时；保留进程，未强杀', file=sys.stderr)
+        raise
+    finally:
+        reader.close()
+        writer.close()
 
 try:
     if action == 'status':
@@ -171,7 +230,7 @@ try:
                         if existing:
                             print('sensor_demo already running, skip autostart', flush=True)
                             sys.exit(0)
-                    start_runtime(log)
+                    start_runtime(log, timeout)
 except (OSError, ValueError, RuntimeError) as error:
     print(f'ERROR: {error}', file=sys.stderr)
     sys.exit(1)

@@ -349,6 +349,13 @@ class Manager:
     def link(self, function):
         (GADGET / "configs/c.1" / function).symlink_to(GADGET / "functions" / function)
 
+    def network_rps(self, interface):
+        # RPS hashes flows across CPUs 2–3 without changing USB IRQ affinity.
+        queue = Path("/sys/class/net") / interface / "queues/rx-0/rps_cpus"
+        put(queue, "0c")
+        if int(read(queue), 16) != 0x0c:
+            raise RuntimeError("USB RPS CPU2-3 mask did not take effect")
+
     def network(self, mode):
         profile = load_network()
         function = mode + ".0"
@@ -372,6 +379,7 @@ class Manager:
             raise RuntimeError("gadget network interface unavailable")
         run("ip", "address", "replace", profile["address"], "dev", interface)
         run("ip", "link", "set", "dev", interface, "up")
+        self.network_rps(interface)
         conf = RUN / "dnsmasq.conf"
         conf.write_text(f"port=0\nno-resolv\nno-hosts\ninterface={interface}\nbind-interfaces\n"
                         f"dhcp-authoritative\ndhcp-range={profile['dhcp_start']},{profile['dhcp_end']},"

@@ -44,6 +44,8 @@ class FramePipeline {
 
   int32_t FirstError() const noexcept;
   uint64_t TotalSentFrames(int camera_id) const noexcept;
+  // Startup progress includes consumed raw frames when encoding is disabled.
+  uint64_t TotalProgressFrames(int camera_id) const noexcept;
   bool IsQuiescent() const noexcept;
 #ifdef RELEASE008_TESTING
   size_t OwnedThreadCountForTesting() const noexcept;

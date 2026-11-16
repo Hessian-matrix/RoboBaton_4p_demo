@@ -546,6 +546,12 @@ class FramePipeline::Impl {
     return total_sent_[camera_id].load(std::memory_order_acquire);
   }
 
+  uint64_t TotalProgressFrames(int camera_id) const noexcept {
+    if (camera_id < 0 || camera_id >= kMaxChannels) return 0U;
+    return encoding_required_ ? TotalSentFrames(camera_id)
+                              : total_raw_processed_[camera_id].load(std::memory_order_acquire);
+  }
+
   bool IsQuiescent() const noexcept { return quiescent_.load(std::memory_order_acquire); }
 
   bool RtspPreviewComplete() const noexcept {
@@ -856,6 +862,7 @@ class FramePipeline::Impl {
         }
         if (!encoding_required_) {
           group_barrier_.MarkProcessed(camera_id, frame.group_id);
+          total_raw_processed_[camera_id].fetch_add(1U, std::memory_order_release);
           continue;
         }
         if (rtsp_preview_degraded_[camera_id].load(std::memory_order_acquire) &&
@@ -957,6 +964,7 @@ class FramePipeline::Impl {
   std::array<std::atomic<bool>, kMaxChannels> worker_owned_{};
   std::atomic<bool> monitor_owned_{false};
   std::array<std::atomic<uint64_t>, kMaxChannels> total_sent_{};
+  std::array<std::atomic<uint64_t>, kMaxChannels> total_raw_processed_{};
   std::array<std::atomic<bool>, kMaxChannels> rtsp_preview_degraded_{};
   std::array<std::atomic<uint64_t>, kMaxChannels> rtsp_preview_dropped_{};
   std::array<std::atomic<int32_t>, kMaxChannels> rtsp_preview_last_error_{};
@@ -1003,6 +1011,9 @@ int32_t FramePipeline::FirstError() const noexcept { return impl_->FirstError();
 bool FramePipeline::HasFatalError() const { return impl_->FirstError() != 0; }
 uint64_t FramePipeline::TotalSentFrames(int camera_id) const noexcept {
   return impl_->TotalSentFrames(camera_id);
+}
+uint64_t FramePipeline::TotalProgressFrames(int camera_id) const noexcept {
+  return impl_->TotalProgressFrames(camera_id);
 }
 bool FramePipeline::IsQuiescent() const noexcept { return impl_->IsQuiescent(); }
 bool FramePipeline::RtspPreviewComplete() const noexcept { return impl_->RtspPreviewComplete(); }

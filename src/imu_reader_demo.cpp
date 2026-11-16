@@ -119,6 +119,7 @@ int RunIcmConsumer(const ImuConsumerOptions& options, ImuSampleObserver observer
   config.fifo_watermark_samples = 1U;
   config.sample_drop_policy = options.sample_drop_policy;
   config.timestamp_mode = options.timestamp_mode;
+  config.fsync_diagnostics = options.fsync_diagnostics ? 1U : 0U;
 
   IcmCallbackContext context;
   icm42670_handle_t* handle = nullptr;
@@ -292,6 +293,7 @@ void PrintImuSample(const icm42670_sample_t& sample, void* user) {
       "sample_seq=%llu\n"
       "sample_monotonic_ns=%llu\n"
       "timestamp_mode=%s fifo_tmst=%u sample_raw_ns=%llu timestamp_uncertainty_ns=%u\n"
+      "fifo_header=%u fsync_flags=%u fsync_sequence=%llu fsync_raw_ns=%llu fsync_uncertainty_ns=%u fsync_delta_us=%u\n"
       "temp_c=%.6f accel_norm_mps2=%.6f\n"
       "accel_mps2=[%.6f, %.6f, %.6f]\n"
       "gyro_rps  =[%.6f, %.6f, %.6f]\n",
@@ -299,6 +301,9 @@ void PrintImuSample(const icm42670_sample_t& sample, void* user) {
       static_cast<unsigned long long>(sample.sample_monotonic_ns),
       sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host", sample.fifo_tmst,
       static_cast<unsigned long long>(sample.sample_raw_ns), sample.timestamp_uncertainty_ns,
+      sample.fifo_header, sample.fsync_flags,
+      static_cast<unsigned long long>(sample.fsync_sequence),
+      static_cast<unsigned long long>(sample.fsync_raw_ns), sample.fsync_uncertainty_ns, sample.fsync_delta_us,
       sample.temperature_c, accel_norm,
       sample.accel_mps2[0], sample.accel_mps2[1], sample.accel_mps2[2],
       sample.gyro_rps[0], sample.gyro_rps[1], sample.gyro_rps[2]);
@@ -409,6 +414,11 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
       if (mode != "host" && mode != "tmst")
         throw std::invalid_argument("--imu-timestamp-mode must be host or tmst");
       options.timestamp_mode = mode == "tmst" ? ICM42670_TIMESTAMP_MODE_TMST : ICM42670_TIMESTAMP_MODE_HOST;
+    } else if (argument == "--imu-fsync-diagnostics") {
+      const auto value = RequireValue(argc, argv, &index, "--imu-fsync-diagnostics");
+      if (value != "on" && value != "off")
+        throw std::invalid_argument("--imu-fsync-diagnostics must be on or off");
+      options.fsync_diagnostics = value == "on";
     } else if (argument == "--print-rate-hz") {
       requested_print_rate_hz =
           ParseUint32Argument(RequireValue(argc, argv, &index, "--print-rate-hz"),
@@ -423,6 +433,7 @@ ImuConsumerOptions ParseCommandLine(int argc, char** argv, uint32_t* print_rate_
                 << "  --count N Request STOP after N consumed samples, then drain the complete cohort; 0 runs until signal\n"
                 << "  --sample-drop-policy <allow-counted|strict> Invalid six-axis payload policy, default allow-counted\n"
                 << "  --imu-timestamp-mode <host|tmst> Kernel IIO timestamp mode, default host\n"
+                << "  --imu-fsync-diagnostics <on|off> Independent FSYNC diagnostics, default on\n"
                 << "  --print-rate-hz HZ Terminal sample output rate, default min(sample-rate-hz, 10); 0 disables samples, not final health\n"
                 << "  --print-metrics Include metrics diagnostics section in each output record, default off\n";
       std::exit(0);

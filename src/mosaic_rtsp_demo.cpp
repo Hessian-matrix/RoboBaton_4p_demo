@@ -49,7 +49,7 @@ constexpr int32_t kErrorJoin = -1003;
 
 struct MosaicCliOptions {
   uint32_t fps = kDefaultMosaicFps;
-  std::string camera_timestamp_path = "observer";
+  std::string camera_timestamp_path = "official";
 };
 
 volatile sig_atomic_t g_signal_stop = 0;
@@ -779,7 +779,7 @@ void PrintUsage(const char* program) {
             << "fps rtsp://<board>:" << kMosaicPort << kMosaicPath << "\n"
             << "  --fps <25|30|40|50|60> Camera trigger and encoder metadata fps, default "
             << kDefaultMosaicFps << "\n"
-            << "  --camera-timestamp-path <observer|official> Startup timestamp path, default observer\n";
+            << "  --camera-timestamp-path <observer|official> Startup timestamp path, default official\n";
 }
 
 void PrintMetric(const char* name, uint64_t value) {

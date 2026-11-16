@@ -1,7 +1,7 @@
 # sensor_demo YAML config. Command-line options override this file.
 # width/height: 1280x1088 (default), 640x480, 720x480, or 1280x720 (either axis).
 # Startup-only selectors; both IMU modes use the same kernel IIO capture.
-camera_timestamp_path: observer
+camera_timestamp_path: official
 imu_timestamp_mode: host
 camera:
   width: 1280
@@ -27,6 +27,7 @@ web:
   max_imu_clients: 2
 imu:
   sample_rate_hz: 800
+  fsync_diagnostics: true
   print_rate_hz: 10
   print_metrics: false
 

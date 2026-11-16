@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define ICM42670_ABI_VERSION_MAJOR 5U
+#define ICM42670_ABI_VERSION_MAJOR 6U
 #define ICM42670_ABI_VERSION_MINOR 0U
 
 typedef struct icm42670_handle icm42670_handle_t;
@@ -45,10 +45,11 @@ typedef struct icm42670_config {
   uint32_t buffer_capacity;
   uint32_t sample_drop_policy;
   uint32_t timestamp_mode;
-  uint32_t reserved[2];
+  uint32_t fsync_diagnostics;
+  uint32_t reserved[1];
 } icm42670_config_t;
 #define ICM42670_CONFIG_INIT \
-  { sizeof(icm42670_config_t), 800U, 1U, 4096U, ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED, ICM42670_TIMESTAMP_MODE_HOST, {0U} }
+  { sizeof(icm42670_config_t), 800U, 1U, 4096U, ICM42670_SAMPLE_DROP_POLICY_ALLOW_COUNTED, ICM42670_TIMESTAMP_MODE_HOST, 1U, {0U} }
 
 typedef struct icm42670_raw_sample {
   int16_t temperature;
@@ -64,6 +65,11 @@ typedef struct icm42670_raw_sample {
 #define ICM42670_PACKET_TEMP_VALID 4U
 #define ICM42670_BURST_OK 1U
 #define ICM42670_BURST_STOP_TAIL 2U
+
+#define ICM42670_FSYNC_ENABLED 1U
+#define ICM42670_FSYNC_TAGGED 2U
+#define ICM42670_FSYNC_TIME_VALID 4U
+#define ICM42670_FSYNC_UNRESOLVED 8U
 
 /* sample_monotonic_ns always retains the kernel CLOCK_MONOTONIC host estimate.
  * TMST mode additionally maps FIFO low16 through bounded UI transition anchors
@@ -89,6 +95,15 @@ typedef struct icm42670_sample {
   uint64_t sample_raw_ns;
   uint32_t timestamp_uncertainty_ns;
   uint32_t timestamp_mode;
+  /* Raw FIFO header/field are retained; a tagged fifo_tmst is FSYNC delta us,
+   * not an absolute tick. Diagnostic RAW time never corrects sample timing.
+   * No valid edge: raw=0, uncertainty=UINT32_MAX. Sequence counts real tags. */
+  uint32_t fifo_header;
+  uint32_t fsync_flags;
+  uint64_t fsync_sequence;
+  uint64_t fsync_raw_ns;
+  uint32_t fsync_uncertainty_ns;
+  uint32_t fsync_delta_us;
 } icm42670_sample_t;
 
 /* A terminal diagnostic is queryable after stop even if stop reports failure.

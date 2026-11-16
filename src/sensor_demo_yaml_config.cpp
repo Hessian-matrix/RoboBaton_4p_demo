@@ -220,6 +220,7 @@ std::string DefaultSensorDemoYamlConfigText() {
          << "  max_imu_clients: " << defaults.web_max_imu_clients << "\n"
          << "imu:\n"
          << "  sample_rate_hz: " << defaults.imu_sample_rate_hz << "\n"
+         << "  fsync_diagnostics: true\n"
          << "  print_rate_hz: " << kDefaultImuPrintRateHz << "\n"
          << "  print_metrics: false\n"
          << "save_data:\n"
@@ -319,6 +320,8 @@ bool ApplyYamlConfigValue(const std::string& key, const std::string& value,
     options->url = value;
   } else if (key == "imu.sample_rate_hz") {
     options->imu_sample_rate_hz = ParseUint32(value, name.c_str());
+  } else if (key == "imu.fsync_diagnostics") {
+    options->imu_fsync_diagnostics = ParseBool(value, name.c_str());
   } else if (key == "imu.print_rate_hz") {
     options->imu_print_rate_hz = ParseUint32(value, name.c_str());
     state->imu_print_rate_was_set = true;

@@ -27,7 +27,7 @@ cd ${DEMO_DIR}
 ```text
 --capture-dir <absolute-directory>   启用采集并指定输出目录(必须绝对路径)
 --capture-frame-count <1..100>       每路目标帧数,默认 100
---capture-warmup-seconds <1..60>     相机启动后等待秒数,默认 5
+--capture-warmup-seconds <1..150>    相机启动后等待秒数,默认 5
 ```
 
 YAML:

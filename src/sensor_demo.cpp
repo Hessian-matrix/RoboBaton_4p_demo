@@ -26,6 +26,7 @@ extern "C" {
 #include "cam_demo_pipeline.h"
 #include "cam_demo_media.h"
 #include "sensor_web_runtime.h"
+#include "sensor_startup_health.h"
 #include "sensor_recording.h"
 #include "h264_mp4_recorder.h"
 #include "sensor_bag_recorder.h"
@@ -472,6 +473,7 @@ void StopImuAndFinishRecordersBeforeSc132Stop(const robobaton_demo::Sc132Shutdow
 }
 
 struct SensorImuObserverState {
+  std::atomic<uint64_t> startup_samples{0};
   ImuStats* stats = nullptr;
   robobaton_demo::ImuPrintState* print_state = nullptr;
   robobaton_demo::SensorWebRuntime* web = nullptr;
@@ -484,6 +486,7 @@ void ObserveSensorImuSample(const icm42670_sample_t& sample, void* user) {
   if (state == nullptr) {
     return;
   }
+  state->startup_samples.fetch_add(1, std::memory_order_relaxed);
   if (state->stats != nullptr) {
     state->stats->Observe(sample);
   }
@@ -591,6 +594,7 @@ int main(int argc, char** argv) {
   Options options;
 
   try {
+    SensorStartupHealth startup_health;
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     signal(SIGPIPE, SIG_IGN);
@@ -656,6 +660,7 @@ int main(int argc, char** argv) {
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
     imu_options.sample_drop_policy = options.imu_sample_drop_policy;
     imu_options.timestamp_mode = options.imu_timestamp_mode;
+    imu_options.fsync_diagnostics = options.imu_fsync_diagnostics;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.final_health = &imu_final_health;
@@ -683,6 +688,7 @@ int main(int argc, char** argv) {
               << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
               << " camera_timestamp_path=" << options.camera_timestamp_path
               << " imu_timestamp_mode=" << (options.imu_timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host")
+              << " imu_fsync_diagnostics=" << (options.imu_fsync_diagnostics ? "on" : "off")
               << " imu_start_order="
               << (options.imu_start_order == ImuStartOrder::kCameraFirst
                       ? "camera-first"
@@ -784,6 +790,14 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
       web.PublishStatus(true, EncodingRequired(options), sessions->Saving(),
                         pipeline->FirstError() != 0, !pipeline->RtspPreviewComplete());
+      if (g_signal_stop == 0 && !g_stop_requested.load(std::memory_order_acquire) &&
+          pipeline->FirstError() == 0 && !capture_recorder.HasFatalError()) {
+        std::array<uint64_t, 4> frames{};
+        for (int camera = 0; camera < kMaxChannels; ++camera)
+          frames[camera] = pipeline->TotalProgressFrames(camera);
+        startup_health.Report(options.camera_mask, frames,
+                              imu_observer.startup_samples.load(std::memory_order_relaxed));
+      }
     }
   } catch (const std::exception& error) {
     std::cerr << "fatal: " << error.what() << "\n";

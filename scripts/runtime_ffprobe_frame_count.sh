@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -eq 1 ] && [ "$1" = "-version" ]; then
-  printf '%s\n' "ffprobe-frame-count-helper 1.0 (uses ffmpeg)"
+  printf '%s\n' "ffprobe-frame-count-helper 1.1 (uses ffmpeg, no media copy)"
   exit 0
 fi
 
@@ -74,15 +74,12 @@ esac
 ffmpeg_bin="$(command -v ffmpeg || true)"
 [ -n "$ffmpeg_bin" ] && [ -x "$ffmpeg_bin" ] || { printf '%s\n' "ffprobe helper: ffmpeg executable not found in PATH" >&2; exit 127; }
 
-work_dir="$(dirname "$input")"
-tmp="$work_dir/.ffprobe-frame-count-$$.mp4"
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+# A fragmented MP4 sink exercises the same packet counting path without writing
+# another full recording beside the input. The input directory may be read-only.
 set +e
-output="$($ffmpeg_bin -hide_banner -nostdin -stats -i "$input" -map 0:v:0 -c:v copy -movflags frag_keyframe+empty_moov -f mp4 -y "$tmp" 2>&1)"
+output="$("$ffmpeg_bin" -hide_banner -nostdin -stats -i "$input" -map 0:v:0 -c:v copy -movflags frag_keyframe+empty_moov -f mp4 -y /dev/null 2>&1)"
 rc=$?
 set -e
-rm -f "$tmp"
-trap - EXIT HUP INT TERM
 if [ "$rc" -ne 0 ]; then
   printf '%s\n' "$output" >&2
   exit "$rc"

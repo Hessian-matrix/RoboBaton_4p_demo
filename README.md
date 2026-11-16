@@ -11,9 +11,11 @@
 - `scripts/`：构建、打包与运行包校验入口。
 - [`scripts/env_setup/x5_usb/`](scripts/env_setup/x5_usb/)：系统 USB 功能管理与四目 UVC 的公开源码、独立构建和离线镜像安装工具。
 
-当前 IMU 使用内核 IIO V3／公共 ABI 5.0：实体 `libicm42670.so.5.0.0`、SONAME `libicm42670.so.5`，九个导出均为 `ICM42670_X5_5.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V3 内核模块预先绑定；旧 V2 即使 host 模式也不兼容。无用户态 SPI、FSYNC 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
+当前 IMU 使用内核 IIO V4／公共 ABI 6.0：实体 `libicm42670.so.6.0.0`、SONAME `libicm42670.so.6`，九个导出均为 `ICM42670_X5_6.0`。`host` 保留 `CLOCK_MONOTONIC` 主机估计，`tmst` 另提供映射至 `CLOCK_MONOTONIC_RAW` 的 sensor TMST；两者均保留原生 host 时间及全部 burst 证据。保存输出按所选原生时钟每 burst 显式桥接到 realtime，保留桥括号半宽，不认证物理采样或曝光同步精度。设备须由匹配 V4 内核模块预先绑定；旧 V2/V3 即使 host 模式也不兼容。提供独立 FSYNC 诊断，无用户态 SPI 或自动回退。全部 consumer 必须与新头/库成套重建，不做跨 major 链接。软件版本、文档修订、ABI 与发布状态独立。
 
 本仓库只编译用户侧示例，不编译底层运行库。源码、头文件、库与配置须成套匹配；部署完整运行包并保留符号链接，不单独替换 `.so`。
+
+当前源码使用 ABI6，但仓内保留的 `demo/` 预编译包仍为历史 ABI5，不能直接用于 V4 模块。部署前按[源码编译与运行包校验](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/development/open-source-build.html)重新构建完整包，并使用当前 verifier 检查源码、库与 consumer 的一致性；包内 manifest／provenance 只说明该包自身组成。
 
 ## 开始使用
 
@@ -30,9 +32,9 @@ cd /root/demo
 
 按 `Ctrl+C` 正常停止。保持 `cam-service` 运行，不同时启动多个相机应用。其他示例及完整参数见 [non-ROS Demo 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
 
-最终默认 HO：相机 `observer` + IMU `host`，IMU 默认 `800Hz`。另外三种启动组合保留比较：YAML 顶层 `camera_timestamp_path: observer|official`、`imu_timestamp_mode: host|tmst`，CLI `--camera-timestamp-path`／`--imu-timestamp-mode` 可覆盖；修改后正常停止并重启，无热切换或失败回退。相机 observer 的 `500µs` 与 IMU tmst 的 `200µs` 是各自计算准入边界，official 物理误差未知。默认 YAML 保留 Web 开、RTSP 关、自动曝光开启；显式手动曝光配置与完整合同见 [non-ROS 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
+当前默认相机 `official` + IMU `host`，IMU 默认 `800Hz`。全部四种组合保留：YAML 顶层 `camera_timestamp_path: observer|official`、`imu_timestamp_mode: host|tmst`，CLI `--camera-timestamp-path`／`--imu-timestamp-mode` 可覆盖；修改后正常停止并重启，无热切换或失败回退。默认 official 使用同帧 RAW IRQ `timestamps − (tv − trig_tv) × 1000`（AON 微秒 delta 转 ns），不启动 SIF MMIO observer，因此其 `500µs` 窗口调度长尾不再终止默认采集。逐组 RAW→realtime 使用实际测得的桥括号，即使超过 observer 的 `200µs` 投影准入也不因宽度退出，不以当前时刻替代触发；有界 timing validity `0`、uncertainty `UINT32_MAX` 表示没有有限精度证书，不表示图像无效或已物理同步。显式 observer 是诊断／精度选择，保留严格 `500µs` 捕获及 `200µs` 投影准入与失败停止；IMU tmst 的 `200µs` 合同及 IMU 输出桥不变。真实非法元数据、时钟读取／算术、传输、所有权及设备故障仍失败；可用性优先不承诺任意负载无崩溃或无丢失。本次为本地更新，不新增实板验收。默认 YAML 保留 Web 开、RTSP 关、自动曝光开启；显式手动曝光与完整合同见 [non-ROS 使用](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html)。
 
-运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功只表示前 2 秒未退出，仍须检查日志和页面。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html#non-ros-autostart)。
+运行包也支持 `./start_sensor_demo.sh stop` 正常停止、`./start_sensor_demo.sh restart` 按包内 YAML 配置后台重启，以及 `./start_sensor_demo.sh status` 查看本包进程与自启状态。停止会等待录制和 Web 子进程收尾，超时失败不强杀、不启动第二份程序；默认等待上限 1800 秒，可用 `SENSOR_DEMO_STOP_TIMEOUT_S` 调整。后台日志默认写入 `/userdata/sensor_demo_autostart.log`；重启成功表示所选相机与 IMU 的数据计数已持续推进至少 5 秒；启动健康检查默认最多等待 30 秒，可用 `SENSOR_DEMO_START_TIMEOUT_S` 调整。健康检查不依赖 Web 或日志，不能代替长期稳定性验收。启停管理需要 Linux pidfd 和 Python ≥3.10；不改变开机自启注册，也不操作 `cam-service`。完整用法见 [启停与开机自启动](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/non-ros-demo.html#non-ros-autostart)。
 
 开机自启动及 `restart` 在包内配置之上固定传入 `--print-rate-hz 0`，不再将高频 IMU 样本块写入后台日志；启动信息、错误、录制结果和退出健康摘要仍保留，不改变原生采样率、网页遥测或保存数据。前台 `./sensor_demo` 与无参数 `./start_sensor_demo.sh` 仍按 YAML 打印，调试可显式使用 `./sensor_demo --print-rate-hz 10 --print-metrics`。日志仍为追加写入，不自动清空已有文件，也不提供容量上限。
 
@@ -110,6 +112,8 @@ H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部�
 
 新镜像默认 USB 网卡为 CDC NCM，支持 `switch_usb_gadget ncm` 和 `switch_usb_gadget set-default ncm`；RNDIS 与 ECM 仍可选择。三种网卡模式共用 `switch_usb_gadget ip` 的持久 IPv4/DHCP 配置与断链保护。离线安装保留已有显式默认值，不自动迁移正在运行的设备；物理枚举及主机驱动兼容性须使用匹配镜像验证。
 
+后续镜像的 NCM／RNDIS／ECM 网卡在每次创建后将 RX 队列 RPS 设置为 `0c`（CPU2–3），并回读确认；匹配内核必须提供 RPS 队列属性，且 CPU2、CPU3 在线并可接受该掩码。配置失败则拒绝完成该次网卡启动，不静默沿用旧值。该集合按流哈希分散接收协议栈工作，单条 TCP 流不会拆到两核；不修改 USB IRQ affinity、MTU、qmult，也不绑定应用进程。离线安装只更新候选 rootfs，正在运行的设备不会自动获得此配置。性能随主机驱动、流数及采集负载变化，此基线不代表整机稳定性或任意负载零丢包验收。
+
 完整命令、相机资源交接与已有板卡安全更新见[USB 使用与开发指南](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/usage/usb-gadget-switch.html#usb-uvc-development)。重编其他拼图示例不会更新 `/usr/bin/x5-uvc-mosaic`；应用逻辑保持输出规格且内核/设备树已支持时通常无需重刷系统。工具不自动部署板卡，源码更新也不表示已发布或通过板端收流验收。
 
 ## 文档入口
@@ -122,3 +126,11 @@ H.264 producer 显式关闭与 Main 声明冲突的 8×8 transform，修复部�
 - [版本、已知限制与支持](https://4p-docs.readthedocs.io/zh-cn/4pv2.main/release-and-support.html)
 
 许可证及第三方组件说明见本仓库 [LICENSE](LICENSE) 和公开发布说明。
+
+## FSYNC 独立诊断
+
+ABI6 配套内核 IIO V4。`fsync_diagnostics` 只接受 `0/1`，默认 `1`；non-ROS 在 `imu.fsync_diagnostics: true|false` 或 `--imu-fsync-diagnostics on|off` 配置，ROS2 为启动时只读 bool 参数 `imu_fsync_diagnostics`。切换需正常停止并重启。独立 reader 使用 `--fsync-diagnostics on|off`，`imu_reader_demo` 使用 `--imu-fsync-diagnostics on|off`。
+
+sample 在原布局后追加六字段：`fifo_header`、`fsync_flags`、`fsync_sequence`、`fsync_raw_ns`、`fsync_uncertainty_ns`、`fsync_delta_us`。`fifo_header & 0xfc` 等于 `0x68` 时为普通包，等于 `0x6c` 时为真实 FSYNC 标记；标记包的 `fifo_tmst` 是 FSYNC delta（µs），不是绝对 sample tick。flags 位为 `1=ENABLED`、`2=TAGGED`、`4=TIME_VALID`、`8=UNRESOLVED`；普通样本事件序号为零，真实 tag 事件序号在会话内递增。没有有效边沿时必须为 `fsync_raw_ns=0`、`fsync_uncertainty_ns=UINT32_MAX`，不得将其解释为零误差。
+
+`fsync_raw_ns` 是独立 RAW 域边沿诊断，未用于改写 host 主时间戳或自动匹配相机帧。替换掉的绝对 tick 由实际左右端点重建，名义 ODR 只提供允许区间。host 模式的诊断映射失败会保留未解析 tag 并继续正常采集；tmst 模式仍要求有效映射并在失败时停止。bag/ROS2 的 `robobaton_imu_timing_v3` 与 MP4 `imu.csv` 保留六字段，不新增独立 FSYNC 文件。此合同不认证逐帧无长尾、LPWM 波形修复或物理同步 ≤1 ms。

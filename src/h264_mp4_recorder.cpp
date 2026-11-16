@@ -364,7 +364,8 @@ void WriteImuHeader(std::ostream& output) {
             "observation_monotonic_ns,estimated_period_ns,timestamp_source,packet_flags,"
             "bridge_monotonic_ns,bridge_realtime_ns,bridge_uncertainty_ns,temperature_c,"
             "raw_temperature,raw_accel_x,raw_accel_y,raw_accel_z,raw_gyro_x,raw_gyro_y,raw_gyro_z,"
-            "timestamp_mode,fifo_tmst,sample_raw_ns,timestamp_uncertainty_ns,bridge_clock,bridge_raw_ns";
+            "timestamp_mode,fifo_tmst,sample_raw_ns,timestamp_uncertainty_ns,bridge_clock,bridge_raw_ns,"
+            "fifo_header,fsync_flags,fsync_sequence,fsync_raw_ns,fsync_uncertainty_ns,fsync_delta_us";
   output << '\n';
 }
 
@@ -393,7 +394,9 @@ void WriteImuRow(std::ostream& output, const OutputImuSample& mapped) {
   output << ',' << (sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "tmst" : "host")
          << ',' << sample.fifo_tmst << ',' << sample.sample_raw_ns << ',' << sample.timestamp_uncertainty_ns
          << ',' << (sample.timestamp_mode == ICM42670_TIMESTAMP_MODE_TMST ? "CLOCK_MONOTONIC_RAW" : "CLOCK_MONOTONIC")
-         << ',' << mapped.bridge_raw_ns;
+         << ',' << mapped.bridge_raw_ns
+         << ',' << sample.fifo_header << ',' << sample.fsync_flags << ',' << sample.fsync_sequence
+         << ',' << sample.fsync_raw_ns << ',' << sample.fsync_uncertainty_ns << ',' << sample.fsync_delta_us;
   output << '\n';
 }
 
