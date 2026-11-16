@@ -537,9 +537,11 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
 
 
 def capture_source_snapshot(
-    repo_root: Path, package_dir: Path | None = None
+    repo_root: Path, package_dir: Path | None = None, *, standalone: bool = False
 ) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
     workspace_root, repository_path = workspace_context(repo_root)
+    if standalone:
+        workspace_root, repository_path = repo_root.resolve(), "."
     repository_status = git_status(repo_root, package_dir)
     repository_commit = git_output(repo_root, "rev-parse", "HEAD")
     superproject_commit = None
@@ -583,10 +585,11 @@ def build_provenance(
     toolchain_file: Path,
     build_dir: Path,
     source_output_dir: Path | None = None,
+    *, standalone: bool = False,
 ) -> dict[str, object]:
     # staging目录尚未替换最终输出目录，来源状态必须排除将被替换的路径。
     source, repository_states, inputs = capture_source_snapshot(
-        repo_root, source_output_dir or package_dir
+        repo_root, source_output_dir or package_dir, standalone=standalone
     )
     compiler_path = Path(compiler).resolve()
     toolchain_path = toolchain_file.resolve()
@@ -620,6 +623,7 @@ def verify_provenance(
     package_dir: Path,
     repo_root: Path,
     source_output_dir: Path | None = None,
+    *, verify_build_environment: bool = True,
 ) -> dict[str, object]:
     provenance_path = package_dir / PROVENANCE_NAME
     if not provenance_path.is_file():
@@ -632,8 +636,10 @@ def verify_provenance(
 
     workspace_root, repository_path = workspace_context(repo_root)
     source = provenance.get("source")
-    if not isinstance(source, dict) or source.get("repository_path") != repository_path:
+    if not isinstance(source, dict) or source.get("repository_path") not in {".", repository_path}:
         raise AssertionError("runtime provenance source identity is incomplete")
+    # Public source identity is independent of the checkout's parent workspace.
+    repository_path = source["repository_path"]
     superproject_commit = source.get("superproject_commit")
     repository_commit = source.get("repository_commit")
     gitlink_commit = source.get("superproject_gitlink_commit")
@@ -698,10 +704,14 @@ def verify_provenance(
     ):
         path_value = toolchain.get(path_field)
         digest = toolchain.get(hash_field)
-        if not isinstance(path_value, str) or not isinstance(digest, str):
+        if (not isinstance(path_value, str) or not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)):
             raise AssertionError(f"runtime provenance missing toolchain field: {path_field}")
         path = Path(path_value)
-        if not path.is_absolute() or not path.is_file() or path.is_symlink() or sha256(path) != digest:
+        if not path.is_absolute():
+            raise AssertionError(f"runtime provenance toolchain path is not absolute: {path_field}")
+        if verify_build_environment and (
+                not path.is_file() or path.is_symlink() or sha256(path) != digest):
             raise AssertionError(f"runtime provenance toolchain identity drift: {path_field}")
     for field in ("triplet", "build_dir"):
         if not toolchain.get(field):
@@ -719,6 +729,7 @@ def write_provenance(
     toolchain_file: Path,
     build_dir: Path,
     source_output_dir: Path | None = None,
+    *, standalone: bool = False,
 ) -> None:
     provenance = build_provenance(
         package_dir,
@@ -728,6 +739,7 @@ def write_provenance(
         toolchain_file,
         build_dir,
         source_output_dir,
+        standalone=standalone,
     )
     write_atomic_text(
         package_dir / PROVENANCE_NAME,
@@ -740,13 +752,15 @@ def verify_package(
     *,
     repo_root: Path = ROOT,
     source_output_dir: Path | None = None,
+    verify_build_environment: bool = True,
 ) -> None:
     expected_nodes = expected_inventory_nodes()
     verify_library_links(package_dir)
     verify_library_links(repo_root)
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     verify_checksums(package_dir, actual_inventory)
-    verify_provenance(package_dir, repo_root, source_output_dir)
+    verify_provenance(package_dir, repo_root, source_output_dir,
+                      verify_build_environment=verify_build_environment)
 
     missing = sorted(relative for relative in REQUIRED_FILES if not (package_dir / relative).is_file())
     if missing:
@@ -830,6 +844,10 @@ def main() -> int:
     parser.add_argument("--check-source", action="store_true")
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--write-provenance", action="store_true")
+    parser.add_argument("--standalone-source", action="store_true",
+                        help="record public repository identity without a superproject")
+    parser.add_argument("--portable", action="store_true",
+                        help="verify source, payload and ABI without requiring the original build host")
     parser.add_argument("--source-output-dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--compiler", default="")
@@ -840,6 +858,8 @@ def main() -> int:
     parser.add_argument("--sensor-web", type=Path)
     parser.add_argument("--web-build-info", action="store_true")
     args = parser.parse_args()
+    if args.standalone_source and not args.write_provenance:
+        parser.error("--standalone-source requires --write-provenance")
 
     repo_root = args.repo_root.resolve()
     if args.web_build_info:
@@ -871,6 +891,7 @@ def main() -> int:
             args.toolchain_file.resolve(),
             args.build_dir.resolve(),
             args.source_output_dir.resolve() if args.source_output_dir else package_dir,
+            standalone=args.standalone_source,
         )
     if args.write_manifest:
         write_manifest(package_dir)
@@ -878,8 +899,11 @@ def main() -> int:
         package_dir,
         repo_root=repo_root,
         source_output_dir=args.source_output_dir.resolve() if args.source_output_dir else None,
+        verify_build_environment=not args.portable,
     )
     print(f"Runtime ABI package verified: {package_dir}")
+    if args.portable:
+        print("Portable verification: original build-host toolchain files were not checked")
     return 0
 
 
