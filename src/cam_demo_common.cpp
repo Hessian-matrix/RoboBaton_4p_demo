@@ -100,22 +100,13 @@ const char* TimestampDomainName(TimestampDomain domain) noexcept {
       return "monotonic_raw";
     case TimestampDomain::kSystemRealtime:
       return "system_realtime";
-    case TimestampDomain::kSc132Native:
-      return "sc132_native";
     case TimestampDomain::kUnknown:
       break;
   }
   return "unknown";
 }
 
-bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept {
-  return options.trigger_mode == "software_gpio" || options.trigger_mode == "gpio";
-}
-
 TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept {
-  if (!Sc132TimestampsAreMonotonicRaw(options)) {
-    return TimestampDomain::kSc132Native;
-  }
   return options.system_clock != nullptr ? TimestampDomain::kSystemRealtime
                                         : TimestampDomain::kMonotonicRaw;
 }

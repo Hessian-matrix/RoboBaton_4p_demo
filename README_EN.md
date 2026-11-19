@@ -25,6 +25,10 @@ Users normally need only `demo/`. Do not replace only one ELF, one `.so`, or the
 
 Use the repository, `demo/`, prebuilt libraries, and public documentation as one release composition. Confirm `VERSION`, the repository tag, and `demo/manifest.sha256`; do not mix source, headers, shared libraries, and runtime packages from different releases.
 
+The current `1.3.4` candidate build uses `libicm42688.so.2.1.2` and `libsc132.so.2.0.2`; their SONAMEs remain `libicm42688.so.2` and `libsc132.so.2`, with unchanged ABI. PRRTSP fixes the H.264 access-unit end marker while retaining filename `libprrtsp.so.2.0.0` and SONAME/ABI. Software `VERSION` and `*_get_version()` report `1.3.4`; also verify the real library filenames and the complete package's `manifest.sha256`. See the documentation site's release and support page for formal release status.
+
+`lib/` and `demo/lib/` contain one real ELF per library, with two same-directory relative links: `.so -> .so.2 -> versioned file`. Preserve links using tar, `cp -a`, or `rsync -a`. `sha256sum -c` checks content only. Before deployment, run `python3 scripts/verify_runtime_package.py --artifact-only demo` to check package contents, ABI, exact links, and artifact bindings in the public provenance summary. This does not attest source commits, toolchains, or signatures. For a downloaded archive, replace `demo` with the extracted runtime directory. See [Deployment, Upgrade, and Rollback](https://4p-doc-en.readthedocs.io/en/latest/development/deployment-and-upgrade.html).
+
 On the board, query program and runtime-library versions:
 
 ```bash
@@ -64,6 +68,8 @@ Camera/RTSP only:
 ./cam_demo
 ```
 
+Camera triggering supports only `software_gpio`. The default `--trigger-mode software_gpio` uses GPIO417 software pulses. Other values are rejected before hardware access, with no aliases or fallback; frame-set skew/timeout, payload, and timestamp contracts are unchanged.
+
 IMU only:
 
 ```bash
@@ -75,6 +81,8 @@ UART1/UART7 example:
 ```bash
 ./serial_port_demo
 ```
+
+While UART is waiting for input, `SIGINT` (Ctrl+C) or `SIGTERM` stops it normally with exit code `0`; an interrupted wait is not a serial I/O failure. Normal and exceptional teardown restore the original termios settings. Device disconnection or terminal poll errors still fail with a nonzero status; a disconnected device may reject restoration.
 
 For first power-on, network setup, deployment prerequisites, and the required `cam-service`, see [First power-on](https://4p-doc-en.readthedocs.io/en/latest/getting-started/first-boot.html) and [Quick start](https://4p-doc-en.readthedocs.io/en/latest/quick-start.html).
 
@@ -106,6 +114,8 @@ Autostart is implemented through `/userdata/startup.sh`, executed by the system 
 
 ROS1 bag and MP4 are mutually exclusive. MP4 supports H.264 and the complete four-camera mask; frame skip applies only to ROS1 bag. For output files, stop order, completeness rules, partial/recovery handling, and offline extraction, see [Data persistence](https://4p-doc-en.readthedocs.io/en/latest/usage/save-data-guide.html).
 
+ROS1 bag JPEGs omit only the X5 JPU private APP9 frame-index segment immediately after SOI. Other APP metadata, coding tables and image scan bytes remain unchanged, avoiding APP-field compatibility warnings in general-purpose decoders.
+
 ## Build from source
 
 Cross-compile on an Ubuntu 22.04 x86_64 host and run the generated package on X5. Provide matching `./include`, `./lib`, the `x5_4cam_cross_toolchain_20261009` bundle, and host CMake. See the build page below for download availability and host installation steps.
@@ -118,7 +128,7 @@ cmake -S . -B build_x5 \
 cmake --build build_x5 --parallel 4
 ```
 
-Maintainers refresh the complete runtime package with:
+These commands refresh `demo/` for local verification and keep build provenance inside it. Do not publish this local package.
 
 ```bash
 scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"
@@ -158,6 +168,8 @@ For complete camera, IMU, UART, timestamp, frame-rate, and data semantics, see [
 ## Troubleshooting
 
 When startup, shared-library, RTSP, IMU, or UART problems occur, retain `VERSION`, manifest results, the command, exit code, and necessary logs. Do not submit real IPs, credentials, or internal paths. Start with [Troubleshooting](https://4p-doc-en.readthedocs.io/en/latest/troubleshooting.html).
+
+While UART is waiting for input, `SIGINT` (Ctrl+C) or `SIGTERM` stops it normally with exit code `0`; an interrupted wait is not reported as a serial I/O failure.
 
 ## Public documentation index
 

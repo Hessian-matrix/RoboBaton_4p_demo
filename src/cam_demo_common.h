@@ -51,13 +51,8 @@ enum class TimestampDomain : uint32_t {
   kUnknown = 0U,
   kMonotonicRaw = 1U,
   kSystemRealtime = 2U,
-  kSc132Native = 3U,
 };
 
-enum class ImuStartOrder : uint32_t {
-  kImuFirst = 0U,
-  kCameraFirst = 1U,
-};
 enum class RtspPreviewFailurePolicy : uint32_t {
   kFailClosed = 0U,
   kDegradePreview = 1U,
@@ -68,7 +63,6 @@ struct Options;
 const char* VideoCodecName(VideoCodec codec) noexcept;
 const char* ImuSampleDropPolicyName(uint32_t policy) noexcept;
 const char* TimestampDomainName(TimestampDomain domain) noexcept;
-bool Sc132TimestampsAreMonotonicRaw(const Options& options) noexcept;
 TimestampDomain Sc132OutputTimestampDomain(const Options& options) noexcept;
 
 struct Options {
@@ -89,8 +83,6 @@ struct Options {
   uint32_t frame_set_timeout_ms = kDefaultFrameSetTimeoutMs;
   std::string trigger_mode = kDefaultSc132TriggerMode;
   uint32_t imu_sample_rate_hz = kDefaultImuSampleRateHz;
-  uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
-  ImuStartOrder imu_start_order = ImuStartOrder::kCameraFirst;
   uint32_t imu_print_rate_hz = kDefaultImuPrintRateHz;
   bool imu_print_metrics = false;
   const FrozenSystemClock* system_clock = nullptr;

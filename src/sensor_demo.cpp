@@ -666,7 +666,6 @@ int main(int argc, char** argv) {
   std::unique_ptr<FramePipeline> pipeline;
   std::unique_ptr<FrozenSystemClock> system_clock;
   std::unique_ptr<ScopedNonblockingFd> output_mode;
-  uint32_t imu_sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
   SensorBagRecorder recorder;
   H264Mp4Recorder mp4_recorder;
   TeeCaptureRecorder capture_recorder;
@@ -688,7 +687,6 @@ int main(int argc, char** argv) {
     g_stop_requested.store(false, std::memory_order_release);
 
     Options options = ParseSensorDemoCommandLine(argc, argv);
-    imu_sample_drop_policy = options.imu_sample_drop_policy;
     system_clock = std::make_unique<FrozenSystemClock>();
     system_clock->PrintTimeBase(std::cout);
     options.system_clock = system_clock.get();
@@ -723,7 +721,7 @@ int main(int argc, char** argv) {
       }
     }
     imu_options.sample_rate_hz = options.imu_sample_rate_hz;
-    imu_options.sample_drop_policy = options.imu_sample_drop_policy;
+    imu_options.sample_drop_policy = ICM42688_SAMPLE_DROP_POLICY_ALLOW_COUNTED;
     imu_options.count = 0U;
     imu_options.stop_requested = &g_stop_requested;
     imu_options.system_clock = system_clock.get();
@@ -744,12 +742,8 @@ int main(int argc, char** argv) {
               << " kbps=" << options.bps << " codec=" << VideoCodecName(options.video_codec)
               << " rtsp_base_port=" << options.rtsp_base_port
               << " path=" << options.url << " imu_rate_hz=" << options.imu_sample_rate_hz
-              << " imu_sample_drop_policy="
-              << ImuSampleDropPolicyName(options.imu_sample_drop_policy)
-              << " imu_start_order="
-              << (options.imu_start_order == ImuStartOrder::kCameraFirst
-                      ? "camera-first"
-                      : "imu-first")
+              << " imu_sample_drop_policy=allow-counted"
+              << " imu_start_order=camera-first"
               << " imu_print_rate_hz=" << options.imu_print_rate_hz
               << " imu_print_metrics=" << (options.imu_print_metrics ? "on" : "off")
               << " imu_time=SENSOR_TIMESTAMP_FIFO record_bag="
@@ -774,22 +768,6 @@ int main(int argc, char** argv) {
                 << " capture_warmup_seconds=" << options.capture_warmup_seconds;
     }
     std::cout << "\n" << std::flush;
-
-    // 两种顺序复用同一线程入口；imu_options 和 observer 状态的生命周期覆盖统一清理和 join。
-    const auto start_imu = [&imu_result, &imu_options, &imu_observer, &imu_thread] {
-      imu_thread = std::thread([&imu_result, &imu_options, &imu_observer] {
-        const int result = RunIcmConsumer(imu_options, ObserveSensorImuSample, &imu_observer);
-        imu_result.store(result, std::memory_order_release);
-        if (result != 0) {
-          g_stop_requested.store(true, std::memory_order_release);
-        }
-      });
-    };
-
-    // 显式 imu-first 回滚路径在任何相机配置副作用之前启动 IMU。
-    if (options.imu_start_order == ImuStartOrder::kImuFirst) {
-      start_imu();
-    }
 
     if (sc132_set_fps(static_cast<uint32_t>(options.fps)) != SC132_STATUS_OK) {
       throw std::runtime_error("sc132_set_fps failed");
@@ -834,10 +812,14 @@ int main(int argc, char** argv) {
     }
     pipeline->MarkSourceStarted();
 
-    // camera-first 只在所选 frame-set 启动成功后建立 IMU final producer epoch。
-    if (options.imu_start_order == ImuStartOrder::kCameraFirst) {
-      start_imu();
-    }
+    // 所选 frame-set 启动成功后才建立 IMU producer epoch。
+    imu_thread = std::thread([&imu_result, &imu_options, &imu_observer] {
+      const int result = RunIcmConsumer(imu_options, ObserveSensorImuSample, &imu_observer);
+      imu_result.store(result, std::memory_order_release);
+      if (result != 0) {
+        g_stop_requested.store(true, std::memory_order_release);
+      }
+    });
 
     while (g_signal_stop == 0 &&
            !g_stop_requested.load(std::memory_order_acquire) &&
@@ -874,11 +856,7 @@ int main(int argc, char** argv) {
       shutdown_context.capture_requested = capture_requested;
       const Sc132ShutdownResult shutdown = FinishSc132ShutdownDetailed(
           pipeline.get(), &rtsp,
-          (recording_requested || capture_requested)
-              ? StopImuAndFinishRecordersBeforeSc132Stop
-              : nullptr,
-          (recording_requested || capture_requested) ? &shutdown_context
-                                                      : nullptr);
+          StopImuAndFinishRecordersBeforeSc132Stop, &shutdown_context);
       consumer_quiescent = shutdown.consumer_join_ok && shutdown.ownership_quiescent;
       rtsp_status_ok = shutdown.rtsp_status_ok;
       rtsp_close_ok = shutdown.rtsp_close_ok;
@@ -930,7 +908,7 @@ int main(int argc, char** argv) {
     exit_code = 1;
   }
 
-  // Camera/RTSP are quiescent before stopping the independent IMU producer.
+  // Also join IMU after failures that did not reach the camera shutdown hook.
   g_stop_requested.store(true, std::memory_order_release);
   if (imu_thread.joinable()) {
     imu_thread.join();
@@ -1198,8 +1176,7 @@ int main(int argc, char** argv) {
             << " timing_sample_drops=" << imu_stats.timing_sample_drops
             << " max_uncertainty_us=" << imu_stats.max_timestamp_uncertainty_us
             << " max_consecutive_drops=" << imu_stats.max_consecutive_drops
-            << " imu_sample_drop_policy="
-            << ImuSampleDropPolicyName(imu_sample_drop_policy) << "\n";
+            << " imu_sample_drop_policy=allow-counted\n";
   std::cout << "sensor_demo stopped exit_code=" << exit_code << "\n";
   return exit_code;
 }

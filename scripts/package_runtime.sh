@@ -6,10 +6,12 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/build_x5}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/demo}"
 PACKAGE_LIB_DIR="${PROJECT_DIR}/lib"
-TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-/root/x5/cross_compile/new/toolchain/aarch64_x5_host_toolchain.cmake}"
+TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-}"
 STRIP_TOOL="${STRIP_TOOL:-}"
 WORK_ROOT=""
 BACKUP_ACTIVE=0
+PUBLIC_PROVENANCE_FILE=""
+SIDECAR_ACTIVE=0
 
 usage() {
   cat <<'USAGE'
@@ -28,8 +30,12 @@ Behavior:
 Options:
   --build-dir <path>       CMake build directory, default ./build_x5
   --output-dir <path>      Runtime package output directory, default ./demo
-  --toolchain-file <path>  CMake toolchain for the consumer demos
+  --toolchain-file <path>  Required consumer CMake toolchain, or set TOOLCHAIN_FILE
   --strip-tool <path>      Optional strip override for staged executables
+  --public-provenance-file <absolute path>
+                          Publish allowlisted public metadata; save full provenance
+                          at this new sidecar outside the package. Public output
+                          and sidecar must not already exist.
   -h, --help               Show this help
 USAGE
 }
@@ -63,6 +69,11 @@ while [[ $# -gt 0 ]]; do
     --strip-tool)
       require_option_value "$1" "${2:-}"
       STRIP_TOOL="$2"
+      shift 2
+      ;;
+    --public-provenance-file)
+      require_option_value "$1" "${2:-}"
+      PUBLIC_PROVENANCE_FILE="$2"
       shift 2
       ;;
     -h|--help)
@@ -117,6 +128,11 @@ read_configured_c_compiler() {
   printf '%s\n' "${compiler}"
 }
 
+if [[ -z "${TOOLCHAIN_FILE}" ]]; then
+  echo "Set TOOLCHAIN_FILE or pass --toolchain-file for the consumer CMake toolchain" >&2
+  exit 2
+fi
+
 BUILD_DIR="$(resolve_project_path "${BUILD_DIR}")"
 OUTPUT_DIR="$(resolve_project_path "${OUTPUT_DIR}")"
 TOOLCHAIN_FILE="$(resolve_project_path "${TOOLCHAIN_FILE}")"
@@ -140,11 +156,49 @@ if [[ "${OUTPUT_DIR}" == "/" || "${OUTPUT_DIR}" == "${PROJECT_DIR}" || -L "${OUT
   echo "Refusing unsafe output directory: ${OUTPUT_DIR}" >&2
   exit 1
 fi
+if [[ -n "${PUBLIC_PROVENANCE_FILE}" ]]; then
+  if [[ -e "${OUTPUT_DIR}" ]]; then
+    echo "Public runtime output already exists: ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
+  PUBLIC_PROVENANCE_FILE="$(python3 - "${PUBLIC_PROVENANCE_FILE}" "${OUTPUT_DIR}" "${BUILD_DIR}" <<'PY'
+import sys
+from pathlib import Path
 
+sidecar = Path(sys.argv[1])
+if not sidecar.is_absolute():
+    raise SystemExit("Public provenance sidecar path must be absolute")
+if any(path.is_symlink() for path in (sidecar, *sidecar.parents)):
+    raise SystemExit("Public provenance sidecar must not use symlink components")
+if sidecar.exists() or not sidecar.parent.is_dir():
+    raise SystemExit("Public provenance sidecar must be a new file in an existing directory")
+sidecar = sidecar.resolve()
+if any(sidecar.is_relative_to(Path(root).resolve()) for root in sys.argv[2:]):
+    raise SystemExit("Public provenance sidecar must be outside the runtime output and build directory")
+print(sidecar)
+PY
+  )"
+fi
+
+
+if [[ -L "${PACKAGE_LIB_DIR}" ]]; then
+  echo "Library directory must not be a symlink: ${PACKAGE_LIB_DIR}" >&2
+  exit 1
+fi
+for real in libicm42688.so.2.1.2 libsc132.so.2.0.2 libprrtsp.so.2.0.0; do
+  linker="${real%.so.*}.so"
+  soname="${linker}.2"
+  if [[ -L "${PACKAGE_LIB_DIR}/${real}" || ! -f "${PACKAGE_LIB_DIR}/${real}" ||
+        ! -L "${PACKAGE_LIB_DIR}/${soname}" || "$(readlink -n "${PACKAGE_LIB_DIR}/${soname}"; printf .)" != "${real}." ||
+        ! -L "${PACKAGE_LIB_DIR}/${linker}" || "$(readlink -n "${PACKAGE_LIB_DIR}/${linker}"; printf .)" != "${soname}." ]]; then
+    echo "Invalid release library chain: ${real}" >&2
+    exit 1
+  fi
+done
 
 for library in \
-  libicm42688.so.2.1.1 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
+  libicm42688.so.2.1.2 libicm42688.so.2 libicm42688.so \
+  libsc132.so.2.0.2 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
   if [[ ! -f "${PACKAGE_LIB_DIR}/${library}" ]]; then
     echo "Missing prebuilt release library: ${PACKAGE_LIB_DIR}/${library}" >&2
@@ -222,6 +276,9 @@ done
 
 cleanup() {
   local rc=$?
+  if [[ "${SIDECAR_ACTIVE}" -eq 1 ]]; then
+    rm -f "${PUBLIC_PROVENANCE_FILE}"
+  fi
   if [[ "${BACKUP_ACTIVE}" -eq 1 && ! -e "${OUTPUT_DIR}" && -e "${WORK_ROOT}/previous" ]]; then
     mv "${WORK_ROOT}/previous" "${OUTPUT_DIR}" || true
   fi
@@ -245,10 +302,10 @@ cp "${SCRIPT_DIR}/runtime_ffprobe_frame_count.sh" "${STAGE_DIR}/bin/ffprobe"
 cp "${SCRIPT_DIR}/start_sensor_demo.sh" "${STAGE_DIR}/start_sensor_demo.sh"
 cp "${SCRIPT_DIR}/rosbag_info.py" "${STAGE_DIR}/bin/rosbag_info.py"
 for library in \
-  libicm42688.so.2.1.1 libicm42688.so.2 libicm42688.so \
-  libsc132.so.2.0.1 libsc132.so.2 libsc132.so \
+  libicm42688.so.2.1.2 libicm42688.so.2 libicm42688.so \
+  libsc132.so.2.0.2 libsc132.so.2 libsc132.so \
   libprrtsp.so.2.0.0 libprrtsp.so.2 libprrtsp.so; do
-  cp "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
+  cp -P "${PACKAGE_LIB_DIR}/${library}" "${STAGE_DIR}/lib/${library}"
 done
 mkdir -p "${STAGE_DIR}/config"
 cp "${PROJECT_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/config/"
@@ -290,7 +347,16 @@ done
 chmod 755 "${STAGE_DIR}" "${STAGE_DIR}/bin" "${STAGE_DIR}/lib" "${STAGE_DIR}/config"
 chmod 755 "${STAGE_DIR}/cam_demo" "${STAGE_DIR}/imu_reader_demo" "${STAGE_DIR}/mosaic_rtsp_demo" "${STAGE_DIR}/sensor_demo" "${STAGE_DIR}/serial_port_demo" "${STAGE_DIR}/start_sensor_demo.sh"
 chmod 755 "${STAGE_DIR}/bin/cam_demo" "${STAGE_DIR}/bin/imu_reader_demo" "${STAGE_DIR}/bin/mosaic_rtsp_demo" "${STAGE_DIR}/bin/sensor_demo" "${STAGE_DIR}/bin/serial_port_demo" "${STAGE_DIR}/bin/ffprobe" "${STAGE_DIR}/bin/rosbag_info.py"
-chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" "${STAGE_DIR}/lib/"*.so
+chmod 644 "${STAGE_DIR}/VERSION" "${STAGE_DIR}/env.sh" "${STAGE_DIR}/config/sensor_config.yaml" \
+  "${STAGE_DIR}/lib/libicm42688.so.2.1.2" "${STAGE_DIR}/lib/libsc132.so.2.0.2" \
+  "${STAGE_DIR}/lib/libprrtsp.so.2.0.0"
+
+PROVENANCE_WRITE_ARGS=()
+PROVENANCE_VERIFY_ARGS=()
+if [[ -n "${PUBLIC_PROVENANCE_FILE}" ]]; then
+  PROVENANCE_WRITE_ARGS=(--public-provenance-file "${WORK_ROOT}/internal-provenance.json")
+  PROVENANCE_VERIFY_ARGS=(--internal-provenance "${WORK_ROOT}/internal-provenance.json")
+fi
 
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --write-provenance \
@@ -300,18 +366,52 @@ python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --toolchain-file "${TOOLCHAIN_FILE}" \
   --build-dir "${BUILD_DIR}" \
   --source-output-dir "${OUTPUT_DIR}" \
+  "${PROVENANCE_WRITE_ARGS[@]}" \
   "${STAGE_DIR}"
 chmod 644 "${STAGE_DIR}/runtime-provenance.json" "${STAGE_DIR}/manifest.sha256"
 python3 "${SCRIPT_DIR}/verify_runtime_package.py" \
   --source-output-dir "${OUTPUT_DIR}" \
+  "${PROVENANCE_VERIFY_ARGS[@]}" \
   "${STAGE_DIR}"
 
-if [[ -e "${OUTPUT_DIR}" ]]; then
-  mv "${OUTPUT_DIR}" "${WORK_ROOT}/previous"
-  BACKUP_ACTIVE=1
+if [[ -n "${PUBLIC_PROVENANCE_FILE}" ]]; then
+  python3 - "${WORK_ROOT}/internal-provenance.json" "${PUBLIC_PROVENANCE_FILE}" <<'PY'
+import os
+from pathlib import Path
+import shutil
+import sys
+
+destination = Path(sys.argv[2])
+descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    with os.fdopen(descriptor, "wb") as output, open(sys.argv[1], "rb") as source:
+        shutil.copyfileobj(source, output)
+except BaseException:
+    destination.unlink(missing_ok=True)
+    raise
+PY
+  SIDECAR_ACTIVE=1
+  if [[ -e "${OUTPUT_DIR}" || -L "${OUTPUT_DIR}" ]]; then
+    echo "Public runtime output appeared during packaging: ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
 fi
-mv "${STAGE_DIR}" "${OUTPUT_DIR}"
+
+if [[ -n "${PUBLIC_PROVENANCE_FILE}" ]]; then
+  mv -T -n "${STAGE_DIR}" "${OUTPUT_DIR}"
+  if [[ -e "${STAGE_DIR}" ]]; then
+    echo "Public runtime output appeared during publication: ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
+else
+  if [[ -e "${OUTPUT_DIR}" ]]; then
+    mv "${OUTPUT_DIR}" "${WORK_ROOT}/previous"
+    BACKUP_ACTIVE=1
+  fi
+  mv "${STAGE_DIR}" "${OUTPUT_DIR}"
+fi
 BACKUP_ACTIVE=0
+SIDECAR_ACTIVE=0
 if [[ -e "${WORK_ROOT}/previous" ]]; then
   rm -rf "${WORK_ROOT}/previous"
 fi

@@ -1,10 +1,22 @@
+# Reproducible CMake/temp trees; lib/ and demo/ are public deliverables.
+build/
 build_x5/
-build_x5_syncfix/*
-regression_logs/*
-*.bin
-.package-build-*/
+build_x5_*/
+cmake-build-*/
+.*-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Local package staging, logs and caches.
+.package-runtime.*/
+regression_logs/
+/install/
+/log/
+.cache/
+.pytest_cache/
 __pycache__/
 *.py[cod]
-build_x5_jpeg_fix/
-build_x5_origin_overlay/
-.package-runtime.*/
+*.bin

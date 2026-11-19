@@ -1881,7 +1881,6 @@ void SensorBagRecorder::WriteSessionStatus(SensorBagFinishOutcome outcome, bool 
          << "\"nv12_copy_bulk_bytes\":" << stats.nv12_copy_bulk_bytes << ','
          << "\"nv12_copy_row_count\":" << stats.nv12_copy_row_count << ','
          << "\"nv12_copy_row_bytes\":" << stats.nv12_copy_row_bytes << ','
-         << "\"write_order_wait_max_ns\":" << stats.write_order_wait_max_ns << ','
          << "\"writer_mutex_wait_max_ns\":" << stats.writer_mutex_wait_max_ns << ','
          << "\"writer_mutex_hold_max_ns\":" << stats.writer_mutex_hold_max_ns << ','
          << "\"source_frame_sets_seen\":" << stats.source_frame_sets_seen << ','

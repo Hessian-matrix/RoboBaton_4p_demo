@@ -48,7 +48,7 @@ Run:
   --run-seconds <sec>         cam_demo runtime, default 25
   --startup-timeout <sec>     RTSP port wait timeout, default 14
   --fps <25|30|40|50|60>  Camera/encoder FPS, default 30
-  --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio or none; default software_gpio/GPIO417
+  --trigger-mode <mode>       SC132_TRIGGER_MODE: software_gpio only (default), GPIO417
   --output-dir <path>         Local log output directory, default ./regression_logs
 
 Evaluation thresholds:
@@ -100,9 +100,9 @@ if ! [[ "${FPS}" =~ ^[0-9]+$ ]] || (( FPS != 25 && FPS != 30 && FPS != 40 && FPS
 fi
 
 case "${TRIGGER_MODE}" in
-  software_gpio|gpio|none|off) ;;
+  software_gpio) ;;
   *)
-    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported values are software_gpio and none" >&2
+    echo "Invalid --trigger-mode ${TRIGGER_MODE}; supported value is software_gpio" >&2
     exit 2
     ;;
 esac

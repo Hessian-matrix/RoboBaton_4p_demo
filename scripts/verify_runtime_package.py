@@ -16,7 +16,8 @@ import tempfile
 
 MANIFEST_NAME = "manifest.sha256"
 PROVENANCE_NAME = "runtime-provenance.json"
-PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v2"
+PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-provenance-v3"
+PUBLIC_PROVENANCE_SCHEMA = "robobaton-non-ros-runtime-public-provenance-v1"
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
@@ -28,19 +29,22 @@ EXPECTED_VERSION_NEEDS = {
                         "LIBSC132_2.0", "LIBPRRTSP_2.0"},
 }
 EXPECTED_VERSION_DEFINITIONS = {
-    "lib/libicm42688.so.2.1.1": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
-    "lib/libsc132.so.2.0.1": {"LIBSC132_2.0"},
+    "lib/libicm42688.so.2.1.2": {"ICM42688_X5_2.0", "ICM42688_X5_2.1"},
+    "lib/libsc132.so.2.0.2": {"LIBSC132_2.0"},
     "lib/libprrtsp.so.2.0.0": {"LIBPRRTSP_2.0"},
 }
 EXPECTED_SONAMES = {
-    "lib/libicm42688.so.2.1.1": "libicm42688.so.2",
-    "lib/libsc132.so.2.0.1": "libsc132.so.2",
+    "lib/libicm42688.so.2.1.2": "libicm42688.so.2",
+    "lib/libsc132.so.2.0.2": "libsc132.so.2",
     "lib/libprrtsp.so.2.0.0": "libprrtsp.so.2",
 }
-EXPECTED_LIBRARY_COPIES = {
-    "lib/libicm42688.so.2.1.1": {"lib/libicm42688.so.2", "lib/libicm42688.so"},
-    "lib/libsc132.so.2.0.1": {"lib/libsc132.so.2", "lib/libsc132.so"},
-    "lib/libprrtsp.so.2.0.0": {"lib/libprrtsp.so.2", "lib/libprrtsp.so"},
+EXPECTED_LIBRARY_LINKS = {
+    "lib/libicm42688.so.2": "libicm42688.so.2.1.2",
+    "lib/libicm42688.so": "libicm42688.so.2",
+    "lib/libsc132.so.2": "libsc132.so.2.0.2",
+    "lib/libsc132.so": "libsc132.so.2",
+    "lib/libprrtsp.so.2": "libprrtsp.so.2.0.0",
+    "lib/libprrtsp.so": "libprrtsp.so.2",
 }
 EXPECTED_SCRIPT_COPIES = {
     "scripts/runtime_ffprobe_frame_count.sh": "bin/ffprobe",
@@ -55,9 +59,9 @@ EXPECTED_NEEDED = {
     "bin/serial_port_demo": {"libc.so.6"},
 }
 EXPECTED_LIBRARY_NEEDED = {
-    "lib/libicm42688.so.2.1.1": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libsc132.so.2.0.1": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6", "ld-linux-aarch64.so.1"},
-    "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6", "ld-linux-aarch64.so.1"},
+    "lib/libicm42688.so.2.1.2": {"libstdc++.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6"},
+    "lib/libsc132.so.2.0.2": {"libcam.so.1", "libvpf.so.1", "libhbmem.so.1", "libNano2D.so", "libc.so.6"},
+    "lib/libprrtsp.so.2.0.0": {"libmultimedia.so.1", "libc.so.6"},
 }
 REQUIRED_FILES = {
     "VERSION",
@@ -78,7 +82,7 @@ REQUIRED_FILES = {
     "bin/ffprobe",
     "bin/rosbag_info.py",
     *EXPECTED_VERSION_DEFINITIONS,
-    *(copy for copies in EXPECTED_LIBRARY_COPIES.values() for copy in copies),
+    *EXPECTED_LIBRARY_LINKS,
 }
 
 
@@ -181,29 +185,64 @@ def workspace_context(repo_root: Path) -> tuple[Path, str]:
     return repo_root.resolve(), "."
 
 
-def git_status(repo_root: Path, excluded_path: Path | None = None) -> str:
+def git_status(
+    repo_root: Path, excluded_path: Path | None = None, *, excluded_metadata: Path | None = None
+) -> str:
     args = ["status", "--porcelain=v2", "-uall"]
-    if excluded_path is not None:
+    exclusions = []
+    for path in (excluded_path, excluded_metadata):
+        if path is None:
+            continue
         try:
-            relative = excluded_path.resolve().relative_to(repo_root.resolve()).as_posix()
+            relative = path.resolve().relative_to(repo_root.resolve()).as_posix()
         except ValueError:
-            relative = ""
+            continue
         if relative:
-            args.extend(["--", ".", f":(exclude){relative}"])
+            exclusions.append(f":(exclude,literal){relative}")
+    if exclusions:
+        args.extend(["--", ".", *exclusions])
     return git_output(repo_root, *args)
 
 
-def committed_input_hashes(repo_root: Path, commit: str) -> dict[str, str]:
-    result: dict[str, str] = {}
+def real_directory(path: Path) -> Path:
+    lexical = path.absolute()
+    if any(parent.is_symlink() for parent in (lexical, *lexical.parents)) or not lexical.is_dir():
+        raise AssertionError(f"directory components must be real directories: {path}")
+    return lexical.resolve()
+
+
+def verify_library_links(root: Path) -> None:
+    real_directory(root)
+    if (root / "lib").is_symlink() or not (root / "lib").is_dir():
+        raise AssertionError("library directory must be a real directory")
+    for relative in EXPECTED_SONAMES:
+        real = root / relative
+        if real.is_symlink() or not real.is_file():
+            raise AssertionError(f"real ELF must be a regular file: {relative}")
+    for relative, target in EXPECTED_LIBRARY_LINKS.items():
+        link = root / relative
+        if not link.is_symlink() or os.readlink(link) != target:
+            raise AssertionError(f"library symlink must be {relative} -> {target}")
+
+
+def committed_input_hashes(repo_root: Path, commit: str) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
     for path in repo_input_paths(repo_root):
         relative = path.relative_to(repo_root).as_posix()
         try:
             payload = git_bytes(repo_root, "cat-file", "blob", f"{commit}:{relative}")
+            entry = git_bytes(repo_root, "ls-tree", "-z", commit, "--", relative)
         except subprocess.CalledProcessError as error:
             raise AssertionError(
                 f"runtime provenance input is not committed at {commit}: {relative}"
             ) from error
-        result[relative] = hashlib.sha256(payload).hexdigest()
+        mode = entry.split(b" ", 1)[0]
+        if mode == b"120000":
+            result[relative] = {"kind": "symlink", "target": os.fsdecode(payload)}
+        elif mode in (b"100644", b"100755"):
+            result[relative] = {"kind": "regular", "sha256": hashlib.sha256(payload).hexdigest()}
+        else:
+            raise AssertionError(f"invalid committed source entry: {relative}")
     return result
 
 
@@ -212,7 +251,7 @@ def artifact_payload_hashes(package_dir: Path) -> dict[str, str]:
     return {
         path.relative_to(package_dir).as_posix(): sha256(path)
         for path in sorted(package_dir.rglob("*"))
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
         and path.relative_to(package_dir).as_posix() not in excluded
     }
 
@@ -231,14 +270,21 @@ def repo_input_paths(repo_root: Path) -> list[Path]:
     ]
     paths.extend(sorted((repo_root / "src").glob("*")))
     paths.extend(sorted((repo_root / "lib").glob("lib*.so*")))
-    return [path for path in paths if path.is_file()]
+    return [path for path in paths if path.is_file() or path.is_symlink()]
 
 
-def repo_input_hashes(repo_root: Path) -> dict[str, str]:
-    return {
-        path.relative_to(repo_root).as_posix(): sha256(path)
-        for path in repo_input_paths(repo_root)
-    }
+def repo_input_hashes(repo_root: Path) -> dict[str, dict[str, str]]:
+    verify_library_links(repo_root)
+    result: dict[str, dict[str, str]] = {}
+    for path in repo_input_paths(repo_root):
+        relative = path.relative_to(repo_root).as_posix()
+        if path.is_symlink():
+            if relative not in EXPECTED_LIBRARY_LINKS:
+                raise AssertionError(f"unexpected source symlink: {relative}")
+            result[relative] = {"kind": "symlink", "target": os.readlink(path)}
+        else:
+            result[relative] = {"kind": "regular", "sha256": sha256(path)}
+    return result
 
 
 def expected_inventory_nodes() -> dict[str, str]:
@@ -250,16 +296,22 @@ def expected_inventory_nodes() -> dict[str, str]:
     }
     for relative in REQUIRED_FILES:
         nodes[relative] = "regular"
+    for relative in EXPECTED_LIBRARY_LINKS:
+        nodes[relative] = "symlink"
     return nodes
 
 
 def verify_exact_inventory(root: Path, expected_nodes: dict[str, str]) -> dict[str, str]:
+    real_directory(root)
     actual_inventory: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
         st = os.lstat(path)
         if stat.S_ISLNK(st.st_mode):
-            raise AssertionError(f"symlink is not allowed in runtime package: {relative}")
+            if relative not in EXPECTED_LIBRARY_LINKS or os.readlink(path) != EXPECTED_LIBRARY_LINKS[relative]:
+                raise AssertionError(f"unexpected runtime symlink: {relative}")
+            actual_inventory[relative] = "symlink"
+            continue
         if stat.S_ISDIR(st.st_mode):
             actual_inventory[relative] = "dir"
             continue
@@ -271,14 +323,16 @@ def verify_exact_inventory(root: Path, expected_nodes: dict[str, str]) -> dict[s
         missing = sorted(set(expected_nodes) - set(actual_inventory))
         extra = sorted(set(actual_inventory) - set(expected_nodes))
         raise AssertionError(f"runtime inventory mismatch: missing={missing}, extra={extra}")
+    if set(EXPECTED_LIBRARY_LINKS) & set(expected_nodes):
+        verify_library_links(root)
     return actual_inventory
 
 
-def manifest_regular_files(root: Path, actual_inventory: dict[str, str]) -> list[str]:
+def manifest_payload_files(root: Path, actual_inventory: dict[str, str]) -> list[str]:
     return sorted(
         relative
         for relative, kind in actual_inventory.items()
-        if kind == "regular" and relative != MANIFEST_NAME
+        if kind in {"regular", "symlink"} and relative != MANIFEST_NAME
     )
 
 
@@ -298,7 +352,7 @@ def write_manifest(package_dir: Path) -> None:
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     lines = [
         f"{sha256(package_dir / relative)}  {relative}"
-        for relative in manifest_regular_files(package_dir, actual_inventory)
+        for relative in manifest_payload_files(package_dir, actual_inventory)
     ]
     write_atomic_text(package_dir / MANIFEST_NAME, "\n".join(lines) + "\n")
 
@@ -320,7 +374,7 @@ def verify_manifest(package_dir: Path) -> dict[str, str]:
 
 def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
     entries = verify_manifest(root)
-    regular_files = manifest_regular_files(root, actual_inventory)
+    regular_files = manifest_payload_files(root, actual_inventory)
     if sorted(entries) != regular_files:
         missing = sorted(set(regular_files) - set(entries))
         extra = sorted(set(entries) - set(regular_files))
@@ -332,17 +386,18 @@ def verify_checksums(root: Path, actual_inventory: dict[str, str]) -> None:
 
 
 def capture_source_snapshot(
-    repo_root: Path, package_dir: Path | None = None
-) -> tuple[dict[str, str], dict[str, object], dict[str, str]]:
+    repo_root: Path, package_dir: Path | None = None, *, excluded_metadata: Path | None = None
+) -> tuple[dict[str, object], dict[str, object], dict[str, dict[str, str]]]:
     workspace_root, repository_path = workspace_context(repo_root)
-    repository_status = git_status(repo_root, package_dir)
+    repository_status = git_status(repo_root, package_dir, excluded_metadata=excluded_metadata)
     repository_commit = git_output(repo_root, "rev-parse", "HEAD")
     superproject_commit = None
     gitlink_commit = None
     superproject_status = ""
     if repository_path != ".":
         runtime_repository = workspace_root / repository_path
-        superproject_status = git_status(workspace_root, runtime_repository)
+        superproject_status = git_status(workspace_root, runtime_repository,
+                                         excluded_metadata=excluded_metadata)
         superproject_commit = git_output(workspace_root, "rev-parse", "HEAD")
         gitlink_commit = git_output(
             workspace_root, "rev-parse", f"{superproject_commit}:{repository_path}"
@@ -378,10 +433,12 @@ def build_provenance(
     toolchain_file: Path,
     build_dir: Path,
     source_output_dir: Path | None = None,
+    *,
+    public_provenance_file: Path | None = None,
 ) -> dict[str, object]:
     # staging目录尚未替换最终输出目录，来源状态必须排除将被替换的路径。
     source, repository_states, inputs = capture_source_snapshot(
-        repo_root, source_output_dir or package_dir
+        repo_root, source_output_dir or package_dir, excluded_metadata=public_provenance_file
     )
     compiler_path = Path(compiler).resolve()
     toolchain_path = toolchain_file.resolve()
@@ -395,7 +452,9 @@ def build_provenance(
         "release_version": RELEASE_VERSION,
         "source": source,
         "repository_states": repository_states,
-        "artifact": {"files": artifact_payload_hashes(package_dir)},
+        "artifact": {"files": artifact_payload_hashes(package_dir),
+                     "symlinks": {path.relative_to(package_dir).as_posix(): os.readlink(path)
+                                  for path in sorted(package_dir.rglob("*")) if path.is_symlink()}},
         "toolchain": {
             "compiler": str(compiler_path),
             "compiler_sha256": sha256(compiler_path),
@@ -408,19 +467,104 @@ def build_provenance(
     }
 
 
+def external_provenance_path(
+    path: Path, package_dir: Path, source_output_dir: Path | None = None
+) -> Path:
+    if not path.is_absolute():
+        raise AssertionError("internal provenance sidecar path must be absolute")
+    if any(component.is_symlink() for component in (path, *path.parents)):
+        raise AssertionError("internal provenance sidecar must not use symlink components")
+    real_directory(path.parent)
+    resolved = path.resolve()
+    for root in (package_dir, source_output_dir):
+        if root is not None and resolved.is_relative_to(root.resolve()):
+            raise AssertionError("internal provenance sidecar must be outside the runtime package")
+    return resolved
+
+
+def public_provenance_projection(provenance: dict[str, object], digest: str) -> dict[str, object]:
+    artifact = provenance["artifact"]
+    return {
+        "schema": PUBLIC_PROVENANCE_SCHEMA,
+        "release_version": provenance["release_version"],
+        "artifact": {"files": artifact["files"], "symlinks": artifact["symlinks"]},
+        "internal_provenance_sha256": digest,
+    }
+
+
+def unique_json_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    fields = {}
+    for name, value in pairs:
+        if name in fields:
+            raise AssertionError(f"duplicate runtime provenance metadata field: {name}")
+        fields[name] = value
+    return fields
+
+
 def verify_provenance(
     package_dir: Path,
     repo_root: Path,
     source_output_dir: Path | None = None,
+    *,
+    artifact_only: bool = False,
+    internal_provenance: Path | None = None,
 ) -> dict[str, object]:
     provenance_path = package_dir / PROVENANCE_NAME
     if not provenance_path.is_file():
         raise AssertionError(f"missing {PROVENANCE_NAME}")
-    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    if provenance.get("schema") != PROVENANCE_SCHEMA:
-        raise AssertionError(f"unexpected provenance schema: {provenance.get('schema')!r}")
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"),
+                            object_pairs_hook=unique_json_fields)
+    if not isinstance(provenance, dict):
+        raise AssertionError("runtime provenance must be an object")
+    schema = provenance.get("schema")
+    sidecar = None
+    if schema == PUBLIC_PROVENANCE_SCHEMA:
+        if set(provenance) != {"schema", "release_version", "artifact", "internal_provenance_sha256"}:
+            raise AssertionError("public runtime provenance metadata fields do not match allowlist")
+        artifact = provenance.get("artifact")
+        if not isinstance(artifact, dict) or set(artifact) != {"files", "symlinks"}:
+            raise AssertionError("public runtime provenance artifact fields do not match allowlist")
+        digest = provenance.get("internal_provenance_sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise AssertionError("public runtime provenance internal digest is invalid")
+        if internal_provenance is None:
+            if not artifact_only:
+                raise AssertionError("public runtime provenance requires --internal-provenance")
+        else:
+            sidecar = external_provenance_path(internal_provenance, package_dir, source_output_dir)
+            if not sidecar.is_file():
+                raise AssertionError("missing internal provenance sidecar")
+            internal_bytes = sidecar.read_bytes()
+            if hashlib.sha256(internal_bytes).hexdigest() != digest:
+                raise AssertionError("public runtime provenance internal digest mismatch")
+            internal = json.loads(internal_bytes)
+            if not isinstance(internal, dict) or internal.get("schema") != PROVENANCE_SCHEMA:
+                raise AssertionError("internal provenance sidecar must use the full v3 schema")
+            if internal.get("release_version") != provenance["release_version"]:
+                raise AssertionError("public runtime provenance projection release_version mismatch")
+            internal_artifact = internal.get("artifact")
+            if not isinstance(internal_artifact, dict) or set(internal_artifact) != {"files", "symlinks"}:
+                raise AssertionError("internal provenance sidecar artifact is invalid")
+            if provenance != public_provenance_projection(internal, digest):
+                raise AssertionError("public runtime provenance projection mismatch")
+            provenance = internal
+    elif schema == PROVENANCE_SCHEMA:
+        if internal_provenance is not None:
+            raise AssertionError("--internal-provenance is only valid for public provenance")
+    else:
+        raise AssertionError(f"unexpected provenance schema: {schema!r}")
     if provenance.get("release_version") != RELEASE_VERSION:
         raise AssertionError("runtime provenance release_version drift")
+
+    artifact = provenance.get("artifact")
+    if not isinstance(artifact, dict) or artifact.get("files") != artifact_payload_hashes(package_dir):
+        raise AssertionError("runtime provenance artifact payload hashes do not match package files")
+    actual_links = {path.relative_to(package_dir).as_posix(): os.readlink(path)
+                    for path in sorted(package_dir.rglob("*")) if path.is_symlink()}
+    if artifact.get("symlinks") != actual_links:
+        raise AssertionError("runtime provenance artifact symlink targets do not match package")
+    if artifact_only:
+        return provenance
 
     workspace_root, repository_path = workspace_context(repo_root)
     source = provenance.get("source")
@@ -470,15 +614,13 @@ def verify_provenance(
     if stored_inputs != repo_input_hashes(repo_root):
         raise AssertionError("runtime provenance source/input hashes do not match current files")
     # 运行包可以在生成后随 tracked 输出一起提交；提交记录和输入哈希仍锁定真实源码身份。
-    current_runtime_status = git_status(repo_root, source_output_dir or package_dir)
+    current_runtime_status = git_status(repo_root, source_output_dir or package_dir,
+                                        excluded_metadata=sidecar)
     if not current_runtime_status:
         committed_inputs = committed_input_hashes(repo_root, repository_commit)
         if stored_inputs != committed_inputs:
             raise AssertionError("runtime provenance inputs do not match the recorded source commit")
 
-    artifact = provenance.get("artifact")
-    if not isinstance(artifact, dict) or artifact.get("files") != artifact_payload_hashes(package_dir):
-        raise AssertionError("runtime provenance artifact payload hashes do not match package files")
     toolchain = provenance.get("toolchain")
     if not isinstance(toolchain, dict):
         raise AssertionError("runtime provenance toolchain block missing")
@@ -509,7 +651,14 @@ def write_provenance(
     toolchain_file: Path,
     build_dir: Path,
     source_output_dir: Path | None = None,
+    *,
+    public_provenance_file: Path | None = None,
 ) -> None:
+    sidecar = None
+    if public_provenance_file is not None:
+        sidecar = external_provenance_path(public_provenance_file, package_dir, source_output_dir)
+        if sidecar.exists():
+            raise AssertionError(f"internal provenance sidecar already exists: {sidecar}")
     provenance = build_provenance(
         package_dir,
         repo_root,
@@ -518,11 +667,24 @@ def write_provenance(
         toolchain_file,
         build_dir,
         source_output_dir,
+        public_provenance_file=sidecar,
     )
-    write_atomic_text(
-        package_dir / PROVENANCE_NAME,
-        json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
-    )
+    content = json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n"
+    if sidecar is None:
+        write_atomic_text(package_dir / PROVENANCE_NAME, content)
+        return
+    descriptor = os.open(sidecar, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        public = public_provenance_projection(provenance, hashlib.sha256(content.encode("utf-8")).hexdigest())
+        write_atomic_text(
+            package_dir / PROVENANCE_NAME,
+            json.dumps(public, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
+        )
+    except BaseException:
+        sidecar.unlink(missing_ok=True)
+        raise
 
 
 def verify_package(
@@ -530,11 +692,14 @@ def verify_package(
     *,
     repo_root: Path = ROOT,
     source_output_dir: Path | None = None,
+    artifact_only: bool = False,
+    internal_provenance: Path | None = None,
 ) -> None:
     expected_nodes = expected_inventory_nodes()
     actual_inventory = verify_exact_inventory(package_dir, expected_nodes)
     verify_checksums(package_dir, actual_inventory)
-    verify_provenance(package_dir, repo_root, source_output_dir)
+    verify_provenance(package_dir, repo_root, source_output_dir,
+                      artifact_only=artifact_only, internal_provenance=internal_provenance)
 
     missing = sorted(relative for relative in REQUIRED_FILES if not (package_dir / relative).is_file())
     if missing:
@@ -554,7 +719,8 @@ def verify_package(
 
     for relative, expected_needed in EXPECTED_LIBRARY_NEEDED.items():
         actual_needed = needed(package_dir / relative)
-        if actual_needed != expected_needed:
+        # Toolchains may emit the AArch64 loader as an additional DT_NEEDED entry.
+        if actual_needed - {"ld-linux-aarch64.so.1"} != expected_needed:
             raise AssertionError(
                 f"producer DT_NEEDED mismatch for {relative}: actual={sorted(actual_needed)} "
                 f"expected={sorted(expected_needed)}"
@@ -589,19 +755,14 @@ def verify_package(
             )
 
     version_getters = {
-        "lib/libicm42688.so.2.1.1": "icm42688_get_version",
-        "lib/libsc132.so.2.0.1": "sc132_get_version",
+        "lib/libicm42688.so.2.1.2": "icm42688_get_version",
+        "lib/libsc132.so.2.0.2": "sc132_get_version",
         "lib/libprrtsp.so.2.0.0": "prrtsp_get_version",
     }
     for relative, symbol in version_getters.items():
         if symbol not in dynamic_symbols(package_dir / relative):
             raise AssertionError(f"missing release version getter {symbol} in {relative}")
 
-    for real_relative, copies in EXPECTED_LIBRARY_COPIES.items():
-        expected_hash = sha256(package_dir / real_relative)
-        for copy_relative in copies:
-            if sha256(package_dir / copy_relative) != expected_hash:
-                raise AssertionError(f"producer copy drift: {copy_relative} != {real_relative}")
 
     for source_relative, package_relative in EXPECTED_SCRIPT_COPIES.items():
         if sha256(repo_root / source_relative) != sha256(package_dir / package_relative):
@@ -614,6 +775,13 @@ def main() -> int:
     parser.add_argument("--check-source", action="store_true")
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--write-provenance", action="store_true")
+    parser.add_argument(
+        "--artifact-only", action="store_true",
+        help="verify package bytes/ABI/topology only; does not attest source or build toolchain")
+    parser.add_argument("--internal-provenance", type=Path,
+                        help="external full v3 provenance required for strict public-package verification")
+    parser.add_argument("--public-provenance-file", type=Path,
+                        help="write full v3 to a new external sidecar and package only its public projection")
     parser.add_argument("--source-output-dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--compiler", default="")
@@ -621,8 +789,16 @@ def main() -> int:
     parser.add_argument("--toolchain-file", type=Path)
     parser.add_argument("--build-dir", type=Path)
     args = parser.parse_args()
+    if args.artifact_only and (args.check_source or args.write_provenance or args.write_manifest):
+        parser.error("--artifact-only cannot generate metadata or attest source")
+    if args.public_provenance_file and (not args.write_provenance or args.internal_provenance):
+        parser.error("--public-provenance-file requires --write-provenance and cannot accept --internal-provenance")
+    if args.internal_provenance and (args.check_source or args.write_provenance):
+        parser.error("--internal-provenance verifies existing public metadata only")
+    if args.check_source and args.public_provenance_file:
+        parser.error("--check-source cannot generate public provenance")
 
-    repo_root = args.repo_root.resolve()
+    repo_root = real_directory(args.repo_root)
     if args.check_source:
         capture_source_snapshot(repo_root)
 
@@ -630,7 +806,7 @@ def main() -> int:
         return 0
     if args.package_dir is None:
         raise SystemExit("package_dir is required unless --check-source is used")
-    package_dir = args.package_dir.resolve()
+    package_dir = real_directory(args.package_dir)
     if args.write_provenance:
         if not args.compiler or not args.triplet or args.toolchain_file is None or args.build_dir is None:
             raise SystemExit("--write-provenance requires --compiler, --triplet, --toolchain-file, and --build-dir")
@@ -642,6 +818,7 @@ def main() -> int:
             args.toolchain_file.resolve(),
             args.build_dir.resolve(),
             args.source_output_dir.resolve() if args.source_output_dir else package_dir,
+            public_provenance_file=args.public_provenance_file,
         )
     if args.write_manifest:
         write_manifest(package_dir)
@@ -649,14 +826,19 @@ def main() -> int:
         package_dir,
         repo_root=repo_root,
         source_output_dir=args.source_output_dir.resolve() if args.source_output_dir else None,
+        artifact_only=args.artifact_only,
+        internal_provenance=args.internal_provenance or args.public_provenance_file,
     )
-    print(f"Runtime ABI package verified: {package_dir}")
+    if args.artifact_only:
+        print(f"Runtime artifact verified (source/toolchain NOT attested): {package_dir}")
+    else:
+        print(f"Runtime ABI package verified: {package_dir}")
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (AssertionError, subprocess.CalledProcessError) as error:
+    except (AssertionError, OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Runtime ABI package verification failed: {error}", file=sys.stderr)
         raise SystemExit(1)

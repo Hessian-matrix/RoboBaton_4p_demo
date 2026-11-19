@@ -588,7 +588,7 @@ class FramePipeline::Impl {
   }
 
   bool Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(uint64_t timestamp_ns) const noexcept {
-    if (!Sc132TimestampsAreMonotonicRaw(options_) || options_.system_clock == nullptr) {
+    if (options_.system_clock == nullptr) {
       return false;
     }
     const uint64_t raw_start_ns = options_.system_clock->monotonic_raw_start_ns();
@@ -602,9 +602,6 @@ class FramePipeline::Impl {
   }
 
   uint64_t MapSc132TimestampNs(uint64_t timestamp_ns) const {
-    if (!Sc132TimestampsAreMonotonicRaw(options_)) {
-      return timestamp_ns;
-    }
     if (Sc132SoftwareGpioTimestampLooksLikeRealtimeFallback(timestamp_ns)) {
       // software_gpio 应输出 MONOTONIC_RAW；接近 REALTIME epoch 说明底层回退到了系统时钟，继续套用 RAW 偏移会把相机时间写到错误 epoch。
       throw std::runtime_error("SC132 software GPIO timestamp is not MONOTONIC_RAW");

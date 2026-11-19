@@ -181,11 +181,19 @@ class SerialPort {
     if (fd_ < 0) {
       ThrowErrno("failed to open " + port_);
     }
-    Configure(baud_rate);
+    try {
+      Configure(baud_rate);
+    } catch (...) {
+      RestoreSettings();
+      close(fd_);
+      fd_ = -1;
+      throw;
+    }
   }
 
   ~SerialPort() {
     if (fd_ >= 0) {
+      RestoreSettings();
       close(fd_);
     }
   }
@@ -214,7 +222,12 @@ class SerialPort {
 
     const int poll_result = poll(&descriptor, 1, timeout_ms);
     if (poll_result < 0) {
+      // 被信号打断后返回主循环，由 stop 标志决定退出或继续接收。
+      if (errno == EINTR) return {};
       ThrowErrno("failed to poll " + port_);
+    }
+    if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      throw std::runtime_error("serial port disconnected or failed: " + port_);
     }
     if (poll_result == 0 || (descriptor.revents & POLLIN) == 0) {
       return {};
@@ -223,6 +236,7 @@ class SerialPort {
     std::vector<uint8_t> data(max_bytes, 0);
     const ssize_t bytes = read(fd_, data.data(), data.size());
     if (bytes < 0) {
+      if (errno == EINTR) return {};
       ThrowErrno("failed to read " + port_);
     }
     data.resize(static_cast<size_t>(bytes));
@@ -235,6 +249,8 @@ class SerialPort {
     if (tcgetattr(fd_, &tty) != 0) {
       ThrowErrno("failed to get termios for " + port_);
     }
+    original_settings_ = tty;
+    settings_saved_ = true;
 
     // 串口使用 8N1 raw 模式并关闭硬件流控，便于直接验证原始字节链路。
     cfmakeraw(&tty);
@@ -256,8 +272,16 @@ class SerialPort {
     }
   }
 
+  void RestoreSettings() noexcept {
+    if (!settings_saved_) return;
+    // 设备断连时可能无法恢复属性；析构清理不抛异常。
+    while (tcsetattr(fd_, TCSANOW, &original_settings_) != 0 && errno == EINTR) {}
+  }
+
   std::string port_;
   int fd_ = -1;
+  termios original_settings_{};
+  bool settings_saved_ = false;
 };
 
 std::vector<uint8_t> BuildPayload(const Options& options, uint32_t sequence) {

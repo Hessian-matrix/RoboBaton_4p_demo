@@ -501,6 +501,8 @@ void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
   }
 
   const size_t jpeg_start = payload->size();
+  size_t bitstream_size = 0U;
+  bool header_checked = false;
   for (size_t output_count = 0U; output_count < kMaxJpegOutputBuffers; ++output_count) {
     media_codec_buffer_t output{};
     media_codec_output_buffer_info_t info{};
@@ -516,19 +518,49 @@ void X5JpegEncoder::EncodeAppend(const X5JpegEncodeRequest& request,
         throw std::runtime_error("hardware JPEG malformed output: missing payload size");
       }
       if (output_size > impl_->bitstream_capacity ||
-          current_jpeg_size > impl_->bitstream_capacity - output_size) {
+          bitstream_size > impl_->bitstream_capacity - output_size) {
         throw std::runtime_error("hardware JPEG malformed output: payload size exceeds bounds");
       }
+      bitstream_size += output_size;
       if (output.vstream_buf.vir_ptr == nullptr) {
         throw std::runtime_error("hardware JPEG malformed output: missing SOI");
       }
-      payload->insert(payload->end(), output.vstream_buf.vir_ptr,
-                      output.vstream_buf.vir_ptr + output_size);
+      const uint8_t* output_data = output.vstream_buf.vir_ptr;
+      size_t header_bytes = 0U;
+      if (!header_checked) {
+        // Buffer only the ten-byte initial header before copying the full slice.
+        // CodaJ12 emits APP9(length=4, frameIdx[15:0]) immediately after SOI.
+        // T.81 B.2.4.6 recommends removing private APP data at interchange;
+        // FFmpeg requires at least four identifier bytes, not this frame index.
+        // The header may span codec slices; no image-sized erase or copy occurs.
+        header_bytes = std::min(10U - current_jpeg_size, output_size);
+        if (header_bytes != output_size) {
+          payload->reserve(payload->size() + output_size);
+        }
+        payload->insert(payload->end(), output_data, output_data + header_bytes);
+        if (payload->size() - jpeg_start >= 10U) {
+          const uint8_t* header = payload->data() + jpeg_start;
+          if (header[0] == 0xFFU && header[1] == 0xD8U &&
+              header[2] == 0xFFU && header[3] == 0xE9U &&
+              header[4] == 0U && header[5] == 4U && header[8] == 0xFFU) {
+            std::memcpy(payload->data() + jpeg_start + 2U, header + 8U, 2U);
+            payload->resize(jpeg_start + 4U);
+          }
+          header_checked = true;
+        }
+      }
+      payload->insert(payload->end(), output_data + header_bytes, output_data + output_size);
       size_t payload_size = 0U;
-      const bool complete = TryResolveJpegPayloadLength(
-          payload->data() + jpeg_start, payload->size() - jpeg_start,
-          impl_->bitstream_capacity, &payload_size);
       const bool last_slice = IsLastJpegOutputSlice(info);
+      const size_t collected_size = payload->size() - jpeg_start;
+      const uint8_t* collected = payload->data() + jpeg_start;
+      const bool awaiting_frame_header = !header_checked && collected_size >= 6U &&
+          collected[0] == 0xFFU && collected[1] == 0xD8U &&
+          collected[2] == 0xFFU && collected[3] == 0xE9U &&
+          collected[4] == 0U && collected[5] == 4U;
+      const bool complete = (collected_size >= 4U || last_slice) &&
+          !awaiting_frame_header && TryResolveJpegPayloadLength(
+              collected, collected_size, impl_->bitstream_capacity, &payload_size);
       if (!complete && last_slice) {
         throw std::runtime_error("hardware JPEG malformed output: missing EOI");
       }

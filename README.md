@@ -25,6 +25,10 @@ scripts/    构建、打包和运行包验证入口（含 `build_mosaic_rtsp_dem
 
 本仓库、`demo/`、预编译库和公开文档按同一发布组合使用。请先确认 `VERSION`、仓库 tag 和运行包 `manifest.sha256`，不要混用不同版本的源码、头文件、动态库和运行包。
 
+当前 `1.3.4` 候选构建的 real SO 为 `libicm42688.so.2.1.2` 和 `libsc132.so.2.0.2`，SONAME 分别仍为 `libicm42688.so.2`、`libsc132.so.2`，ABI 不变；PRRTSP 修复 H.264 access unit 末包 marker，文件名 `libprrtsp.so.2.0.0`、SONAME/ABI 不变。软件 `VERSION` 与 `*_get_version()` 报告 `1.3.4`；请同时核验真实库文件名和整包 `manifest.sha256`。正式发布状态见文档站的发布与支持页面。
+
+`lib/` 与 `demo/lib/` 每库只有一个真实 ELF；`.so -> .so.2 -> 具体版本文件` 为两级同目录相对链接。用 tar、`cp -a` 或 `rsync -a` 保留链接；`sha256sum -c` 只核验内容。部署前运行 `python3 scripts/verify_runtime_package.py --artifact-only demo`，检查包内容、ABI、精确链接和公开来源摘要的工件绑定；此模式不证明来源提交、工具链或签名。校验下载归档时，把 `demo` 换为解包后的运行包目录。详见 [部署、升级与回滚](https://4p-docs.readthedocs.io/zh-cn/latest/development/deployment-and-upgrade.html)。
+
 板端可查询程序和运行库版本：
 
 ```bash
@@ -71,6 +75,8 @@ cd /root/demo
 ./cam_demo
 ```
 
+相机触发只支持 `software_gpio`，`--trigger-mode software_gpio` 为默认值，使用 GPIO417 软件触发。其他值在访问硬件前被拒绝，无别名或回退；frame-set skew/timeout、载荷和时间戳合同不变。
+
 ### Mosaic RTSP Demo
 
 四路拼接 RTSP 示例：
@@ -94,6 +100,8 @@ cd /root/demo
 ```bash
 ./serial_port_demo
 ```
+
+UART 在等待接收期间收到 `SIGINT`（Ctrl+C）或 `SIGTERM` 时正常退出，返回码为 `0`；信号打断的等待不作为串口 I/O 故障。正常结束或异常清理时恢复打开前的 termios 配置；设备断连/终止性 poll 错误仍返回非零，断连后设备可能无法接受配置恢复。
 
 首次上电、网络、部署前置条件和 `cam-service` 要求见 [首次上电与开机使用](https://4p-docs.readthedocs.io/zh-cn/latest/getting-started/first-boot.html) 和 [快速开始](https://4p-docs.readthedocs.io/zh-cn/latest/quick-start.html)。
 
@@ -125,6 +133,8 @@ cd /root/demo
 
 ROS1 bag 与 MP4 互斥；MP4 只支持 H.264 和完整四路，frame skip 只适用于 ROS1 bag。完整输出文件、停止顺序、完整性判定、partial/recovery 和离线转换见 [数据保存](https://4p-docs.readthedocs.io/zh-cn/latest/usage/save-data-guide.html)。
 
+ROS1 bag 的 JPEG 仅移除 X5 JPU 紧随 SOI 的私有 APP9 帧序号段；其余 APP metadata、编码表和图像 scan 字节保持不变，避免通用解码器的 APP 字段兼容性告警。
+
 ## 从源码构建
 
 本仓库在 Ubuntu 22.04 x86_64 开发机交叉编译，X5 板端运行生成的运行包。构建前准备匹配的 `./include`、`./lib`、`x5_4cam_cross_toolchain_20261009` 工具包和主机 CMake；下载发布状态与主机安装步骤见下方源码编译页。
@@ -137,7 +147,7 @@ cmake -S . -B build_x5 \
 cmake --build build_x5 --parallel 4
 ```
 
-维护者刷新完整运行包时使用：
+下面的命令刷新供本地验证的完整 `demo/`，并在包内保留构建来源信息；不要发布这个本地包。
 
 ```bash
 scripts/package_runtime.sh --toolchain-file "$TOOLCHAIN_FILE"

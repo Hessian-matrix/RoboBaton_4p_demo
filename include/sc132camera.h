@@ -72,9 +72,9 @@ typedef struct sc132_frame_set {
 
 /*
  * DMA 帧只允许只读访问；以下合同明确时间域、借用引用和跨回调保留规则。
- * timestamp_ns 单位为 ns。software_gpio 帧组使用 CLOCK_MONOTONIC_RAW 的 GPIO417
- * 上升沿时间，组内各路完全相同；其他模式优先使用 sensor/VIO 随帧时间，缺失时退回
- * 系统出帧时间。所有模式均不保证与墙上时钟同域。
+ * 仅支持 software_gpio；SC132_TRIGGER_MODE 未设置或为空时使用该模式，其他值在硬件访问前拒绝。
+ * timestamp_ns 单位为 ns，使用 CLOCK_MONOTONIC_RAW 的 GPIO417 上升沿时间，组内各路完全相同。
+ * 该时间域不是墙上时钟；转换为系统时间由消费者负责。
  * frame_set 及 item 数组仅在回调期间有效；items[i].frame 是 borrowed reference。
  * 消费者不得直接对库持有的 callback reference 调用 sc132_frame_release；若要跨 callback
  * 保存 frame，必须在回调内先 sc132_frame_retain，并在最终使用完成后自行 sc132_frame_release。

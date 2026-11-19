@@ -21,20 +21,47 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.1")
+set(ICM42688_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.2")
 if(NOT EXISTS "${ICM42688_SO}")
-  message(FATAL_ERROR "Missing ${ICM42688_SO}. Run the canonical producer build so libicm42688.so.2.1.1 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${ICM42688_SO}. Provide the matching real SO and relative .so.2/.so links in this demo's lib/ directory.")
 endif()
 
-set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.1")
+set(SC132_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.2")
 if(NOT EXISTS "${SC132_SO}")
-  message(FATAL_ERROR "Missing ${SC132_SO}. Run the canonical producer build so libsc132.so.2.0.1 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${SC132_SO}. Provide the matching real SO and relative .so.2/.so links in this demo's lib/ directory.")
 endif()
 
 set(PRRTSP_SO "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0")
 if(NOT EXISTS "${PRRTSP_SO}")
-  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Run the canonical producer build so libprrtsp.so.2.0.0 and compatibility copies exist in this demo's lib/ directory.")
+  message(FATAL_ERROR "Missing ${PRRTSP_SO}. Provide the matching real SO and relative .so.2/.so links in this demo's lib/ directory.")
 endif()
+
+if(IS_SYMLINK "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+  message(FATAL_ERROR "Producer library directory must not be a symlink")
+endif()
+foreach(real_so "${ICM42688_SO}" "${SC132_SO}" "${PRRTSP_SO}")
+  if(IS_SYMLINK "${real_so}")
+    message(FATAL_ERROR "Real producer ELF must be a regular file: ${real_so}")
+  endif()
+  get_filename_component(real_name "${real_so}" NAME)
+  string(REGEX REPLACE "\\.so\\..*$" ".so" linker_name "${real_name}")
+  set(soname_name "${linker_name}.2")
+  foreach(alias "${soname_name}" "${linker_name}")
+    set(link_path "${CMAKE_CURRENT_SOURCE_DIR}/lib/${alias}")
+    if(NOT IS_SYMLINK "${link_path}")
+      message(FATAL_ERROR "Required producer symlink missing: ${link_path}")
+    endif()
+    file(READ_SYMLINK "${link_path}" link_target)
+    if(alias STREQUAL soname_name)
+      set(expected_target "${real_name}")
+    else()
+      set(expected_target "${soname_name}")
+    endif()
+    if(NOT link_target STREQUAL expected_target)
+      message(FATAL_ERROR "Invalid producer symlink: ${link_path} -> ${link_target}")
+    endif()
+  endforeach()
+endforeach()
 
 set(X5_USR_X5_INCLUDE_DIR "" CACHE PATH "X5 usr_x5 include directory that provides hbn_api.h")
 if(NOT X5_USR_X5_INCLUDE_DIR AND CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/usr_x5/include/hbn_api.h")
@@ -256,10 +283,10 @@ install(TARGETS imu_reader_demo serial_port_demo cam_demo sensor_demo mosaic_rts
 )
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.1"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2.1.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libicm42688.so"
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.1"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2.0.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so.2"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libsc132.so"
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/libprrtsp.so.2.0.0"
