@@ -8,7 +8,7 @@ mod transport;
 
 include!(concat!(env!("OUT_DIR"), "/identity.rs"));
 
-use std::{fs::File, io::{self, Read}, net::{TcpListener, UdpSocket}, os::fd::{AsRawFd, FromRawFd, OwnedFd}, os::unix::net::UnixDatagram, sync::{Arc, atomic::{AtomicU32, AtomicU64, Ordering}}, time::{Duration, Instant}};
+use std::{fs::File, io::{self, Read}, net::TcpListener, os::fd::{AsRawFd, FromRawFd, OwnedFd}, os::unix::net::UnixDatagram, sync::{Arc, atomic::{AtomicU32, AtomicU64, Ordering}}, time::{Duration, Instant}};
 use serde::Deserialize;
 use tokio::{io::unix::AsyncFd, sync::watch};
 
@@ -99,7 +99,8 @@ fn run()->Result<(),Box<dyn std::error::Error>> {
     let c=Arc::new(c);
     let video=unsafe{UnixDatagram::from_raw_fd(4)};let imu=unsafe{UnixDatagram::from_raw_fd(5)};let control=unsafe{UnixDatagram::from_raw_fd(6)};let life=unsafe{OwnedFd::from_raw_fd(7)};
     let http=TcpListener::bind((c.listen_address.as_str(),c.port))?;
-    let udp=UdpSocket::bind((c.listen_address.as_str(),c.ice_port))?;let tcp=TcpListener::bind((c.listen_address.as_str(),c.ice_port))?;
+    let udp=media::bind_ice_udp(c.listen_address.parse()?,c.ice_port)?;
+    let tcp=TcpListener::bind((c.listen_address.as_str(),c.ice_port))?;
     http.set_nonblocking(true)?;imu.set_nonblocking(true)?;control.set_nonblocking(true)?;
     let flags=unsafe{libc::fcntl(life.as_raw_fd(),libc::F_GETFL)};
     if flags<0 || unsafe{libc::fcntl(life.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}<0 {return Err(io::Error::last_os_error().into());}

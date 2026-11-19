@@ -23,21 +23,22 @@ fn error(e:ApiError)->Response<ResponseBody>{
     response(e.status,"application/json",serde_json::to_vec(&json!({"error":detail})).unwrap())
 }
 fn text_header<'a>(req:&'a Request<Incoming>,name:&str)->Option<&'a str>{req.headers().get(name).and_then(|v|v.to_str().ok())}
-fn validate(req:&Request<Incoming>,local:SocketAddr,port:u16)->Result<(),ApiError>{
+fn validate(req:&Request<Incoming>,local:SocketAddr,port:u16)->Result<std::net::Ipv4Addr,ApiError>{
     let bad_host=||ApiError::new(400,"host","invalid host or query");
     let host=text_header(req,"host").ok_or_else(bad_host)?;
-    if !local.is_ipv4()||local.ip().is_unspecified()||local.port()!=port||req.uri().query().is_some(){return Err(bad_host());}
+    let SocketAddr::V4(local) = local else { return Err(bad_host()); };
+    if local.ip().is_unspecified()||local.port()!=port||req.uri().query().is_some(){return Err(bad_host());}
     let ip=local.ip().to_string();let with_port=format!("{ip}:{port}");if host!=ip && host!=with_port {return Err(bad_host());}
     if let Some(origin)=text_header(req,"origin"){if origin!=format!("http://{host}"){return Err(ApiError::new(400,"origin","same origin required"));}}
     if text_header(req,"sec-fetch-site")==Some("cross-site"){return Err(ApiError::new(400,"origin","same origin required"));}
-    Ok(())
+    Ok(*local.ip())
 }
 async fn read_body(req:Request<Incoming>,limit:usize)->Result<Bytes,ApiError>{
     let read=async {let mut body=req.into_body();let mut out=Vec::new();while let Some(frame)=body.frame().await{let frame=frame.map_err(|_|ApiError::new(400,"body","request body unavailable"))?;if let Ok(data)=frame.into_data(){if data.len()>limit.saturating_sub(out.len()){return Err(ApiError::new(400,"body","request body exceeds limit"));}out.extend_from_slice(&data);}}Ok(Bytes::from(out))};
     tokio::time::timeout(Duration::from_secs(15),read).await.map_err(|_|ApiError::new(400,"body","request body timeout"))?
 }
 async fn route(s:Arc<Service>,req:Request<Incoming>,local:SocketAddr)->Result<Response<ResponseBody>,ApiError>{
-    validate(&req,local,s.config.port)?;
+    let local_ip = validate(&req,local,s.config.port)?;
     let method=req.method().clone();let path=req.uri().path();
     let require=|expected:&str|->Result<(),ApiError>{if method.as_str()==expected{Ok(())}else{Err(ApiError::new(405,"method",format!("{expected} required")))}};
     match path {
@@ -45,7 +46,7 @@ async fn route(s:Arc<Service>,req:Request<Incoming>,local:SocketAddr)->Result<Re
         "/api/v1/status"=>{require("GET")?;let bits=s.source_bits.load(Ordering::Relaxed);let at=s.source_at.load(Ordering::Acquire);let stale=at==0||s.now().saturating_sub(at)>500_000_000;
             let mut result=json!({"application_session_id":s.config.generation.to_string(),"telemetry":s.telemetry.state(),"rtsp":if !s.config.rtsp_enabled{"disabled"}else if stale{"stale"}else if bits&16!=0{"degraded"}else{"enabled"}});
             for(i,key)in ["capture","encoding","saving"].into_iter().enumerate(){result[key]=(if stale{"stale"}else if bits&8!=0{"degraded"}else if bits&(1<<i)!=0{"flowing"}else{"idle"}).into();}
-            result["cameras"]=s.media.cameras().into_iter().map(|c|json!({"camera_id":c.camera_id,"web":c.web,"ipc_drops":c.ipc_drops.saturating_add(s.video_drops[c.camera_id].load(Ordering::Relaxed)).to_string()})).collect::<Vec<_>>().into();Ok(json_response(result))},
+            result["cameras"]=s.media.cameras().into_iter().map(|c|json!({"camera_id":c.camera_id,"web":c.web,"ipc_drops":c.ipc_drops.saturating_add(s.video_drops[c.camera_id].load(Ordering::Relaxed)).to_string(),"preview_queue":c.preview_queue})).collect::<Vec<_>>().into();Ok(json_response(result))},
         "/api/v1/imu/events"=>{require("GET")?;let events=s.telemetry.subscribe()?;let mut r=Response::new(Events(events).boxed_unsync());r.headers_mut().insert("Content-Type","text/event-stream".parse().unwrap());r.headers_mut().insert("X-Accel-Buffering","no".parse().unwrap());Ok(r)},
         "/api/v1/recording"=>{
             if method==Method::GET{let(body,age)=s.recording.get()?;let mut r=response(200,"application/json",body);r.headers_mut().insert("X-Recording-Status-Age-Ms",age.to_string().parse().unwrap());return Ok(r);}
@@ -62,7 +63,7 @@ async fn route(s:Arc<Service>,req:Request<Incoming>,local:SocketAddr)->Result<Re
             #[derive(serde::Deserialize)]#[serde(deny_unknown_fields)]struct Offer{#[serde(rename="type")]kind:String,sdp:String}
             let body=read_body(req,96*1024).await?;let offer:Offer=serde_json::from_slice(&body).map_err(|_|ApiError::new(400,"offer","one receive-only video offer required"))?;
             if offer.kind!="offer"{return Err(ApiError::new(400,"offer","one receive-only video offer required"));}
-            let answer=s.media.create(camera,offer.sdp).await?;let location=format!("/api/v1/video-sessions/{}",answer.session_id);let mut r=response(201,"application/json",serde_json::to_vec(&answer).unwrap());r.headers_mut().insert("Location",location.parse().unwrap());Ok(r)
+            let answer=s.media.create(camera,local_ip,offer.sdp).await?;let location=format!("/api/v1/video-sessions/{}",answer.session_id);let mut r=response(201,"application/json",serde_json::to_vec(&answer).unwrap());r.headers_mut().insert("Location",location.parse().unwrap());Ok(r)
         },
         _ if path.starts_with("/api/v1/video-sessions/")=>{require("DELETE")?;let id=path.trim_start_matches("/api/v1/video-sessions/");if id.len()!=32||!id.bytes().all(|c|c.is_ascii_digit()||(b'a'..=b'f').contains(&c)){return Err(ApiError::new(404,"session","unknown session"));}s.media.delete(id);Ok(response(204,"application/json",Bytes::new()))},
         _=>{let asset=match path{

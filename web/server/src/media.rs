@@ -29,9 +29,12 @@ const MAX_TCP: usize = 32;
 const MAX_REMOTE_ENDPOINTS: usize = 64;
 const TCP_BYTES: usize = 64 * 1024;
 const RTP_PAYLOAD: usize = 1200;
-// str0m's cache and the RFC4571 output queue are independently bounded and
-// reserved even when they retain packet Arcs after the source frame is gone.
-const TRANSPORT_RESERVE: usize = 512 * 1400 + TCP_BYTES;
+const UDP_RETRY: Duration = Duration::from_millis(1);
+const INPUT_SLICE: Duration = Duration::from_millis(1);
+const REPAIR_AGE: Duration = Duration::from_millis(200);
+const MAX_CACHED_PACKET: usize = 1400;
+// Reserve transport storage independently of the source frame budget.
+const TRANSPORT_RESERVE: usize = 512 * MAX_CACHED_PACKET + TCP_BYTES + MAX_CACHED_PACKET;
 const VIDEO: Token = Token(0);
 const UDP: Token = Token(1);
 const LISTENER: Token = Token(2);
@@ -51,6 +54,15 @@ pub struct CameraStatus {
     pub camera_id: usize,
     pub web: &'static str,
     pub ipc_drops: u64,
+    pub preview_queue: PreviewQueue,
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct PreviewQueue {
+    pub frames: usize,
+    pub oldest_ms: u64,
+    pub peak_sent_age_ms: u64,
+    pub udp_backpressure: u64,
 }
 
 #[derive(Clone)]
@@ -74,6 +86,7 @@ struct Snapshot {
 }
 struct Create {
     camera: usize,
+    local_ip: Ipv4Addr,
     offer: String,
     reply: oneshot::Sender<Result<SessionAnswer, ApiError>>,
     cancelled: Arc<AtomicBool>,
@@ -95,10 +108,8 @@ impl MediaHandle {
         video.set_nonblocking(true)?;
         udp.set_nonblocking(true)?;
         tcp.set_nonblocking(true)?;
-        let enabled: libc::c_int = 1;
-        if unsafe { libc::setsockopt(udp.as_raw_fd(), libc::IPPROTO_IP, libc::IP_PKTINFO, (&enabled as *const libc::c_int).cast(), std::mem::size_of_val(&enabled) as _) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        enable_udp_pktinfo(&udp)?;
+        let udp_addr = udp.local_addr()?;
         let poll = Poll::new()?;
         for (fd, token) in [(video.as_raw_fd(), VIDEO), (udp.as_raw_fd(), UDP), (tcp.as_raw_fd(), LISTENER)] {
             poll.registry().register(&mut SourceFd(&fd), token, Interest::READABLE)?;
@@ -108,13 +119,13 @@ impl MediaHandle {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false), demand: AtomicU32::new(0), finished,
             state: Mutex::new(Snapshot {
-                cameras: std::array::from_fn(|i| CameraStatus { camera_id: i, web: initial_state(&config, i), ipc_drops: 0 }),
+                cameras: std::array::from_fn(|i| CameraStatus { camera_id: i, web: initial_state(&config, i), ipc_drops: 0, preview_queue: PreviewQueue::default() }),
                 ids: std::array::from_fn(|_| None), deleted: Vec::with_capacity(8),
             }),
         });
         let (commands, receiver) = mpsc::sync_channel(32);
         let reactor = Reactor {
-            config, video, udp, listener: tcp, poll, commands: receiver, shared: shared.clone(),
+            config, video, udp, udp_addr, listener: tcp, poll, commands: receiver, shared: shared.clone(),
             sources: std::array::from_fn(|_| Source::default()),
             sessions: std::array::from_fn(|_| None), tcp: std::array::from_fn(|_| None),
             budget: Arc::new(AtomicUsize::new(0)), next_ssrc: rand::random(),
@@ -122,12 +133,12 @@ impl MediaHandle {
         let thread = std::thread::Builder::new().name("web-media".into()).spawn(move || reactor.run())?;
         Ok(Self { inner: Arc::new(HandleInner { shared, commands, waker, thread: Mutex::new(Some(thread)) }) })
     }
-    pub async fn create(&self, camera: usize, offer: String) -> Result<SessionAnswer, ApiError> {
+    pub async fn create(&self, camera: usize, local_ip: Ipv4Addr, offer: String) -> Result<SessionAnswer, ApiError> {
         if self.inner.shared.stop.load(Ordering::Acquire) { return Err(stopping()); }
         let (reply, result) = oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut cancel = CancelCreate { cancelled: cancelled.clone(), waker: self.inner.waker.clone(), armed: true };
-        self.inner.commands.try_send(Create { camera, offer, reply, cancelled }).map_err(|e| match e {
+        self.inner.commands.try_send(Create { camera, local_ip, offer, reply, cancelled }).map_err(|e| match e {
             mpsc::TrySendError::Full(_) => ApiError::new(429, "limit", "video reader limit reached"),
             mpsc::TrySendError::Disconnected(_) => stopping(),
         })?;
@@ -203,9 +214,15 @@ impl Source {
         self.drops = self.drops.saturating_add(1);
     }
 }
-struct Sending { frame: Arc<Frame>, packet: usize, timestamp: u32, failed: bool, remaining: usize }
+struct PendingUdp { packet: Transmit, retry_at: Instant }
+struct Sending {
+    frame: Arc<Frame>, packet: usize, timestamp: u32, failed: bool,
+    remaining: usize, udp: Option<PendingUdp>,
+}
 struct Session {
     id: String, camera: usize, created: Instant,
+    local_ip: Ipv4Addr,
+    udp_ifindex: libc::c_int,
     reply: Option<oneshot::Sender<Result<SessionAnswer, ApiError>>>, offer: Option<String>,
     cancelled: Arc<AtomicBool>,
     rtc: Option<Rtc>, timeout: Instant, mid: Option<Mid>, pt: Pt, nack: bool,
@@ -214,7 +231,9 @@ struct Session {
     remote_endpoints: [Option<(Protocol, SocketAddr)>; MAX_REMOTE_ENDPOINTS],
     connected: Option<Instant>, last_media: Option<Instant>,
     queue: VecDeque<Arc<Frame>>, bytes: usize, sending: Option<Sending>,
+    peak_sent_age_ms: u64, udp_backpressure: u64,
     need_idr: bool, previous: u64, base_ns: Option<u64>, seq: u64,
+    repair_frames: VecDeque<(u32, Instant)>,
     pace_next: Instant, closing: bool, congestion: u32,
     budget: Arc<AtomicUsize>, reserved: usize,
 }
@@ -223,7 +242,8 @@ impl Drop for Session {
 }
 impl Session {
     fn lose(&mut self) {
-        if self.sending.as_ref().is_some_and(|s| s.remaining != 0) { self.closing = true; }
+        // Locally retained UDP ciphertext can be discarded without closing the transport.
+        if self.sending.as_ref().is_some_and(|s| s.remaining > usize::from(s.udp.is_some())) { self.closing = true; }
         self.need_idr = true;
         self.queue.clear();
         self.bytes = 0;
@@ -231,7 +251,8 @@ impl Session {
     }
     fn enqueue(&mut self, frame: &Arc<Frame>, limit: usize, now: Instant) {
         if self.connected.is_none() || self.closing { return; }
-        if self.queue.len() + usize::from(self.sending.is_some()) >= limit || self.bytes + frame.bytes > SESSION_BYTES || now.duration_since(frame.arrived) > MAX_AGE {
+        if now.duration_since(frame.arrived) >= MAX_AGE { self.lose(); return; }
+        if self.queue.len() + usize::from(self.sending.is_some()) >= limit || self.bytes + frame.bytes > SESSION_BYTES {
             self.lose();
             self.congestion = self.congestion.saturating_add(1);
             if self.congestion >= 20 { self.closing = true; return; }
@@ -243,9 +264,71 @@ impl Session {
         self.bytes += frame.bytes;
         self.queue.push_back(frame.clone());
     }
+
+    fn accept_primary(&mut self, now: Instant, udp: bool) {
+        let Some(sending) = self.sending.as_mut().filter(|s| s.remaining != 0) else { return; };
+        sending.remaining -= 1;
+        if sending.failed || sending.remaining != 0 || sending.packet != sending.frame.packets.len() { return; }
+        self.peak_sent_age_ms = self.peak_sent_age_ms.max(now.duration_since(sending.frame.arrived).as_millis() as u64);
+        self.last_media = Some(now);
+        self.congestion = 0;
+        let deadline = sending.frame.arrived + MAX_AGE;
+        if udp && self.nack && !self.manual_nack && now < deadline {
+            if self.repair_frames.len() >= 32 { self.repair_frames.pop_front(); }
+            self.repair_frames.push_back((sending.timestamp, deadline));
+        }
+    }
+
+    fn can_repair(&self, timestamp: u32, now: Instant) -> bool {
+        self.repair_frames.iter().any(|(ts, deadline)| *ts == timestamp && now < *deadline)
+    }
+
+    fn cache_nack(&mut self, packet: &Transmit, now: Instant, deadline: Instant) {
+        if !self.manual_nack || now >= deadline || packet.contents.len() > MAX_CACHED_PACKET { return; }
+        while self.nack_cache.len() >= 512 || self.nack_cache.front().is_some_and(|p| now >= p.deadline) {
+            self.nack_cache.pop_front();
+        }
+        self.nack_cache.push_back(CachedPacket { sequence: be16(&packet.contents, 2), deadline: deadline.min(now + REPAIR_AGE),
+            protocol: packet.proto, source: packet.source, destination: packet.destination, bytes: packet.contents.to_vec() });
+    }
+
+    fn fail_primary(&mut self) {
+        self.need_idr = true;
+        self.queue.clear();
+        self.bytes = self.sending.as_ref().map_or(0, |s| s.frame.bytes);
+        if let Some(sending) = self.sending.as_mut() {
+            sending.failed = true;
+            sending.remaining = sending.remaining.saturating_sub(1);
+        }
+    }
+
+    fn submit_primary_udp(&mut self, packet: Transmit, clock: impl Fn() -> Instant, send: impl FnOnce(&Transmit) -> io::Result<usize>) {
+        let Some(sending) = self.sending.as_mut().filter(|s| s.remaining != 0) else { return; };
+        let deadline = sending.frame.arrived + MAX_AGE;
+        let now = clock();
+        if self.closing || sending.failed || sending.udp.is_some() || now >= deadline {
+            self.fail_primary();
+            return;
+        }
+        match send(&packet) {
+            Ok(n) if n == packet.contents.len() => {
+                let now = clock();
+                self.cache_nack(&packet, now, deadline);
+                self.accept_primary(now, true);
+            }
+            Err(error) if retryable_udp(&error) && packet.contents.len() <= MAX_CACHED_PACKET => {
+                // Hold only the original ciphertext. Do not advance RTP or the frame deadline.
+                self.udp_backpressure = self.udp_backpressure.saturating_add(1);
+                sending.udp = Some(PendingUdp { packet, retry_at: now + UDP_RETRY });
+            }
+            Ok(_) => self.fail_primary(),
+            Err(error) if udp_loss(&error) => self.fail_primary(),
+            Err(_) => self.closing = true,
+        }
+    }
 }
 struct CachedPacket {
-    sequence: u16, created: Instant, protocol: Protocol,
+    sequence: u16, deadline: Instant, protocol: Protocol,
     source: SocketAddr, destination: SocketAddr, bytes: Vec<u8>,
 }
 struct PendingWrite {
@@ -260,6 +343,7 @@ struct TcpPeer {
 }
 struct Reactor {
     config: Arc<Config>, video: UnixDatagram, udp: UdpSocket, listener: TcpListener,
+    udp_addr: SocketAddr,
     poll: Poll, commands: Receiver<Create>, shared: Arc<Shared>,
     sources: [Source; 4], sessions: [Option<Session>; 8], tcp: [Option<TcpPeer>; MAX_TCP],
     budget: Arc<AtomicUsize>, next_ssrc: u32,
@@ -269,6 +353,7 @@ impl Reactor {
         let mut events = Events::with_capacity(64);
         let mut video = vec![0u8; 80 + CHUNK];
         let mut network = [0u8; 65536];
+        let mut first = 0;
         while !self.shared.stop.load(Ordering::Acquire) {
             let now = Instant::now();
             self.commands(now);
@@ -278,7 +363,8 @@ impl Reactor {
             for index in 0..MAX_TCP {
                 if self.tcp[index].is_some() { busy |= self.service_tcp(index); }
             }
-            self.maintain(Instant::now());
+            self.maintain(Instant::now(), first);
+            first = (first + 1) % self.sessions.len();
             self.publish(Instant::now());
             let now = Instant::now();
             let mut next = now + Duration::from_millis(20);
@@ -288,6 +374,9 @@ impl Reactor {
                     // Batch due packets on one 2ms reactor wake instead of a
                     // timer/task notification for each RTP fragment.
                     next = next.min(now + Duration::from_millis(2));
+                }
+                if let Some(pending) = session.sending.as_ref().and_then(|s| s.udp.as_ref()) {
+                    next = next.min(pending.retry_at);
                 }
             }
             let wait = if busy { Duration::ZERO } else { next.saturating_duration_since(now) };
@@ -301,6 +390,7 @@ impl Reactor {
         self.shared.demand.store(0, Ordering::Release);
         self.shared.finished.send_replace(true);
     }
+
 
     fn commands(&mut self, now: Instant) {
         let deleted = {
@@ -332,6 +422,13 @@ impl Reactor {
                 let _ = command.reply.send(Err(ApiError::new(429, "limit", "video reader limit reached")));
                 continue;
             };
+            let udp_ifindex = match local_ifindex(command.local_ip) {
+                Ok(index) => index,
+                Err(_) => {
+                    let _ = command.reply.send(Err(ApiError::new(503, "network", "local ICE interface unavailable")));
+                    continue;
+                }
+            };
             if !reserve(&self.budget, TRANSPORT_RESERVE) {
                 let _ = command.reply.send(Err(ApiError::new(503, "media", "media payload budget exhausted")));
                 continue;
@@ -344,13 +441,17 @@ impl Reactor {
             let rtx_ssrc = self.allocate_ssrc();
             self.sessions[index] = Some(Session {
                 cancelled: command.cancelled,
+                local_ip: command.local_ip,
+                udp_ifindex,
                 id, camera: command.camera, created: now, reply: Some(command.reply), offer: Some(command.offer),
                 rtc: None, timeout: now + HANDSHAKE, mid: None, pt: 96.into(), nack: false,
                 manual_nack: false, nack_cache: VecDeque::new(),
                 ssrc, rtx_ssrc, profile: String::new(), connected: None, last_media: None,
                 remote_endpoints: [None; MAX_REMOTE_ENDPOINTS],
                 queue: VecDeque::with_capacity(self.queue_limit()), bytes: 0, sending: None,
+                peak_sent_age_ms: 0, udp_backpressure: 0,
                 need_idr: true, previous: 0, base_ns: None, seq: rand::random::<u16>() as u64,
+                repair_frames: VecDeque::new(),
                 pace_next: now, closing: false, congestion: 0, budget: self.budget.clone(), reserved: TRANSPORT_RESERVE,
             });
             self.shared.state.lock().unwrap().ids[index] = self.sessions[index].as_ref().map(|s| s.id.clone());
@@ -380,17 +481,20 @@ impl Reactor {
         self.shared.state.lock().unwrap().ids[index] = None;
     }
 
-    fn maintain(&mut self, now: Instant) {
+    fn maintain(&mut self, now: Instant, first: usize) {
         for camera in 0..4 {
-            if self.sources[camera].partial.as_ref().is_some_and(|a| now.duration_since(a.arrived) > MAX_AGE) {
+            if self.sources[camera].partial.as_ref().is_some_and(|a| now.duration_since(a.arrived) >= MAX_AGE) {
                 self.sources[camera].lost();
                 self.source_gap(camera);
             }
         }
-        for index in 0..8 {
+        for offset in 0..self.sessions.len() {
+            let index = (first + offset) % self.sessions.len();
+            let now = Instant::now();
             let Some(mut session) = self.sessions[index].take() else { continue; };
             if session.cancelled.load(Ordering::Acquire) || session.reply.as_ref().is_some_and(oneshot::Sender::is_closed) { session.closing = true; }
-            while session.nack_cache.front().is_some_and(|p| now.duration_since(p.created) > Duration::from_secs(3)) { session.nack_cache.pop_front(); }
+            while session.nack_cache.front().is_some_and(|p| now >= p.deadline) { session.nack_cache.pop_front(); }
+            while session.repair_frames.front().is_some_and(|(_, deadline)| now >= *deadline) { session.repair_frames.pop_front(); }
             if session.connected.is_none() && now.duration_since(session.created) >= HANDSHAKE { session.closing = true; }
             if session.connected.is_some() && now.duration_since(session.last_media.or(session.connected).unwrap()) >= Duration::from_secs(3) { session.closing = true; }
             if session.rtc.is_none() && !session.closing {
@@ -407,7 +511,7 @@ impl Reactor {
                 if session.rtc.as_mut().unwrap().handle_input(Input::Timeout(now)).is_err() { session.closing = true; }
                 self.drain(index, &mut session, now);
             }
-            if !session.closing && session.connected.is_some() { self.pace(index, &mut session, now); }
+            if !session.closing && session.connected.is_some() { self.pace(index, &mut session, Instant::now); }
             let closing = session.closing || session.rtc.as_ref().is_some_and(|rtc| !rtc.is_alive());
             self.sessions[index] = Some(session);
             if closing {
@@ -426,8 +530,18 @@ impl Reactor {
             let source = &self.sources[camera];
             let active = self.sessions.iter().flatten().any(|s| s.camera == camera);
             if active { demand |= 1 << camera; }
+            let mut preview_queue = PreviewQueue::default();
+            for s in self.sessions.iter().flatten().filter(|s| s.camera == camera) {
+                preview_queue.frames = preview_queue.frames.max(s.queue.len() + usize::from(s.sending.is_some()));
+                if let Some(frame) = s.sending.as_ref().map(|sending| &sending.frame).or_else(|| s.queue.front()) {
+                    preview_queue.oldest_ms = preview_queue.oldest_ms.max(now.duration_since(frame.arrived).as_millis() as u64);
+                }
+                preview_queue.peak_sent_age_ms = preview_queue.peak_sent_age_ms.max(s.peak_sent_age_ms);
+                preview_queue.udp_backpressure = preview_queue.udp_backpressure.saturating_add(s.udp_backpressure);
+            }
             snapshot.cameras[camera] = CameraStatus {
                 camera_id: camera, ipc_drops: source.drops,
+                preview_queue,
                 web: if initial_state(&self.config, camera) != "idle" { initial_state(&self.config, camera) }
                     else if !active { "idle" }
                     else if !source.need_idr && source.last.is_some_and(|last| now.duration_since(last) <= SOURCE_FRESH) { "flowing" }
@@ -445,6 +559,7 @@ impl Reactor {
 
 impl Reactor {
     fn read_video(&mut self, buffer: &mut [u8]) -> bool {
+        let stop = Instant::now() + INPUT_SLICE;
         for _ in 0..128 {
             let n = unsafe { libc::recv(self.video.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), libc::MSG_DONTWAIT | libc::MSG_TRUNC) };
             if n < 0 {
@@ -466,6 +581,7 @@ impl Reactor {
             let camera = be32(data, 24) as usize;
             if camera >= 4 || self.config.camera_mask & (1 << camera) == 0 || !self.sessions.iter().flatten().any(|s| s.camera == camera) { continue; }
             self.ingest(camera, data, Instant::now());
+            if Instant::now() >= stop { break; }
         }
         true
     }
@@ -501,8 +617,11 @@ impl Reactor {
             return;
         }
         let mut gap = false;
-        if source.partial.as_ref().is_some_and(|a| now.duration_since(a.arrived) > MAX_AGE) { source.lost(); gap = true; }
+        if source.partial.as_ref().is_some_and(|a| now.duration_since(a.arrived) >= MAX_AGE) { source.lost(); gap = true; }
         if index == 0 {
+            let Some(arrived) = producer_frame_start(now, media_ns) else {
+                source.lost(); self.source_gap(camera); return;
+            };
             if source.partial.is_some() { source.lost(); gap = true; }
             if source.sequence != 0 && source.sequence.checked_add(1) != Some(sequence) {
                 source.need_idr = true;
@@ -514,7 +633,7 @@ impl Reactor {
             }
             source.partial = Some(Assembly {
                 payload: Payload { bytes: vec![0; total], budget: self.budget.clone(), reserved: total },
-                sequence, media_ns, source_ns, flags, epoch, next: 0, count, arrived: now,
+                sequence, media_ns, source_ns, flags, epoch, next: 0, count, arrived,
             });
         }
         let valid = source.partial.as_ref().is_some_and(|a| a.sequence == sequence && a.epoch == epoch && a.media_ns == media_ns
@@ -652,8 +771,8 @@ fn packetize_nal(nal: &[u8], packets: &mut Vec<Arc<[u8]>>) {
 impl Reactor {
     fn negotiate(&mut self, index: usize, session: &mut Session, profile: &str, now: Instant) -> Result<(), ApiError> {
         let selection = negotiation::select(session.offer.as_deref().unwrap(), profile)?;
-        let addresses = interface_addresses(&self.config.listen_address).map_err(|_| ApiError::new(503, "network", "local addresses unavailable"))?;
-        if addresses.is_empty() { return Err(ApiError::new(503, "network", "local addresses unavailable")); }
+        // Use the address that accepted the HTTP offer, not another reachable NIC.
+        let address = SocketAddr::new(session.local_ip.into(), self.config.ice_port);
         let mut builder = RtcConfig::new().clear_codecs().set_ice_lite(true).set_rtp_mode(true)
             .set_send_buffer_video(512).set_stats_interval(None)
             .enable_raw_packets(selection.nack && selection.resend.is_none());
@@ -669,16 +788,13 @@ impl Reactor {
         *builder.codec_config() = str0m::format::CodecConfig::new_from_payload_params(vec![params]);
         session.rtc = Some(builder.build(now));
         self.drain(index, session, now);
-        for ip in addresses {
-            let address = SocketAddr::new(IpAddr::V4(ip), self.config.ice_port);
-            let candidate = Candidate::host(address, Protocol::Udp).map_err(|_| ApiError::new(503, "network", "local candidate unavailable"))?;
-            session.rtc.as_mut().unwrap().add_local_candidate(candidate);
-            self.drain(index, session, now);
-            let candidate = Candidate::builder().tcp().host(address).tcptype(TcpType::Passive).build()
-                .map_err(|_| ApiError::new(503, "network", "local candidate unavailable"))?;
-            session.rtc.as_mut().unwrap().add_local_candidate(candidate);
-            self.drain(index, session, now);
-        }
+        let candidate = Candidate::host(address, Protocol::Udp).map_err(|_| ApiError::new(503, "network", "local candidate unavailable"))?;
+        session.rtc.as_mut().unwrap().add_local_candidate(candidate);
+        self.drain(index, session, now);
+        let candidate = Candidate::builder().tcp().host(address).tcptype(TcpType::Passive).build()
+            .map_err(|_| ApiError::new(503, "network", "local candidate unavailable"))?;
+        session.rtc.as_mut().unwrap().add_local_candidate(candidate);
+        self.drain(index, session, now);
         let answer = session.rtc.as_mut().unwrap().sdp_api().accept_offer(selection.offer);
         self.drain(index, session, now);
         let answer = answer.map_err(|_| {
@@ -703,7 +819,7 @@ impl Reactor {
         {
             let mut direct = session.rtc.as_mut().unwrap().direct_api();
             let stream = direct.stream_tx(&session.ssrc).ok_or_else(|| ApiError::new(503, "media", "sender initialization failed"))?;
-            stream.set_rtx_cache(512, Duration::from_secs(3), Some(0.15));
+            stream.set_rtx_cache(512, REPAIR_AGE, Some(0.15));
         }
         self.drain(index, session, now);
         // SDP API generates a sender SSRC before the hub-wide reservation can
@@ -724,11 +840,12 @@ impl Reactor {
     /// Every RTC mutation calls this before any subsequent mutation. Outputs
     /// are consumed, never parked inside str0m while waiting for socket I/O.
     fn drain(&mut self, index: usize, session: &mut Session, now: Instant) {
-        let Some(rtc) = session.rtc.as_mut() else { return; };
         let mut outputs = 0usize;
-        loop {
+        while let Some(rtc) = session.rtc.as_mut() {
             let output = rtc.poll_output();
             outputs += 1;
+            // A discarded RTC is never mutated again.
+            if outputs > 128 { session.closing = true; break; }
             match output {
                 Ok(Output::Timeout(at)) => { session.timeout = at; break; }
                 Ok(Output::Event(event)) => match event {
@@ -743,20 +860,21 @@ impl Reactor {
                     Event::IceConnectionStateChange(IceConnectionState::Disconnected) | Event::Closed => { session.closing = true; }
                     Event::RawPacket(raw) => {
                         if let RawPacket::RtcpRx(Rtcp::Nack(nack)) = *raw {
-                            if session.manual_nack && nack.ssrc == session.ssrc {
-                                let mut replayed = [0u16; 64];
+                            if !session.closing && session.manual_nack && nack.ssrc == session.ssrc {
+                                let mut replayed = [0u16; 16];
                                 let mut count = 0;
-                                for report in &nack.reports {
+                                'reports: for report in &nack.reports {
                                     for bit in 0..17u16 {
                                         if bit != 0 && report.blp & (1 << (bit - 1)) == 0 { continue; }
+                                        if count == replayed.len() { break 'reports; }
                                         let sequence = report.pid.wrapping_add(bit);
-                                        if count == replayed.len() { break; }
                                         if replayed[..count].contains(&sequence) { continue; }
-                                        let Some(packet) = session.nack_cache.iter().rev().find(|p| p.sequence == sequence && now.duration_since(p.created) <= Duration::from_secs(3)) else { continue; };
                                         replayed[count] = sequence;
                                         count += 1;
+                                        let now = Instant::now();
+                                        let Some(packet) = session.nack_cache.iter().rev().find(|p| p.sequence == sequence && now < p.deadline) else { continue; };
                                         let transmit = Transmit { proto: packet.protocol, source: packet.source, destination: packet.destination, contents: packet.bytes.clone().into() };
-                                        if matches!(self.transmit(transmit, None, now), SendResult::Closed) { session.closing = true; }
+                                        if matches!(self.transmit(transmit, session.udp_ifindex, None, now), SendResult::Closed) { session.closing = true; break 'reports; }
                                     }
                                 }
                             }
@@ -765,44 +883,50 @@ impl Reactor {
                     _ => {}
                 },
                 Ok(Output::Transmit(transmit)) => {
-                    let primary = is_primary(&transmit.contents, *session.ssrc);
-                    let media = if primary { session.sending.as_ref().map(|s| (index, s.frame.sequence)) } else { None };
-                    if session.manual_nack && primary && transmit.contents.len() <= 1400 {
-                        while session.nack_cache.len() >= 512 || session.nack_cache.front().is_some_and(|p| now.duration_since(p.created) > Duration::from_secs(3)) { session.nack_cache.pop_front(); }
-                        session.nack_cache.push_back(CachedPacket { sequence: be16(&transmit.contents, 2), created: now, protocol: transmit.proto, source: transmit.source, destination: transmit.destination, bytes: transmit.contents.to_vec() });
+                    if session.closing { break; }
+                    let primary = is_rtp(&transmit.contents, *session.ssrc);
+                    if primary && transmit.proto == Protocol::Udp {
+                        let ifindex = session.udp_ifindex;
+                        session.submit_primary_udp(transmit, Instant::now, |packet| send_udp(&self.udp, packet, ifindex));
+                        continue;
                     }
-                    let result = self.transmit(transmit, media, now);
-                    match result {
-                        SendResult::Sent => {
-                            if primary { if let Some(sending) = session.sending.as_mut() { sending.remaining = sending.remaining.saturating_sub(1); } }
-                        }
-                        SendResult::Queued => {}
-                        SendResult::Lost => {
-                            if primary {
-                                session.need_idr = true;
-                                session.queue.clear();
-                                session.bytes = session.sending.as_ref().map_or(0, |s| s.frame.bytes);
-                                if let Some(sending) = session.sending.as_mut() { sending.failed = true; sending.remaining = sending.remaining.saturating_sub(1); }
-                            }
-                        }
+                    let now = Instant::now();
+                    if is_rtp(&transmit.contents, *session.rtx_ssrc) {
+                        // str0m caches on serialization, before the original can reach the socket.
+                        if transmit.proto != Protocol::Udp || !session.can_repair(be32(&transmit.contents, 4), now) { continue; }
+                    }
+                    let media = if primary {
+                        let Some(sending) = session.sending.as_ref().filter(|s| !s.failed && s.remaining != 0 && now < s.frame.arrived + MAX_AGE) else {
+                            session.fail_primary();
+                            continue;
+                        };
+                        Some((index, sending.frame.sequence))
+                    } else { None };
+                    match self.transmit(transmit, session.udp_ifindex, media, now) {
+                        SendResult::Sent | SendResult::Queued => {}
+                        SendResult::Lost if primary => session.fail_primary(),
+                        SendResult::Lost => {}
                         SendResult::Closed => session.closing = true,
                     }
                 }
                 Err(_) => { session.closing = true; break; }
             }
-            // A bounded input can elicit a large NACK burst. Discarding the
-            // owner after draining keeps neither a growing output list nor a
-            // busy peer indefinitely in the shared scheduling round.
-            if outputs > 4096 { session.closing = true; }
         }
     }
 
-    fn pace(&mut self, index: usize, session: &mut Session, now: Instant) {
+    fn pace(&mut self, index: usize, session: &mut Session, clock: impl Fn() -> Instant) {
         let rate = (self.config.bitrate_bps / 4).max(125_000);
         let burst = Duration::from_nanos((4 * 1222 * 1_000_000_000u64) / rate);
+        let mut retried_udp = false;
         for _ in 0..64 {
+            let now = clock();
             if session.closing { break; }
             if let Some(sending) = session.sending.as_ref() {
+                if !sending.failed && sending.packet == sending.frame.packets.len() && sending.remaining == 0 {
+                    let sending = session.sending.take().unwrap();
+                    session.bytes = session.bytes.saturating_sub(sending.frame.bytes);
+                    continue;
+                }
                 if now.duration_since(sending.frame.arrived) >= MAX_AGE || sending.failed {
                     // A partially written RFC4571 frame cannot be truncated;
                     // closing this transport is the only safe recovery.
@@ -811,15 +935,18 @@ impl Reactor {
                     session.lose();
                     continue;
                 }
-                if sending.packet == sending.frame.packets.len() {
-                    if sending.remaining != 0 { break; }
-                    let sending = session.sending.take().unwrap();
-                    session.bytes = session.bytes.saturating_sub(sending.frame.bytes);
-                    session.last_media = Some(now);
-                    session.congestion = 0;
+                if let Some(pending) = sending.udp.as_ref() {
+                    if retried_udp || now < pending.retry_at { break; }
+                    let pending = session.sending.as_mut().unwrap().udp.take().unwrap();
+                    let ifindex = session.udp_ifindex;
+                    session.submit_primary_udp(pending.packet, &clock, |packet| send_udp(&self.udp, packet, ifindex));
+                    retried_udp = true;
                     continue;
                 }
+                if sending.packet == sending.frame.packets.len() { break; }
             }
+            // A retry consumes this session's send turn; it cannot add to the normal burst.
+            if retried_udp { break; }
             if session.sending.is_none() {
                 let Some(frame) = session.queue.pop_front() else { break; };
                 if now.duration_since(frame.arrived) >= MAX_AGE || session.previous != 0 && session.previous.checked_add(1) != Some(frame.sequence) && !frame.key {
@@ -832,7 +959,8 @@ impl Reactor {
                 let base = *session.base_ns.get_or_insert(frame.media_ns);
                 let Some(elapsed) = frame.media_ns.checked_sub(base) else { session.lose(); continue; };
                 let timestamp = ((elapsed / 1_000_000_000) * 90000 + (elapsed % 1_000_000_000) * 90000 / 1_000_000_000) as u32;
-                session.sending = Some(Sending { frame, packet: 0, timestamp, failed: false, remaining: 0 });
+                session.repair_frames.retain(|(ts, _)| *ts != timestamp);
+                session.sending = Some(Sending { frame, packet: 0, timestamp, failed: false, remaining: 0, udp: None });
             }
             let sending = session.sending.as_mut().unwrap();
             if sending.remaining >= 64 { break; }
@@ -844,7 +972,7 @@ impl Reactor {
             if ready.saturating_duration_since(sending.frame.arrived) > MAX_AGE { session.lose(); continue; }
             session.pace_next = ready;
             let marker = sending.packet + 1 == sending.frame.packets.len();
-            let packet = RtpWrite::new(session.pt, session.seq.into(), sending.timestamp, now, payload.clone()).marker(marker).nackable(session.nack);
+            let packet = RtpWrite::new(session.pt, session.seq.into(), sending.timestamp, sending.frame.arrived, payload.clone()).marker(marker).nackable(session.nack);
             sending.packet += 1;
             sending.remaining += 1;
             session.seq += 1;
@@ -853,6 +981,7 @@ impl Reactor {
             let Some(stream) = direct.stream_tx(&session.ssrc) else { session.closing = true; break; };
             stream.write_rtp(packet);
             self.drain(index, session, now);
+            if session.closing { break; }
             // write_rtp does not advance str0m time. One timeout after each
             // drained write timestamps and empties that one-packet send queue.
             if session.rtc.as_mut().unwrap().handle_input(Input::Timeout(now)).is_err() { session.closing = true; }
@@ -891,55 +1020,52 @@ fn rewrite_ssrcs(sdp: &str, old: (u32, Option<u32>), new: (u32, Option<u32>)) ->
     result
 }
 
-fn interface_addresses(listen: &str) -> io::Result<Vec<Ipv4Addr>> {
-    let filter: Ipv4Addr = listen.parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid listen address"))?;
-    let mut list = std::ptr::null_mut();
-    if unsafe { libc::getifaddrs(&mut list) } != 0 { return Err(io::Error::last_os_error()); }
-    let mut result = Vec::with_capacity(8);
-    let mut current = list;
-    while !current.is_null() {
-        let interface = unsafe { &*current };
-        if !interface.ifa_addr.is_null() && unsafe { (*interface.ifa_addr).sa_family as i32 } == libc::AF_INET && interface.ifa_flags & libc::IFF_UP as u32 != 0 {
-            let address = unsafe { &*(interface.ifa_addr as *const libc::sockaddr_in) };
-            let ip = Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes());
-            if (filter.is_unspecified() || ip == filter) && (!ip.is_loopback() || filter.is_loopback()) && !ip.is_unspecified() && !ip.is_multicast() && !result.contains(&ip) { result.push(ip); }
-        }
-        current = interface.ifa_next;
-    }
-    unsafe { libc::freeifaddrs(list); }
-    Ok(result)
+fn producer_frame_start(now: Instant, media_ns: u64) -> Option<Instant> {
+    // The IPC timestamp is CLOCK_MONOTONIC_RAW; translate its age, not its epoch.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    if media_ns == 0 || unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut ts) } != 0 { return None; }
+    let raw_now = ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64;
+    let age = Duration::from_nanos(raw_now.checked_sub(media_ns)?);
+    if age >= MAX_AGE { return None; }
+    now.checked_sub(age)
 }
 
 enum SendResult { Sent, Queued, Lost, Closed }
-fn is_primary(data: &[u8], ssrc: u32) -> bool {
+fn retryable_udp(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) || error.raw_os_error() == Some(libc::ENOBUFS)
+}
+fn udp_loss(error: &io::Error) -> bool {
+    retryable_udp(error) || matches!(error.raw_os_error(), Some(libc::ENETUNREACH) | Some(libc::EHOSTUNREACH))
+}
+fn is_rtp(data: &[u8], ssrc: u32) -> bool {
     data.len() >= 12 && data[0] & 0xc0 == 0x80 && !(192..=223).contains(&data[1]) && be32(data, 8) == ssrc
 }
 
 impl Reactor {
     fn read_udp(&mut self, buffer: &mut [u8]) -> bool {
+        let stop = Instant::now() + INPUT_SLICE;
         for _ in 0..128 {
-            match receive_udp(&self.udp, buffer) {
-                Ok((length, source, destination)) => { self.route(Protocol::Udp, source, destination, &buffer[..length], None); }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return false,
+            match receive_udp(&self.udp, self.udp_addr.port(), buffer) {
+                Ok((length, source, destination)) => self.route(Protocol::Udp, source, destination, &buffer[..length], None),
+                Err(error) if matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::InvalidData) => (),
                 Err(_) => return false,
             }
+            if Instant::now() >= stop { break; }
         }
         true
     }
 
     fn route(&mut self, protocol: Protocol, source: SocketAddr, destination: SocketAddr, data: &[u8], tcp: Option<usize>) {
         let IpAddr::V4(local_ip) = destination.ip() else { return; };
-        if self.config.listen_address != "0.0.0.0" && self.config.listen_address.parse::<Ipv4Addr>().ok() != Some(local_ip)
-            || local_ip.is_loopback() && self.config.listen_address != "127.0.0.1" { return; }
+        if local_ip.is_loopback() && !source.ip().is_loopback() { return; }
         let Ok(receive) = Receive::new(protocol, source, destination, data) else { return; };
         let now = Instant::now();
         let input = Input::Receive(now, receive);
         let owner = tcp.and_then(|peer| self.tcp[peer].as_ref().and_then(|p| p.owner));
         let selected = if let Some(index) = owner {
-            self.sessions[index].as_ref().filter(|s| s.rtc.as_ref().is_some_and(|rtc| rtc.accepts(&input))).map(|_| index)
+            self.sessions[index].as_ref().filter(|s| !s.closing && s.local_ip == local_ip && s.rtc.as_ref().is_some_and(|rtc| rtc.accepts(&input))).map(|_| index)
         } else {
-            self.sessions.iter().position(|s| s.as_ref().is_some_and(|s| s.rtc.as_ref().is_some_and(|rtc| rtc.accepts(&input))))
+            self.sessions.iter().position(|s| s.as_ref().is_some_and(|s| !s.closing && s.local_ip == local_ip && s.rtc.as_ref().is_some_and(|rtc| rtc.accepts(&input))))
         };
         let Some(index) = selected else { return; };
         // ICE retains discovered endpoint history until RTC destruction. Bound
@@ -960,12 +1086,12 @@ impl Reactor {
         self.sessions[index] = Some(session);
     }
 
-    fn transmit(&mut self, transmit: Transmit, media: Option<(usize, u64)>, now: Instant) -> SendResult {
+    fn transmit(&mut self, transmit: Transmit, udp_ifindex: libc::c_int, media: Option<(usize, u64)>, now: Instant) -> SendResult {
         match transmit.proto {
-            Protocol::Udp => match send_udp(&self.udp, &transmit) {
+            Protocol::Udp => match send_udp(&self.udp, &transmit, udp_ifindex) {
                 Ok(n) if n == transmit.contents.len() => SendResult::Sent,
                 Ok(_) => SendResult::Lost,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock || error.kind() == io::ErrorKind::Interrupted || matches!(error.raw_os_error(), Some(libc::ENOBUFS) | Some(libc::ENETUNREACH) | Some(libc::EHOSTUNREACH)) => SendResult::Lost,
+                Err(error) if udp_loss(&error) => SendResult::Lost,
                 Err(_) => SendResult::Closed,
             },
             Protocol::Tcp => {
@@ -1078,8 +1204,8 @@ impl Reactor {
             if write.offset == write.packet.len() + 2 {
                 let write = peer.output.pop_front().unwrap();
                 if let Some((owner, sequence)) = write.media {
-                    if let Some(sending) = self.sessions[owner].as_mut().and_then(|s| s.sending.as_mut()).filter(|s| s.frame.sequence == sequence) {
-                        sending.remaining = sending.remaining.saturating_sub(1);
+                    if let Some(session) = self.sessions[owner].as_mut().filter(|s| s.sending.as_ref().is_some_and(|sending| sending.frame.sequence == sequence)) {
+                        session.accept_primary(Instant::now(), false);
                     }
                 }
             }
@@ -1094,9 +1220,22 @@ impl Reactor {
     }
 }
 
-fn receive_udp(socket: &UdpSocket, bytes: &mut [u8]) -> io::Result<(usize, SocketAddr, SocketAddr)> {
+pub fn bind_ice_udp(ip: Ipv4Addr, port: u16) -> io::Result<UdpSocket> {
+    UdpSocket::bind((ip, port))
+}
+
+fn enable_udp_pktinfo(socket: &UdpSocket) -> io::Result<()> {
+    let enabled: libc::c_int = 1;
+    // One non-reusable socket owns the configured port; packet metadata retains the local address.
+    if unsafe { libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IP, libc::IP_PKTINFO, (&enabled as *const libc::c_int).cast(), std::mem::size_of_val(&enabled) as _) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn receive_udp(socket: &UdpSocket, port: u16, bytes: &mut [u8]) -> io::Result<(usize, SocketAddr, SocketAddr)> {
     let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-    let mut control = [0usize; 16];
+    let mut control = [0usize; 8];
     let mut vector = libc::iovec { iov_base: bytes.as_mut_ptr().cast(), iov_len: bytes.len() };
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_name = (&mut address as *mut libc::sockaddr_in).cast();
@@ -1108,23 +1247,46 @@ fn receive_udp(socket: &UdpSocket, bytes: &mut [u8]) -> io::Result<(usize, Socke
     if message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0 || address.sin_family as i32 != libc::AF_INET {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated ICE datagram"));
     }
-    let mut destination = None;
     let mut header = unsafe { libc::CMSG_FIRSTHDR(&message) };
     while !header.is_null() {
         let h = unsafe { &*header };
-        if h.cmsg_level == libc::IPPROTO_IP && h.cmsg_type == libc::IP_PKTINFO && h.cmsg_len as usize >= unsafe { libc::CMSG_LEN(std::mem::size_of::<libc::in_pktinfo>() as _) } as usize {
+        if h.cmsg_level == libc::IPPROTO_IP && h.cmsg_type == libc::IP_PKTINFO && (h.cmsg_len as usize) >= unsafe { libc::CMSG_LEN(std::mem::size_of::<libc::in_pktinfo>() as _) } as usize {
             let packet = unsafe { &*(libc::CMSG_DATA(header) as *const libc::in_pktinfo) };
-            destination = Some(Ipv4Addr::from(packet.ipi_addr.s_addr.to_ne_bytes()));
+            return Ok((n as usize,
+                (Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes()), u16::from_be(address.sin_port)).into(),
+                (Ipv4Addr::from(packet.ipi_addr.s_addr.to_ne_bytes()), port).into()));
         }
         header = unsafe { libc::CMSG_NXTHDR(&message, header) };
     }
-    let destination = destination.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing local ICE destination"))?;
-    Ok((n as usize,
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes())), u16::from_be(address.sin_port)),
-        SocketAddr::new(IpAddr::V4(destination), socket.local_addr()?.port())))
+    Err(io::Error::new(io::ErrorKind::InvalidData, "missing local ICE destination"))
 }
 
-fn send_udp(socket: &UdpSocket, transmit: &Transmit) -> io::Result<usize> {
+fn local_ifindex(ip: Ipv4Addr) -> io::Result<libc::c_int> {
+    let mut list = std::ptr::null_mut();
+    // Resolve once per session so new addresses are visible without a restart.
+    // The ingress NIC of a probe can differ from the NIC owning the local IP.
+    unsafe {
+        if libc::getifaddrs(&mut list) != 0 { return Err(io::Error::last_os_error()); }
+        let mut cursor = list;
+        let mut index = 0;
+        while let Some(interface) = cursor.as_ref() {
+            cursor = interface.ifa_next;
+            if interface.ifa_addr.is_null() || (*interface.ifa_addr).sa_family as i32 != libc::AF_INET
+                || interface.ifa_flags & libc::IFF_UP as libc::c_uint == 0 { continue; }
+            let address = &*interface.ifa_addr.cast::<libc::sockaddr_in>();
+            let exact = Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes()) == ip;
+            // Linux routes the entire 127/8 range locally, including unlisted aliases.
+            if exact || (ip.is_loopback() && interface.ifa_flags & libc::IFF_LOOPBACK as libc::c_uint != 0) {
+                index = libc::if_nametoindex(interface.ifa_name) as libc::c_int;
+                if exact && index != 0 { break; }
+            }
+        }
+        libc::freeifaddrs(list);
+        if index == 0 { Err(io::Error::from_raw_os_error(libc::EADDRNOTAVAIL)) } else { Ok(index) }
+    }
+}
+
+fn send_udp(socket: &UdpSocket, transmit: &Transmit, ifindex: libc::c_int) -> io::Result<usize> {
     let (SocketAddr::V4(source), SocketAddr::V4(destination)) = (transmit.source, transmit.destination) else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "IPv4 ICE required"));
     };
@@ -1143,6 +1305,7 @@ fn send_udp(socket: &UdpSocket, transmit: &Transmit) -> io::Result<usize> {
         (*header).cmsg_level = libc::IPPROTO_IP; (*header).cmsg_type = libc::IP_PKTINFO;
         (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::in_pktinfo>() as _) as _;
         let packet = libc::CMSG_DATA(header) as *mut libc::in_pktinfo;
+        (*packet).ipi_ifindex = ifindex;
         (*packet).ipi_spec_dst.s_addr = u32::from_ne_bytes(source.ip().octets());
     }
     let n = unsafe { libc::sendmsg(socket.as_raw_fd(), &message, libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL) };
