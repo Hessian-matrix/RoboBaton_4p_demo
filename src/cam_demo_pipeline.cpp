@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cerrno>
 #include <cstdio>
 #include <chrono>
 #include <condition_variable>
@@ -236,22 +235,6 @@ bool AppendDiagnostic(std::array<char, 4096>* output, size_t* used,
     return false;
   }
   *used += static_cast<size_t>(count);
-  return true;
-}
-
-bool WriteDiagnostic(const char* data, size_t size) noexcept {
-  while (size > 0U) {
-    const ssize_t written = ::write(STDOUT_FILENO, data, size);
-    if (written > 0) {
-      data += written;
-      size -= static_cast<size_t>(written);
-      continue;
-    }
-    if (written < 0 && errno == EINTR) {
-      continue;
-    }
-    return false;
-  }
   return true;
 }
 
@@ -724,6 +707,9 @@ class FramePipeline::Impl {
   bool EmitDiagnostics(double elapsed_seconds) noexcept {
     std::array<char, 4096> output{};
     size_t used = 0U;
+    if (diagnostics_needs_newline_) {
+      output[used++] = '\n';
+    }
     FrameSetDiagnosticSnapshot frame_set_snapshot;
     const uint64_t diagnostic_now_ns = SteadyClockNowNs();
     {
@@ -766,11 +752,13 @@ class FramePipeline::Impl {
         source_frame_sets_seen_.load(std::memory_order_acquire) > 0U) {
       if (!AppendDiagnostic(
               &output, &used,
-              "source frame_sets_seen=%llu stale_ms=%llu liveness_timeout_ms=%u\n",
+              "source frame_sets_seen=%llu stale_ms=%llu liveness_timeout_ms=%u "
+              "diagnostic_batches_dropped=%llu\n",
               static_cast<unsigned long long>(
                   source_frame_sets_seen_.load(std::memory_order_acquire)),
               static_cast<unsigned long long>(SourceStaleMs(diagnostic_now_ns)),
-              options_.source_liveness_timeout_ms)) {
+              options_.source_liveness_timeout_ms,
+              static_cast<unsigned long long>(diagnostic_batches_dropped_))) {
         return false;
       }
     }
@@ -841,7 +829,16 @@ class FramePipeline::Impl {
         return false;
       }
     }
-    return used == 0U || WriteDiagnostic(output.data(), used);
+    if (used == 0U) {
+      return true;
+    }
+    // Best-effort stdout: no drain loop or replay of a stale batch. A PTY can
+    // accept only a prefix, so start the next report on a fresh line if needed.
+    const ssize_t written = ::write(STDOUT_FILENO, output.data(), used);
+    if (written > 0) {
+      diagnostics_needs_newline_ = output[static_cast<size_t>(written) - 1] != '\n';
+    }
+    return written == static_cast<ssize_t>(used);
   }
 
   void WorkerEntry(int camera_id) noexcept {
@@ -922,7 +919,7 @@ class FramePipeline::Impl {
         next_report_ns = now_ns + MsToNs(diagnostic_interval_ms);
         lock.unlock();
         if (!EmitDiagnostics(elapsed_seconds)) {
-          return;
+          ++diagnostic_batches_dropped_;
         }
         lock.lock();
       }
@@ -956,6 +953,9 @@ class FramePipeline::Impl {
   std::atomic<uint64_t> last_source_progress_ns_{0U};
   std::atomic<uint64_t> source_frame_sets_seen_{0U};
   std::atomic<bool> source_liveness_reported_{false};
+  // Owned by the runtime monitor. Lost diagnostic batches are not frame drops.
+  uint64_t diagnostic_batches_dropped_ = 0U;
+  bool diagnostics_needs_newline_ = false;
   std::mutex diagnostics_mutex_;
   std::condition_variable diagnostics_condition_;
 };
